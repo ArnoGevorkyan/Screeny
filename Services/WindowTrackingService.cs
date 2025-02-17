@@ -12,6 +12,9 @@ namespace ScreenTimeTracker.Services
         private AppUsageRecord? _currentRecord;
         private readonly List<AppUsageRecord> _records;
         private bool _disposed;
+        private IntPtr _lastForegroundWindow;
+        private string _lastWindowTitle = string.Empty;
+        private string _lastProcessName = string.Empty;
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -27,7 +30,7 @@ namespace ScreenTimeTracker.Services
         public WindowTrackingService()
         {
             _records = new List<AppUsageRecord>();
-            _timer = new System.Timers.Timer(1000); // Poll every second
+            _timer = new System.Timers.Timer(100); // Poll more frequently
             _timer.Elapsed += Timer_Elapsed;
         }
 
@@ -35,6 +38,8 @@ namespace ScreenTimeTracker.Services
         {
             ThrowIfDisposed();
             _timer.Start();
+            // Force immediate check when starting
+            CheckActiveWindow();
         }
 
         public void StopTracking()
@@ -43,28 +48,45 @@ namespace ScreenTimeTracker.Services
             _timer.Stop();
             if (_currentRecord != null)
             {
+                _currentRecord.SetFocus(false);
                 _currentRecord.EndTime = DateTime.Now;
                 _records.Add(_currentRecord);
                 _currentRecord = null;
             }
+            _lastForegroundWindow = IntPtr.Zero;
+            _lastWindowTitle = string.Empty;
+            _lastProcessName = string.Empty;
         }
 
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
         {
             if (_disposed) return;
+            CheckActiveWindow();
+        }
 
+        private void CheckActiveWindow()
+        {
             var foregroundWindow = GetForegroundWindow();
             if (foregroundWindow == IntPtr.Zero) return;
 
             var windowTitle = GetActiveWindowTitle(foregroundWindow);
             var processName = GetProcessName(foregroundWindow);
 
-            if (_currentRecord == null || 
-                _currentRecord.WindowTitle != windowTitle || 
-                _currentRecord.ProcessName != processName)
+            // Check if anything has changed
+            bool hasChanged = foregroundWindow != _lastForegroundWindow ||
+                            windowTitle != _lastWindowTitle ||
+                            processName != _lastProcessName;
+
+            // Update last known values
+            _lastForegroundWindow = foregroundWindow;
+            _lastWindowTitle = windowTitle;
+            _lastProcessName = processName;
+
+            if (hasChanged)
             {
                 if (_currentRecord != null)
                 {
+                    _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
                     _records.Add(_currentRecord);
                 }
@@ -76,7 +98,13 @@ namespace ScreenTimeTracker.Services
                     StartTime = DateTime.Now
                 };
 
+                _currentRecord.SetFocus(true);
                 UsageRecordUpdated?.Invoke(this, _currentRecord);
+            }
+            else if (_currentRecord != null)
+            {
+                // Keep the current record focused
+                _currentRecord.SetFocus(true);
             }
         }
 
@@ -97,23 +125,18 @@ namespace ScreenTimeTracker.Services
                 return "Unknown";
 
             uint processId;
-            if (GetWindowThreadProcessId(handle, out processId) == 0)
+            GetWindowThreadProcessId(handle, out processId);
+            if (processId == 0)
                 return "Unknown";
 
             try
             {
-                var process = System.Diagnostics.Process.GetProcessById((int)processId);
-                return process.ProcessName;
+                using (var process = System.Diagnostics.Process.GetProcessById((int)processId))
+                {
+                    return process.ProcessName;
+                }
             }
-            catch (ArgumentException)
-            {
-                return "Unknown";
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                return "Unknown";
-            }
-            catch (InvalidOperationException)
+            catch (Exception)
             {
                 return "Unknown";
             }

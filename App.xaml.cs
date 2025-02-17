@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using System;
 
 namespace ScreenTimeTracker;
 
@@ -7,6 +8,9 @@ namespace ScreenTimeTracker;
 /// </summary>
 public partial class App : Application
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
+
     private Window? m_window;
 
     /// <summary>
@@ -15,6 +19,9 @@ public partial class App : Application
     /// </summary>
     public App()
     {
+        // Enable DPI awareness
+        SetProcessDPIAware();
+
         InitializeComponent();
     }
 

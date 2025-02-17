@@ -27,7 +27,38 @@ namespace ScreenTimeTracker.Models
             "explorer",
             "SearchHost",
             "ShellExperienceHost",
-            "StartMenuExperienceHost"
+            "StartMenuExperienceHost",
+            "devenv",
+            "ApplicationFrameHost",
+            "SystemSettings",
+            "TextInputHost",
+            "WindowsTerminal",
+            "cmd",
+            "powershell",
+            "pwsh",
+            "conhost",
+            "WinStore.App",
+            "LockApp",
+            "LogonUI",
+            "fontdrvhost",
+            "dwm",
+            "csrss",
+            "services",
+            "svchost",
+            "taskhostw",
+            "ctfmon",
+            "rundll32",
+            "dllhost",
+            "sihost",
+            "taskmgr",
+            "SecurityHealthSystray",
+            "SecurityHealthService",
+            "Registry",
+            "MicrosoftEdgeUpdate",
+            "WmiPrvSE",
+            "spoolsv",
+            "TabTip",
+            "TabTip32"
         };
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -135,6 +166,11 @@ namespace ScreenTimeTracker.Models
                 if (isFocused)
                 {
                     _lastFocusTime = DateTime.Now;
+                    // Try to load icon when the app gets focus
+                    if (_icon == null && !IsLoadingIcon && _loadIconTask == null)
+                    {
+                        _loadIconTask = LoadIconAsync();
+                    }
                 }
                 else if (IsFocused)
                 {
@@ -217,6 +253,8 @@ namespace ScreenTimeTracker.Models
 
         private async Task LoadIconAsync()
         {
+            if (!ShouldTrack) return;
+
             try
             {
                 await _iconLoadingSemaphore.WaitAsync();
@@ -226,22 +264,25 @@ namespace ScreenTimeTracker.Models
                 IsLoadingIcon = true;
                 NotifyPropertyChanged(nameof(Icon));
 
-                var process = System.Diagnostics.Process.GetProcessesByName(ProcessName).FirstOrDefault();
-                if (process != null)
+                var processes = System.Diagnostics.Process.GetProcessesByName(ProcessName);
+                if (processes.Length == 0) return;
+
+                foreach (var process in processes)
                 {
-                    string? executablePath = null;
                     try
                     {
-                        executablePath = process.MainModule?.FileName;
-                    }
-                    catch (System.ComponentModel.Win32Exception)
-                    {
-                        // Access denied to process module, skip icon loading
-                        return;
-                    }
+                        string? executablePath = null;
+                        try
+                        {
+                            executablePath = process.MainModule?.FileName;
+                        }
+                        catch
+                        {
+                            continue;
+                        }
 
-                    if (!string.IsNullOrEmpty(executablePath))
-                    {
+                        if (string.IsNullOrEmpty(executablePath)) continue;
+
                         var iconPath = new StringBuilder(executablePath);
                         ushort iconIndex;
                         IntPtr hIcon = ExtractAssociatedIcon(IntPtr.Zero, iconPath, out iconIndex);
@@ -251,19 +292,23 @@ namespace ScreenTimeTracker.Models
                             try
                             {
                                 using (var icon = System.Drawing.Icon.FromHandle(hIcon))
-                                using (var bitmap = icon.ToBitmap())
-                                using (var stream = new MemoryStream())
                                 {
-                                    bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                                    stream.Position = 0;
-
-                                    var image = new BitmapImage();
-                                    using (var randomAccessStream = stream.AsRandomAccessStream())
+                                    if (icon != null)
                                     {
-                                        await image.SetSourceAsync(randomAccessStream);
-                                        await randomAccessStream.FlushAsync();
+                                        using (var bitmap = icon.ToBitmap())
+                                        using (var stream = new MemoryStream())
+                                        {
+                                            bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                                            stream.Position = 0;
+
+                                            var image = new BitmapImage();
+                                            image.DecodePixelWidth = 24; // Match the image size in XAML
+                                            image.DecodePixelHeight = 24;
+                                            await image.SetSourceAsync(stream.AsRandomAccessStream());
+                                            _icon = image;
+                                            break;
+                                        }
                                     }
-                                    _icon = image;
                                 }
                             }
                             finally
@@ -271,6 +316,10 @@ namespace ScreenTimeTracker.Models
                                 DestroyIcon(hIcon);
                             }
                         }
+                    }
+                    finally
+                    {
+                        process.Dispose();
                     }
                 }
             }
