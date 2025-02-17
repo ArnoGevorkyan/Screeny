@@ -6,6 +6,7 @@ using WinRT.Interop;
 using System.Collections.ObjectModel;
 using ScreenTimeTracker.Services;
 using ScreenTimeTracker.Models;
+using System.Runtime.InteropServices;
 
 namespace ScreenTimeTracker
 {
@@ -25,6 +26,20 @@ namespace ScreenTimeTracker
         private string? _lastFocusedApp;
         private bool _disposed;
 
+        // Add these Win32 API declarations at the top of the class
+        private const int WM_SETICON = 0x0080;
+        private const int ICON_SMALL = 0;
+        private const int ICON_BIG = 1;
+        private const int IMAGE_ICON = 1;
+        private const int LR_LOADFROMFILE = 0x0010;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, int wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr LoadImage(IntPtr hinst, string lpszName, uint uType,
+                                            int cxDesired, int cyDesired, uint fuLoad);
+
         public MainWindow()
         {
             InitializeComponent();
@@ -37,6 +52,18 @@ namespace ScreenTimeTracker
                 _appWindow.TitleBar.ExtendsContentIntoTitleBar = true;
                 _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent;
                 _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+
+                // Set the window icon
+                IntPtr windowHandle = WindowNative.GetWindowHandle(this);
+                WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+                var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app-icon.ico");
+                if (File.Exists(iconPath))
+                {
+                    SendMessage(windowHandle, WM_SETICON, ICON_SMALL, LoadImage(IntPtr.Zero, iconPath,
+                        IMAGE_ICON, 0, 0, LR_LOADFROMFILE));
+                    SendMessage(windowHandle, WM_SETICON, ICON_BIG, LoadImage(IntPtr.Zero, iconPath,
+                        IMAGE_ICON, 0, 0, LR_LOADFROMFILE));
+                }
 
                 // Set up presenter
                 _presenter = _appWindow.Presenter as OverlappedPresenter;
