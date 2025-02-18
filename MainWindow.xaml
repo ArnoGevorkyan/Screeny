@@ -96,16 +96,10 @@
                         
                         <!-- Icon with loading state -->
                         <Grid Grid.Column="0" Width="24" Height="24">
-                            <Image Source="{x:Bind Icon}" 
-                                   Width="24" 
-                                   Height="24"
-                                   Stretch="Uniform"/>
-                            <ProgressRing IsActive="{x:Bind IsLoadingIcon, Mode=OneWay}"
-                                         Width="16" 
-                                         Height="16"/>
-                            <FontIcon Glyph="&#xE9CE;"
-                                     Visibility="{Binding Icon, Converter={StaticResource NullToVisibleConverter}}"
-                                     FontSize="16"/>
+                            <FontIcon Glyph="&#xECAA;"
+                                     FontSize="16"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"/>
                         </Grid>
                         
                         <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2"/>

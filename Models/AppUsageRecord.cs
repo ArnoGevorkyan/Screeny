@@ -133,11 +133,6 @@ namespace ScreenTimeTracker.Models
         private TimeSpan _accumulatedDuration = TimeSpan.Zero;
         private DateTime _lastFocusTime;
 
-        private BitmapImage? _icon;
-        private bool _isLoadingIcon;
-        private Task? _loadIconTask;
-        private readonly SemaphoreSlim _iconLoadingSemaphore = new SemaphoreSlim(1, 1);
-
         public TimeSpan Duration
         {
             get
@@ -196,11 +191,6 @@ namespace ScreenTimeTracker.Models
                 {
                     _lastFocusTime = DateTime.Now;
                     System.Diagnostics.Debug.WriteLine($"Focus started for {ProcessName} at {_lastFocusTime}");
-                    // Try to load icon when the app gets focus
-                    if (_icon == null && !IsLoadingIcon && _loadIconTask == null)
-                    {
-                        _loadIconTask = LoadIconAsync();
-                    }
                 }
                 else
                 {
@@ -258,179 +248,6 @@ namespace ScreenTimeTracker.Models
                 _lastFocusTime = date.Date,
                 IsFocused = false
             };
-        }
-
-        public bool IsLoadingIcon
-        {
-            get => _isLoadingIcon;
-            private set
-            {
-                if (_isLoadingIcon != value)
-                {
-                    _isLoadingIcon = value;
-                    NotifyPropertyChanged();
-                }
-            }
-        }
-
-        public BitmapImage? Icon
-        {
-            get
-            {
-                if (_icon == null && !IsLoadingIcon && _loadIconTask == null)
-                {
-                    _loadIconTask = LoadIconAsync();
-                }
-                return _icon;
-            }
-        }
-
-        private async Task LoadIconAsync()
-        {
-            if (!ShouldTrack) return;
-            
-            try
-            {
-                await _iconLoadingSemaphore.WaitAsync();
-                
-                if (IsLoadingIcon || _icon != null) return;
-                
-                IsLoadingIcon = true;
-                NotifyPropertyChanged(nameof(Icon));
-                
-                var processes = System.Diagnostics.Process.GetProcessesByName(ProcessName);
-                if (processes.Length == 0) return;
-                
-                foreach (var process in processes)
-                {
-                    try
-                    {
-                        string? executablePath = null;
-                        try
-                        {
-                            executablePath = process.MainModule?.FileName;
-                        }
-                        catch
-                        {
-                            continue;
-                        }
-                        
-                        if (string.IsNullOrEmpty(executablePath)) continue;
-                        
-                        var iconPath = new StringBuilder(executablePath);
-                        ushort iconIndex;
-                        // try the P/Invoke extraction first
-                        IntPtr hIcon = ExtractAssociatedIcon(IntPtr.Zero, iconPath, out iconIndex);
-
-                        if (hIcon == IntPtr.Zero)
-                        {
-                            // FALLBACK: try using .NET's ExtractAssociatedIcon
-                            System.Drawing.Icon? fallbackIcon = null;
-                            try
-                            {
-                                fallbackIcon = System.Drawing.Icon.ExtractAssociatedIcon(executablePath);
-                            }
-                            catch 
-                            {
-                                // if even the fallback fails, we will try SHGetFileInfo
-                            }
-
-                            if (fallbackIcon != null)
-                            {
-                                using (var icon = fallbackIcon)
-                                {
-                                    using (var bitmap = icon.ToBitmap())
-                                    using (var stream = new MemoryStream())
-                                    {
-                                        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                                        stream.Position = 0;
-                                        
-                                        var image = new BitmapImage();
-                                        image.DecodePixelWidth = 24; // Match the image size in XAML
-                                        image.DecodePixelHeight = 24;
-                                        await image.SetSourceAsync(stream.AsRandomAccessStream());
-                                        _icon = image;
-                                        break;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                // NEW: try SHGetFileInfo as another fallback
-                                SHFILEINFO shinfo = new SHFILEINFO();
-                                IntPtr result = SHGetFileInfo(executablePath, 0, ref shinfo, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), SHGFI_ICON | SHGFI_SMALLICON);
-                                if (shinfo.hIcon != IntPtr.Zero)
-                                {
-                                    using (var icon = System.Drawing.Icon.FromHandle(shinfo.hIcon))
-                                    {
-                                        using (var bitmap = icon.ToBitmap())
-                                        using (var stream = new MemoryStream())
-                                        {
-                                            bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                                            stream.Position = 0;
-                                            
-                                            var image = new BitmapImage();
-                                            image.DecodePixelWidth = 24; // Match the image size in XAML
-                                            image.DecodePixelHeight = 24;
-                                            await image.SetSourceAsync(stream.AsRandomAccessStream());
-                                            _icon = image;
-                                            break;
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    continue;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            try
-                            {
-                                using (var icon = System.Drawing.Icon.FromHandle(hIcon))
-                                {
-                                    if (icon != null)
-                                    {
-                                        using (var bitmap = icon.ToBitmap())
-                                        using (var stream = new MemoryStream())
-                                        {
-                                            bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                                            stream.Position = 0;
-                                            
-                                            var image = new BitmapImage();
-                                            image.DecodePixelWidth = 24; // Match the image size in XAML
-                                            image.DecodePixelHeight = 24;
-                                            await image.SetSourceAsync(stream.AsRandomAccessStream());
-                                            _icon = image;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            finally
-                            {
-                                DestroyIcon(hIcon);
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        process.Dispose();
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                _icon = null;
-            }
-            finally
-            {
-                IsLoadingIcon = false;
-                _loadIconTask = null;
-                NotifyPropertyChanged(nameof(Icon));
-                _iconLoadingSemaphore.Release();
-            }
         }
     }
 } 
