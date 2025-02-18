@@ -182,16 +182,7 @@ namespace ScreenTimeTracker
                     r.WindowTitle == record.WindowTitle &&
                     r.WindowHandle == record.WindowHandle);
 
-                if (existingRecord != null)
-                {
-                    // Update existing record
-                    var index = _usageRecords.IndexOf(existingRecord);
-                    if (index >= 0)
-                    {
-                        _usageRecords[index] = record;
-                    }
-                }
-                else
+                if (existingRecord == null)
                 {
                     _usageRecords.Add(record);
                 }
