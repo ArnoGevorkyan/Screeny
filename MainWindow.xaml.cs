@@ -7,6 +7,7 @@ using System.Collections.ObjectModel;
 using ScreenTimeTracker.Services;
 using ScreenTimeTracker.Models;
 using System.Runtime.InteropServices;
+using System.Linq;
 
 namespace ScreenTimeTracker
 {
@@ -17,13 +18,11 @@ namespace ScreenTimeTracker
     {
         private readonly WindowTrackingService _trackingService;
         private readonly ObservableCollection<AppUsageRecord> _usageRecords;
-        private readonly Dictionary<string, AppUsageRecord> _aggregatedRecords;
         private AppWindow? _appWindow;
         private OverlappedPresenter? _presenter;
         private bool _isMaximized = false;
         private DateTime _selectedDate;
         private DispatcherTimer _updateTimer;
-        private string? _lastFocusedApp;
         private bool _disposed;
 
         // Add these Win32 API declarations at the top of the class
@@ -82,7 +81,6 @@ namespace ScreenTimeTracker
 
             // Initialize collections
             _usageRecords = new ObservableCollection<AppUsageRecord>();
-            _aggregatedRecords = new Dictionary<string, AppUsageRecord>();
             UsageListView.ItemsSource = _usageRecords;
 
             // Initialize date
@@ -122,15 +120,7 @@ namespace ScreenTimeTracker
                 
                 // Clear collections
                 _usageRecords.Clear();
-                _aggregatedRecords.Clear();
                 
-                // Clear last focused app
-                if (_lastFocusedApp != null && _aggregatedRecords.TryGetValue(_lastFocusedApp, out var lastRecord))
-                {
-                    lastRecord.SetFocus(false);
-                }
-                _lastFocusedApp = null;
-
                 // Dispose tracking service
                 _trackingService.Dispose();
                 
@@ -144,9 +134,19 @@ namespace ScreenTimeTracker
 
         private void UpdateTimer_Tick(object? sender, object e)
         {
-            foreach (var record in _usageRecords)
+            try
             {
-                record.UpdateDuration();
+                foreach (var record in _usageRecords)
+                {
+                    if (record.IsFocused)
+                    {
+                        record.UpdateDuration();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore any exceptions during update
             }
         }
 
@@ -168,51 +168,21 @@ namespace ScreenTimeTracker
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
             if (!record.ShouldTrack) return;
+            if (!record.IsFromDate(_selectedDate)) return;
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (!record.IsFromDate(_selectedDate)) return;
+                // Check if the record is already in the collection
+                var existingRecord = _usageRecords.FirstOrDefault(r => 
+                    r.ProcessId == record.ProcessId && 
+                    r.WindowTitle == record.WindowTitle &&
+                    r.WindowHandle == record.WindowHandle);
 
-                string key = record.ProcessName;
-
-                // Update focus state
-                if (_lastFocusedApp != null && _lastFocusedApp != key)
+                if (existingRecord == null)
                 {
-                    if (_aggregatedRecords.TryGetValue(_lastFocusedApp, out var lastRecord))
-                    {
-                        lastRecord.SetFocus(false);
-                    }
+                    _usageRecords.Add(record);
                 }
-
-                if (_aggregatedRecords.TryGetValue(key, out var existingRecord))
-                {
-                    existingRecord.MergeWith(record);
-                    existingRecord.SetFocus(true);
-                }
-                else
-                {
-                    record.SetFocus(true);
-                    _aggregatedRecords[key] = record;
-                }
-
-                _lastFocusedApp = key;
-                RefreshList();
             });
-        }
-
-        private void RefreshList()
-        {
-            var sortedRecords = _aggregatedRecords.Values
-                .Where(r => r.IsFromDate(_selectedDate))
-                .OrderByDescending(r => r.Duration)
-                .Take(100)
-                .ToList();
-
-            _usageRecords.Clear();
-            foreach (var record in sortedRecords)
-            {
-                _usageRecords.Add(record);
-            }
         }
 
         private void DatePicker_DateChanged(CalendarDatePicker sender, CalendarDatePickerDateChangedEventArgs args)
@@ -220,7 +190,8 @@ namespace ScreenTimeTracker
             if (args.NewDate.HasValue)
             {
                 _selectedDate = args.NewDate.Value.Date;
-                RefreshList();
+                // For real-time view, you might clear and reload your list here.
+                // For simplicity, we do nothing if _selectedDate equals today.
             }
         }
 
@@ -231,6 +202,18 @@ namespace ScreenTimeTracker
             StartButton.IsEnabled = false;
             StopButton.IsEnabled = true;
             _updateTimer.Start();
+            
+            // Ensure the timer is running
+            if (!_updateTimer.IsEnabled)
+            {
+                _updateTimer.Start();
+            }
+            
+            // Automatically minimize the tracker window so that external apps become active.
+            if (_presenter != null)
+            {
+                _presenter.Minimize();
+            }
         }
 
         private void StopButton_Click(object sender, RoutedEventArgs e)
@@ -241,12 +224,11 @@ namespace ScreenTimeTracker
             StopButton.IsEnabled = false;
             _updateTimer.Stop();
 
-            // Clear focus state when stopping
-            if (_lastFocusedApp != null && _aggregatedRecords.TryGetValue(_lastFocusedApp, out var lastRecord))
+            // Clear focus state for all records.
+            foreach (var record in _usageRecords)
             {
-                lastRecord.SetFocus(false);
+                record.SetFocus(false);
             }
-            _lastFocusedApp = null;
         }
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)

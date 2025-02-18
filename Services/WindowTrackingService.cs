@@ -12,9 +12,6 @@ namespace ScreenTimeTracker.Services
         private AppUsageRecord? _currentRecord;
         private readonly List<AppUsageRecord> _records;
         private bool _disposed;
-        private IntPtr _lastForegroundWindow;
-        private string _lastWindowTitle = string.Empty;
-        private string _lastProcessName = string.Empty;
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -53,9 +50,6 @@ namespace ScreenTimeTracker.Services
                 _records.Add(_currentRecord);
                 _currentRecord = null;
             }
-            _lastForegroundWindow = IntPtr.Zero;
-            _lastWindowTitle = string.Empty;
-            _lastProcessName = string.Empty;
         }
 
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
@@ -67,44 +61,65 @@ namespace ScreenTimeTracker.Services
         private void CheckActiveWindow()
         {
             var foregroundWindow = GetForegroundWindow();
-            if (foregroundWindow == IntPtr.Zero) return;
+            if (foregroundWindow == IntPtr.Zero)
+                return;
+            
+            // Retrieve the process ID
+            uint processId;
+            GetWindowThreadProcessId(foregroundWindow, out processId);
+            
+            // Skip tracking if the window belongs to our tracker process.
+            if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
+                return;
 
+            // Get the active window title and process name.
             var windowTitle = GetActiveWindowTitle(foregroundWindow);
             var processName = GetProcessName(foregroundWindow);
 
-            // Check if anything has changed
-            bool hasChanged = foregroundWindow != _lastForegroundWindow ||
-                            windowTitle != _lastWindowTitle ||
-                            processName != _lastProcessName;
+            // Ignore windows whose title contains our app's name.
+            if (windowTitle.IndexOf("Screen Time Tracker", StringComparison.OrdinalIgnoreCase) >= 0)
+                return;
 
-            // Update last known values
-            _lastForegroundWindow = foregroundWindow;
-            _lastWindowTitle = windowTitle;
-            _lastProcessName = processName;
-
-            if (hasChanged)
+            // If we have a current record and it's different from the new window, unfocus it
+            if (_currentRecord != null && 
+                (_currentRecord.WindowHandle != foregroundWindow || 
+                 _currentRecord.ProcessId != (int)processId || 
+                 _currentRecord.WindowTitle != windowTitle))
             {
-                if (_currentRecord != null)
-                {
-                    _currentRecord.SetFocus(false);
-                    _currentRecord.EndTime = DateTime.Now;
-                    _records.Add(_currentRecord);
-                }
+                _currentRecord.SetFocus(false);
+                _currentRecord = null;
+            }
 
+            // Look for an existing record for this window
+            var existingRecord = _records.FirstOrDefault(r => 
+                r.ProcessId == (int)processId && 
+                r.WindowTitle == windowTitle &&
+                r.WindowHandle == foregroundWindow);
+
+            if (existingRecord != null)
+            {
+                _currentRecord = existingRecord;
+                if (!_currentRecord.IsFocused)
+                {
+                    _currentRecord.SetFocus(true);
+                    UsageRecordUpdated?.Invoke(this, _currentRecord);
+                }
+            }
+            else
+            {
+                // Create a new record for the new active window.
                 _currentRecord = new AppUsageRecord
                 {
                     ProcessName = processName,
                     WindowTitle = windowTitle,
-                    StartTime = DateTime.Now
+                    StartTime = DateTime.Now,
+                    ProcessId = (int)processId,
+                    WindowHandle = foregroundWindow
                 };
-
+                
                 _currentRecord.SetFocus(true);
+                _records.Add(_currentRecord);
                 UsageRecordUpdated?.Invoke(this, _currentRecord);
-            }
-            else if (_currentRecord != null)
-            {
-                // Keep the current record focused
-                _currentRecord.SetFocus(true);
             }
         }
 

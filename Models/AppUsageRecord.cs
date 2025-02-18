@@ -22,6 +22,29 @@ namespace ScreenTimeTracker.Models
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SHGetFileInfo(
+            string pszPath,
+            uint dwFileAttributes,
+            ref SHFILEINFO psfi,
+            uint cbFileInfo,
+            uint uFlags);
+
+        private const uint SHGFI_ICON = 0x100;
+        private const uint SHGFI_SMALLICON = 0x1;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct SHFILEINFO
+        {
+            public IntPtr hIcon;
+            public int iIcon;
+            public uint dwAttributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szDisplayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+            public string szTypeName;
+        }
+
         private static readonly HashSet<string> _ignoredProcesses = new()
         {
             "explorer",
@@ -70,7 +93,9 @@ namespace ScreenTimeTracker.Models
 
         public int Id { get; set; }
         public string ProcessName { get; set; } = string.Empty;
+        public int ProcessId { get; set; }
         public string WindowTitle { get; set; } = string.Empty;
+        public IntPtr WindowHandle { get; set; }
         public bool IsFocused { get; set; }
         
         private DateTime _startTime;
@@ -118,9 +143,14 @@ namespace ScreenTimeTracker.Models
             get
             {
                 var baseDuration = _accumulatedDuration;
-                if (!EndTime.HasValue && IsFocused)
+                if (IsFocused && _lastFocusTime != default(DateTime))
                 {
-                    baseDuration += DateTime.Now - StartTime;
+                    var currentTime = DateTime.Now;
+                    var focusedDuration = currentTime - _lastFocusTime;
+                    if (focusedDuration.TotalMilliseconds > 0)
+                    {
+                        baseDuration += focusedDuration;
+                    }
                 }
                 return baseDuration;
             }
@@ -172,13 +202,19 @@ namespace ScreenTimeTracker.Models
                         _loadIconTask = LoadIconAsync();
                     }
                 }
-                else if (IsFocused)
+                else if (_lastFocusTime != default(DateTime))
                 {
                     // Accumulate the time spent focused
-                    _accumulatedDuration += DateTime.Now - _lastFocusTime;
+                    var focusedDuration = DateTime.Now - _lastFocusTime;
+                    if (focusedDuration.TotalMilliseconds > 0)
+                    {
+                        _accumulatedDuration += focusedDuration;
+                    }
+                    _lastFocusTime = default(DateTime);
                 }
                 
                 IsFocused = isFocused;
+                NotifyPropertyChanged(nameof(IsFocused));
                 NotifyPropertyChanged(nameof(Duration));
                 NotifyPropertyChanged(nameof(FormattedDuration));
             }
@@ -254,19 +290,19 @@ namespace ScreenTimeTracker.Models
         private async Task LoadIconAsync()
         {
             if (!ShouldTrack) return;
-
+            
             try
             {
                 await _iconLoadingSemaphore.WaitAsync();
                 
                 if (IsLoadingIcon || _icon != null) return;
-
+                
                 IsLoadingIcon = true;
                 NotifyPropertyChanged(nameof(Icon));
-
+                
                 var processes = System.Diagnostics.Process.GetProcessesByName(ProcessName);
                 if (processes.Length == 0) return;
-
+                
                 foreach (var process in processes)
                 {
                     try
@@ -280,14 +316,77 @@ namespace ScreenTimeTracker.Models
                         {
                             continue;
                         }
-
+                        
                         if (string.IsNullOrEmpty(executablePath)) continue;
-
+                        
                         var iconPath = new StringBuilder(executablePath);
                         ushort iconIndex;
+                        // try the P/Invoke extraction first
                         IntPtr hIcon = ExtractAssociatedIcon(IntPtr.Zero, iconPath, out iconIndex);
 
-                        if (hIcon != IntPtr.Zero)
+                        if (hIcon == IntPtr.Zero)
+                        {
+                            // FALLBACK: try using .NET's ExtractAssociatedIcon
+                            System.Drawing.Icon? fallbackIcon = null;
+                            try
+                            {
+                                fallbackIcon = System.Drawing.Icon.ExtractAssociatedIcon(executablePath);
+                            }
+                            catch 
+                            {
+                                // if even the fallback fails, we will try SHGetFileInfo
+                            }
+
+                            if (fallbackIcon != null)
+                            {
+                                using (var icon = fallbackIcon)
+                                {
+                                    using (var bitmap = icon.ToBitmap())
+                                    using (var stream = new MemoryStream())
+                                    {
+                                        bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                                        stream.Position = 0;
+                                        
+                                        var image = new BitmapImage();
+                                        image.DecodePixelWidth = 24; // Match the image size in XAML
+                                        image.DecodePixelHeight = 24;
+                                        await image.SetSourceAsync(stream.AsRandomAccessStream());
+                                        _icon = image;
+                                        break;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // NEW: try SHGetFileInfo as another fallback
+                                SHFILEINFO shinfo = new SHFILEINFO();
+                                IntPtr result = SHGetFileInfo(executablePath, 0, ref shinfo, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), SHGFI_ICON | SHGFI_SMALLICON);
+                                if (shinfo.hIcon != IntPtr.Zero)
+                                {
+                                    using (var icon = System.Drawing.Icon.FromHandle(shinfo.hIcon))
+                                    {
+                                        using (var bitmap = icon.ToBitmap())
+                                        using (var stream = new MemoryStream())
+                                        {
+                                            bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                                            stream.Position = 0;
+                                            
+                                            var image = new BitmapImage();
+                                            image.DecodePixelWidth = 24; // Match the image size in XAML
+                                            image.DecodePixelHeight = 24;
+                                            await image.SetSourceAsync(stream.AsRandomAccessStream());
+                                            _icon = image;
+                                            break;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    continue;
+                                }
+                            }
+                        }
+                        else
                         {
                             try
                             {
@@ -300,7 +399,7 @@ namespace ScreenTimeTracker.Models
                                         {
                                             bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
                                             stream.Position = 0;
-
+                                            
                                             var image = new BitmapImage();
                                             image.DecodePixelWidth = 24; // Match the image size in XAML
                                             image.DecodePixelHeight = 24;
