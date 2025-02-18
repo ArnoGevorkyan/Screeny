@@ -109,7 +109,7 @@
                         </Grid>
                         
                         <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2"/>
-                        <TextBlock Text="{x:Bind FormattedDuration}" Grid.Column="3"/>
+                        <TextBlock Text="{x:Bind FormattedDuration, Mode=OneWay}" Grid.Column="3"/>
                         <TextBlock Text="{x:Bind FormattedStartTime}" Grid.Column="4"/>
                     </Grid>
                 </DataTemplate>

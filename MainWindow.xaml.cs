@@ -136,17 +136,19 @@ namespace ScreenTimeTracker
         {
             try
             {
-                foreach (var record in _usageRecords)
+                System.Diagnostics.Debug.WriteLine("Timer tick - updating durations");
+                
+                // Get the focused record first
+                var focusedRecord = _usageRecords.FirstOrDefault(r => r.IsFocused);
+                if (focusedRecord != null)
                 {
-                    if (record.IsFocused)
-                    {
-                        record.UpdateDuration();
-                    }
+                    System.Diagnostics.Debug.WriteLine($"Updating focused record: {focusedRecord.ProcessName}");
+                    focusedRecord.UpdateDuration();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Ignore any exceptions during update
+                System.Diagnostics.Debug.WriteLine($"Error in timer tick: {ex}");
             }
         }
 
@@ -172,13 +174,24 @@ namespace ScreenTimeTracker
 
             DispatcherQueue.TryEnqueue(() =>
             {
+                System.Diagnostics.Debug.WriteLine($"Updating UI for record: {record.ProcessName}");
+                
                 // Check if the record is already in the collection
                 var existingRecord = _usageRecords.FirstOrDefault(r => 
                     r.ProcessId == record.ProcessId && 
                     r.WindowTitle == record.WindowTitle &&
                     r.WindowHandle == record.WindowHandle);
 
-                if (existingRecord == null)
+                if (existingRecord != null)
+                {
+                    // Update existing record
+                    var index = _usageRecords.IndexOf(existingRecord);
+                    if (index >= 0)
+                    {
+                        _usageRecords[index] = record;
+                    }
+                }
+                else
                 {
                     _usageRecords.Add(record);
                 }
@@ -198,16 +211,21 @@ namespace ScreenTimeTracker
         private void StartButton_Click(object sender, RoutedEventArgs e)
         {
             ThrowIfDisposed();
-            _trackingService.StartTracking();
-            StartButton.IsEnabled = false;
-            StopButton.IsEnabled = true;
-            _updateTimer.Start();
+            System.Diagnostics.Debug.WriteLine("Starting tracking");
             
-            // Ensure the timer is running
+            // First start the update timer
             if (!_updateTimer.IsEnabled)
             {
+                System.Diagnostics.Debug.WriteLine("Starting UI update timer");
                 _updateTimer.Start();
             }
+
+            // Then start the tracking service
+            _trackingService.StartTracking();
+            
+            // Update UI state
+            StartButton.IsEnabled = false;
+            StopButton.IsEnabled = true;
             
             // Automatically minimize the tracker window so that external apps become active.
             if (_presenter != null)

@@ -143,14 +143,12 @@ namespace ScreenTimeTracker.Models
             get
             {
                 var baseDuration = _accumulatedDuration;
-                if (IsFocused && _lastFocusTime != default(DateTime))
+                if (IsFocused)
                 {
                     var currentTime = DateTime.Now;
                     var focusedDuration = currentTime - _lastFocusTime;
-                    if (focusedDuration.TotalMilliseconds > 0)
-                    {
-                        baseDuration += focusedDuration;
-                    }
+                    baseDuration += focusedDuration;
+                    System.Diagnostics.Debug.WriteLine($"Duration for {ProcessName}: Accumulated={_accumulatedDuration.TotalSeconds:F1}s, Current={focusedDuration.TotalSeconds:F1}s, Total={baseDuration.TotalSeconds:F1}s");
                 }
                 return baseDuration;
             }
@@ -191,26 +189,25 @@ namespace ScreenTimeTracker.Models
 
         public void SetFocus(bool isFocused)
         {
+            System.Diagnostics.Debug.WriteLine($"Setting focus for {ProcessName} to {isFocused}");
             if (IsFocused != isFocused)
             {
                 if (isFocused)
                 {
                     _lastFocusTime = DateTime.Now;
+                    System.Diagnostics.Debug.WriteLine($"Focus started for {ProcessName} at {_lastFocusTime}");
                     // Try to load icon when the app gets focus
                     if (_icon == null && !IsLoadingIcon && _loadIconTask == null)
                     {
                         _loadIconTask = LoadIconAsync();
                     }
                 }
-                else if (_lastFocusTime != default(DateTime))
+                else
                 {
                     // Accumulate the time spent focused
                     var focusedDuration = DateTime.Now - _lastFocusTime;
-                    if (focusedDuration.TotalMilliseconds > 0)
-                    {
-                        _accumulatedDuration += focusedDuration;
-                    }
-                    _lastFocusTime = default(DateTime);
+                    _accumulatedDuration += focusedDuration;
+                    System.Diagnostics.Debug.WriteLine($"Focus ended for {ProcessName}, accumulated {focusedDuration.TotalSeconds:F1}s, total: {_accumulatedDuration.TotalSeconds:F1}s");
                 }
                 
                 IsFocused = isFocused;
@@ -242,8 +239,9 @@ namespace ScreenTimeTracker.Models
 
         public void UpdateDuration()
         {
-            if (!EndTime.HasValue && IsFocused)
+            if (IsFocused)
             {
+                System.Diagnostics.Debug.WriteLine($"Updating duration for {ProcessName} (Focused: {IsFocused})");
                 NotifyPropertyChanged(nameof(Duration));
                 NotifyPropertyChanged(nameof(FormattedDuration));
             }

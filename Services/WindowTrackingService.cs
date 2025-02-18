@@ -80,12 +80,15 @@ namespace ScreenTimeTracker.Services
             if (windowTitle.IndexOf("Screen Time Tracker", StringComparison.OrdinalIgnoreCase) >= 0)
                 return;
 
+            System.Diagnostics.Debug.WriteLine($"Active window changed to: {processName} - {windowTitle}");
+
             // If we have a current record and it's different from the new window, unfocus it
             if (_currentRecord != null && 
                 (_currentRecord.WindowHandle != foregroundWindow || 
                  _currentRecord.ProcessId != (int)processId || 
                  _currentRecord.WindowTitle != windowTitle))
             {
+                System.Diagnostics.Debug.WriteLine($"Unfocusing previous window: {_currentRecord.ProcessName} - {_currentRecord.WindowTitle}");
                 _currentRecord.SetFocus(false);
                 _currentRecord = null;
             }
@@ -98,15 +101,18 @@ namespace ScreenTimeTracker.Services
 
             if (existingRecord != null)
             {
+                System.Diagnostics.Debug.WriteLine($"Found existing record for: {processName} - {windowTitle}");
                 _currentRecord = existingRecord;
                 if (!_currentRecord.IsFocused)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Setting focus to existing record: {processName}");
                     _currentRecord.SetFocus(true);
                     UsageRecordUpdated?.Invoke(this, _currentRecord);
                 }
             }
             else
             {
+                System.Diagnostics.Debug.WriteLine($"Creating new record for: {processName} - {windowTitle}");
                 // Create a new record for the new active window.
                 _currentRecord = new AppUsageRecord
                 {
