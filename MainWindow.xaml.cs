@@ -172,21 +172,120 @@ namespace ScreenTimeTracker
             if (!record.ShouldTrack) return;
             if (!record.IsFromDate(_selectedDate)) return;
 
+            // Handle special cases like Java applications
+            HandleSpecialCases(record);
+
             DispatcherQueue.TryEnqueue(() =>
             {
-                System.Diagnostics.Debug.WriteLine($"Updating UI for record: {record.ProcessName}");
+                System.Diagnostics.Debug.WriteLine($"Updating UI for record: {record.ProcessName} ({record.WindowTitle})");
                 
-                // Check if the record is already in the collection
+                // First try to find exact match
                 var existingRecord = _usageRecords.FirstOrDefault(r => 
                     r.ProcessId == record.ProcessId && 
-                    r.WindowTitle == record.WindowTitle &&
                     r.WindowHandle == record.WindowHandle);
 
                 if (existingRecord == null)
                 {
+                    // If no exact match, try to find by process name (consolidate same apps)
+                    existingRecord = _usageRecords.FirstOrDefault(r => 
+                        r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+                        (r.WindowTitle.Equals(record.WindowTitle, StringComparison.OrdinalIgnoreCase) ||
+                         IsRelatedWindow(r.WindowTitle, record.WindowTitle)));
+                }
+
+                if (existingRecord != null)
+                {
+                    // Update the existing record instead of adding a new one
+                    existingRecord.SetFocus(record.IsFocused);
+                    
+                    // If the window title of the existing record is empty, use the new one
+                    if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(record.WindowTitle))
+                    {
+                        existingRecord.WindowTitle = record.WindowTitle;
+                    }
+                }
+                else
+                {
                     _usageRecords.Add(record);
                 }
             });
+        }
+
+        private void HandleSpecialCases(AppUsageRecord record)
+        {
+            // Handle Java applications like Minecraft
+            if (record.ProcessName.Equals("javaw", StringComparison.OrdinalIgnoreCase))
+            {
+                // Check if it's Minecraft based on window title
+                if (record.WindowTitle.Contains("Minecraft", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "Minecraft";
+                }
+                // Check for other Java applications by window title
+                else if (record.WindowTitle.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "Eclipse";
+                }
+                else if (record.WindowTitle.Contains("IntelliJ", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "IntelliJ IDEA";
+                }
+                else if (record.WindowTitle.Contains("NetBeans", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "NetBeans";
+                }
+            }
+            
+            // Handle Python applications
+            else if (record.ProcessName.Equals("python", StringComparison.OrdinalIgnoreCase) ||
+                     record.ProcessName.Equals("pythonw", StringComparison.OrdinalIgnoreCase))
+            {
+                // Check window title for clues about which Python app is running
+                if (record.WindowTitle.Contains("PyCharm", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "PyCharm";
+                }
+                else if (record.WindowTitle.Contains("Jupyter", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "Jupyter Notebook";
+                }
+            }
+            
+            // Handle node.js applications
+            else if (record.ProcessName.Equals("node", StringComparison.OrdinalIgnoreCase))
+            {
+                if (record.WindowTitle.Contains("VS Code", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.ProcessName = "VS Code";
+                }
+            }
+        }
+
+        private bool IsRelatedWindow(string title1, string title2)
+        {
+            // Check if two window titles appear to be from the same application
+            // This helps consolidate things like "Document1 - Word" and "Document2 - Word"
+            
+            // Check if both titles end with the same application name
+            string[] separators = { " - ", " – ", " | " };
+            
+            foreach (var separator in separators)
+            {
+                // Check if both titles have the separator
+                if (title1.Contains(separator) && title2.Contains(separator))
+                {
+                    // Get the app name (usually after the last separator)
+                    string app1 = title1.Substring(title1.LastIndexOf(separator) + separator.Length);
+                    string app2 = title2.Substring(title2.LastIndexOf(separator) + separator.Length);
+                    
+                    if (app1.Equals(app2, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
         }
 
         private void DatePicker_DateChanged(CalendarDatePicker sender, CalendarDatePickerDateChangedEventArgs args)
@@ -276,9 +375,6 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Container changing for {record.ProcessName}, has icon: {record.AppIcon != null}");
                 
-                // Request the app icon to load
-                record.LoadAppIconIfNeeded();
-                
                 // Get the container and find the UI elements
                 if (args.ItemContainer?.ContentTemplateRoot is Grid grid)
                 {
@@ -290,22 +386,37 @@ namespace ScreenTimeTracker
                         // Update visibility based on whether the app icon is loaded
                         UpdateIconVisibility(record, placeholderIcon, appIconImage);
                         
-                        // Register for property changed to update the UI when the icon loads
-                        record.PropertyChanged += (s, e) =>
+                        // Store the control references in tag for property changed event
+                        if (args.ItemContainer.Tag == null)
                         {
-                            if (e.PropertyName == nameof(AppUsageRecord.AppIcon))
+                            // Only add the event handler once
+                            args.ItemContainer.Tag = true;
+                            
+                            record.PropertyChanged += (s, e) =>
                             {
-                                System.Diagnostics.Debug.WriteLine($"AppIcon property changed for {record.ProcessName}");
-                                DispatcherQueue.TryEnqueue(() =>
+                                if (e.PropertyName == nameof(AppUsageRecord.AppIcon))
                                 {
-                                    UpdateIconVisibility(record, placeholderIcon, appIconImage);
-                                });
-                            }
-                        };
+                                    System.Diagnostics.Debug.WriteLine($"AppIcon property changed for {record.ProcessName}");
+                                    DispatcherQueue.TryEnqueue(() =>
+                                    {
+                                        if (grid != null && placeholderIcon != null && appIconImage != null)
+                                        {
+                                            UpdateIconVisibility(record, placeholderIcon, appIconImage);
+                                        }
+                                    });
+                                }
+                            };
+                        }
                     }
                 }
                 
-                // Register the callback for updating the icon if it's phase 0
+                // Request icon to load
+                if (record.AppIcon == null)
+                {
+                    record.LoadAppIconIfNeeded();
+                }
+                
+                // Register for phase-based callback to handle deferred loading
                 if (args.Phase == 0)
                 {
                     args.RegisterUpdateCallback(UsageListView_ContainerContentChanging);

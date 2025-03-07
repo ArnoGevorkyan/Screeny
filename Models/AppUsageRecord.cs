@@ -134,26 +134,70 @@ namespace ScreenTimeTracker.Models
             {
                 System.Diagnostics.Debug.WriteLine($"Loading icon for {ProcessName}");
                 
-                // Try to get executable path
-                string? exePath = GetExecutablePath();
-                if (string.IsNullOrEmpty(exePath))
+                bool iconLoaded = false;
+                
+                // First, check for UWP apps which need special handling
+                iconLoaded = await TryLoadUwpAppIcon();
+                if (iconLoaded)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Could not find executable path for {ProcessName}");
-                    _isLoadingIcon = false;
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded UWP app icon for {ProcessName}");
                     return;
                 }
                 
-                System.Diagnostics.Debug.WriteLine($"Found executable path: {exePath}");
-
-                bool iconLoaded = false;
+                // Next, try well-known system apps
+                iconLoaded = await TryGetWellKnownSystemIcon();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded well-known system icon for {ProcessName}");
+                    return;
+                }
                 
-                // First try using SHGetFileInfo
-                iconLoaded = await TryLoadIconWithSHGetFileInfo(exePath);
+                // Then try to get executable path for standard apps
+                string? exePath = GetExecutablePath();
+                if (!string.IsNullOrEmpty(exePath))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Found executable path: {exePath}");
+                    
+                    // Try standard icon extraction methods
+                    iconLoaded = await TryLoadIconWithSHGetFileInfo(exePath);
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon with SHGetFileInfo for {ProcessName}");
+                        return;
+                    }
+                    
+                    iconLoaded = await TryLoadIconWithExtractAssociatedIcon(exePath);
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon with ExtractAssociatedIcon for {ProcessName}");
+                        return;
+                    }
+                    
+                    // If the file is a DLL, try the DLL icon extractor
+                    if (exePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        iconLoaded = await TryLoadIconFromDll(exePath);
+                        if (iconLoaded)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from DLL for {ProcessName}");
+                            return;
+                        }
+                    }
+                }
                 
-                // If that fails, try ExtractAssociatedIcon
+                // As a last resort, try to load a generic icon from shell32.dll
                 if (!iconLoaded)
                 {
-                    iconLoaded = await TryLoadIconWithExtractAssociatedIcon(exePath);
+                    string shell32Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll");
+                    if (File.Exists(shell32Path))
+                    {
+                        iconLoaded = await TryLoadIconFromDll(shell32Path);
+                        if (iconLoaded)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Used generic shell32.dll icon for {ProcessName}");
+                            return;
+                        }
+                    }
                 }
                 
                 if (!iconLoaded)
@@ -170,6 +214,251 @@ namespace ScreenTimeTracker.Models
                 _isLoadingIcon = false;
             }
         }
+        
+        private async Task<bool> TryGetWellKnownSystemIcon()
+        {
+            try
+            {
+                string? iconPath = null;
+                string processNameLower = ProcessName.ToLower();
+                
+                // Special handling for renamed processes
+                if (ProcessName == "Minecraft")
+                {
+                    // Try specific Minecraft paths first
+                    string[] minecraftPaths = {
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages", "Microsoft.4297127D64EC6_8wekyb3d8bbwe", "LocalCache", "Local", "minecraft.exe")
+                    };
+                    
+                    foreach (var path in minecraftPaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Found Minecraft icon path: {path}");
+                            return await TryLoadIconWithSHGetFileInfo(path);
+                        }
+                    }
+                    
+                    // Try to load Minecraft icon from assets
+                    string minecraftIconPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "assets", "objects");
+                    if (Directory.Exists(minecraftIconPath))
+                    {
+                        // Try to find PNG files that might be the icon
+                        var pngFiles = Directory.GetFiles(minecraftIconPath, "*.png", SearchOption.AllDirectories);
+                        foreach (var file in pngFiles)
+                        {
+                            if (file.Contains("minecraft") || file.Contains("icon"))
+                            {
+                                if (await LoadImageFromFile(file))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Use Java as fallback
+                    processNameLower = "javaw";
+                }
+                
+                // Map common processes to known system DLLs/EXEs with good icons
+                Dictionary<string, string> wellKnownPaths = new Dictionary<string, string>
+                {
+                    // Browsers
+                    { "chrome", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe") },
+                    { "firefox", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe") },
+                    { "msedge", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe") },
+                    { "iexplore", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Internet Explorer", "iexplore.exe") },
+                    
+                    // Microsoft Office
+                    { "winword", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Office", "root", "Office16", "WINWORD.EXE") },
+                    { "excel", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Office", "root", "Office16", "EXCEL.EXE") },
+                    { "powerpnt", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Office", "root", "Office16", "POWERPNT.EXE") },
+                    { "outlook", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Office", "root", "Office16", "OUTLOOK.EXE") },
+                    
+                    // System processes with special handling
+                    { "explorer", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe") },
+                    { "notepad", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe") },
+                    { "mspaint", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "mspaint.exe") },
+                    { "calc", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "calc.exe") },
+                    
+                    // Java applications
+                    { "javaw", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Java", "bin", "javaw.exe") },
+                    { "java", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Java", "bin", "java.exe") },
+                    
+                    // Python
+                    { "python", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python", "python.exe") },
+                    { "pythonw", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python", "pythonw.exe") },
+                    
+                    // Known system DLLs with good icons
+                    { "searchapp", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll") },
+                    { "applicationframehost", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll") },
+                    { "systemsettings", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll") },
+                    
+                    // Common applications
+                    { "code", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft VS Code", "Code.exe") },
+                    { "discord", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Discord", "app-", "Discord.exe") },
+                    { "spotify", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0", "Spotify.exe") },
+                };
+                
+                // Check if we have a known path for this process
+                if (wellKnownPaths.TryGetValue(processNameLower, out string? knownPath) && File.Exists(knownPath))
+                {
+                    iconPath = knownPath;
+                    System.Diagnostics.Debug.WriteLine($"Found known system path for {ProcessName}: {iconPath}");
+                }
+                // Handle paths with wildcard components
+                else if (processNameLower == "discord")
+                {
+                    // For Discord, try to find the version-specific folder
+                    string discordBaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Discord");
+                    if (Directory.Exists(discordBaseDir))
+                    {
+                        var versionDirs = Directory.GetDirectories(discordBaseDir, "app-*");
+                        if (versionDirs.Length > 0)
+                        {
+                            string possiblePath = Path.Combine(versionDirs[0], "Discord.exe");
+                            if (File.Exists(possiblePath))
+                            {
+                                iconPath = possiblePath;
+                            }
+                        }
+                    }
+                }
+                else if (processNameLower == "spotify")
+                {
+                    // For Spotify from Microsoft Store, try to find the version-specific folder
+                    string spotifyBaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
+                    if (Directory.Exists(spotifyBaseDir))
+                    {
+                        var spotifyDirs = Directory.GetDirectories(spotifyBaseDir, "SpotifyAB.SpotifyMusic_*");
+                        if (spotifyDirs.Length > 0)
+                        {
+                            string possiblePath = Path.Combine(spotifyDirs[0], "Spotify.exe");
+                            if (File.Exists(possiblePath))
+                            {
+                                iconPath = possiblePath;
+                            }
+                        }
+                    }
+                }
+                
+                // If we found a path, try to load the icon
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    // For DLL files, we need to use a different approach with icon resource indices
+                    if (iconPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return await TryLoadIconFromDll(iconPath);
+                    }
+                    else
+                    {
+                        // For EXE files, try our normal methods
+                        bool success = await TryLoadIconWithSHGetFileInfo(iconPath);
+                        if (!success)
+                        {
+                            success = await TryLoadIconWithExtractAssociatedIcon(iconPath);
+                        }
+                        return success;
+                    }
+                }
+                
+                return false;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in TryGetWellKnownSystemIcon: {ex.Message}");
+                return false;
+            }
+        }
+        
+        [DllImport("Shell32.dll", EntryPoint = "#727")]
+        private extern static int SHGetImageList(int iImageList, ref Guid riid, ref IImageList ppv);
+        
+        [Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IImageList
+        {
+            [PreserveSig]
+            int Draw(IntPtr hdc, int i, int x, int y, int style);
+            
+            [PreserveSig]
+            int GetIcon(int i, int flag, ref IntPtr picon);
+        }
+        
+        private async Task<bool> TryLoadIconFromDll(string dllPath)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Loading icon from DLL {dllPath} for {ProcessName}");
+                
+                // For well-known system processes, use specific icon indices from shell32.dll
+                int iconIndex = 0;
+                
+                string processNameLower = ProcessName.ToLower();
+                if (dllPath.ToLower().Contains("shell32.dll"))
+                {
+                    // Map processes to shell32.dll icon indices
+                    Dictionary<string, int> iconIndices = new Dictionary<string, int>
+                    {
+                        { "searchapp", 22 },             // Search icon
+                        { "applicationframehost", 15 },  // Generic application icon
+                        { "systemsettings", 317 },       // Settings gear icon
+                        { "explorer", 3 },               // Folder icon
+                        // Add more mappings as needed
+                    };
+                    
+                    if (iconIndices.TryGetValue(processNameLower, out int index))
+                    {
+                        iconIndex = index;
+                    }
+                }
+                
+                // Try to get the icon using ExtractIconEx
+                IntPtr[] largeIcons = new IntPtr[1] { IntPtr.Zero };
+                IntPtr[] smallIcons = new IntPtr[1] { IntPtr.Zero };
+                
+                try
+                {
+                    int iconCount = ExtractIconEx(dllPath, iconIndex, largeIcons, smallIcons, 1);
+                    if (iconCount > 0 && smallIcons[0] != IntPtr.Zero)
+                    {
+                        using (Icon icon = Icon.FromHandle(smallIcons[0]))
+                        using (Bitmap bitmap = icon.ToBitmap())
+                        {
+                            BitmapImage? bitmapImage = await ConvertBitmapToBitmapImageAsync(bitmap);
+                            if (bitmapImage != null)
+                            {
+                                AppIcon = bitmapImage;
+                                System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from DLL for {ProcessName}");
+                                return true;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    // Clean up handles
+                    if (largeIcons[0] != IntPtr.Zero)
+                        DestroyIcon(largeIcons[0]);
+                    if (smallIcons[0] != IntPtr.Zero)
+                        DestroyIcon(smallIcons[0]);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading icon from DLL for {ProcessName}: {ex.Message}");
+            }
+            
+            return false;
+        }
+        
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern int ExtractIconEx(string szFileName, int nIconIndex, 
+            [Out] IntPtr[] phiconLarge, [Out] IntPtr[] phiconSmall, int nIcons);
         
         private async Task<bool> TryLoadIconWithSHGetFileInfo(string exePath)
         {
@@ -326,6 +615,33 @@ namespace ScreenTimeTracker.Models
         {
             try
             {
+                // For special apps that we've renamed for better identification
+                if (ProcessName == "Minecraft")
+                {
+                    // Look for Minecraft launcher in common locations
+                    string[] minecraftPaths = {
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages", "Microsoft.4297127D64EC6_8wekyb3d8bbwe", "LocalCache", "Local", "runtime", "jre-x64", "bin", "javaw.exe")
+                    };
+                    
+                    foreach (var path in minecraftPaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            return path;
+                        }
+                    }
+                    
+                    // If we can't find Minecraft specifically, look for Java as a fallback
+                    string javaPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Java", "bin", "javaw.exe");
+                    if (File.Exists(javaPath))
+                    {
+                        return javaPath;
+                    }
+                }
+                
                 // First try to find the running process by ID
                 if (ProcessId > 0)
                 {
@@ -343,10 +659,23 @@ namespace ScreenTimeTracker.Models
                     }
                 }
                 
-                // Then try by name
+                // Then try by name (use original process name for processes that were renamed)
+                string processNameToUse = ProcessName;
+                if (ProcessName == "Minecraft" || 
+                    ProcessName == "Eclipse" || 
+                    ProcessName == "IntelliJ IDEA" ||
+                    ProcessName == "NetBeans")
+                {
+                    processNameToUse = "javaw";
+                }
+                else if (ProcessName == "PyCharm" || ProcessName == "Jupyter Notebook")
+                {
+                    processNameToUse = "python";
+                }
+                
                 try
                 {
-                    var processes = System.Diagnostics.Process.GetProcessesByName(ProcessName);
+                    var processes = System.Diagnostics.Process.GetProcessesByName(processNameToUse);
                     if (processes.Length > 0 && !string.IsNullOrEmpty(processes[0].MainModule?.FileName))
                     {
                         return processes[0].MainModule.FileName;
@@ -354,7 +683,7 @@ namespace ScreenTimeTracker.Models
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Could not get process by name {ProcessName}: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"Could not get process by name {processNameToUse}: {ex.Message}");
                 }
                 
                 // If we still don't have a path, try to infer it from common locations
@@ -561,6 +890,171 @@ namespace ScreenTimeTracker.Models
             {
                 LoadIconAsync();
             }
+        }
+
+        private async Task<bool> TryLoadUwpAppIcon()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Trying to load UWP app icon for {ProcessName}");
+                
+                // Check for ApplicationFrameHost which hosts UWP apps
+                if (ProcessName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For ApplicationFrameHost, we need to look at the window title which often contains the app name
+                    string appName = WindowTitle;
+                    if (!string.IsNullOrEmpty(appName))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"ApplicationFrameHost window title: {appName}");
+                        
+                        // Try to find a corresponding Store app
+                        Dictionary<string, string> uwpLogos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            { "Calculator", @"C:\Program Files\WindowsApps\Microsoft.WindowsCalculator_*\Assets\CalculatorAppList.png" },
+                            { "Calendar", @"C:\Program Files\WindowsApps\microsoft.windowscommunicationsapps_*\ppleae38af2e007f4358a809ac99a64a67c1\MailCalendarLogo.png" },
+                            { "Mail", @"C:\Program Files\WindowsApps\microsoft.windowscommunicationsapps_*\ppleae38af2e007f4358a809ac99a64a67c1\MailCalendarLogo.png" },
+                            { "Maps", @"C:\Program Files\WindowsApps\Microsoft.WindowsMaps_*\Assets\tile-sdk.png" },
+                            { "Microsoft Store", @"C:\Program Files\WindowsApps\Microsoft.WindowsStore_*\icon.png" },
+                            { "Photos", @"C:\Program Files\WindowsApps\Microsoft.Windows.Photos_*\Assets\PhotosAppList.png" },
+                            { "Weather", @"C:\Program Files\WindowsApps\Microsoft.BingWeather_*\Assets\ApplicationLogo.png" },
+                            { "Microsoft Edge", @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" }
+                        };
+                        
+                        foreach (var app in uwpLogos.Keys)
+                        {
+                            if (appName.Contains(app, StringComparison.OrdinalIgnoreCase))
+                            {
+                                string logoPattern = uwpLogos[app];
+                                
+                                // Handle regular executables
+                                if (logoPattern.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(logoPattern))
+                                {
+                                    // For regular EXEs, use our normal methods
+                                    bool success = await TryLoadIconWithSHGetFileInfo(logoPattern);
+                                    if (!success)
+                                    {
+                                        success = await TryLoadIconWithExtractAssociatedIcon(logoPattern);
+                                    }
+                                    return success;
+                                }
+                                
+                                // For UWP app assets, find the file using the pattern
+                                try 
+                                {
+                                    string directory = Path.GetDirectoryName(logoPattern);
+                                    string fileName = Path.GetFileName(logoPattern);
+                                    
+                                    if (Directory.Exists(directory))
+                                    {
+                                        var matchingDirs = Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly);
+                                        foreach (var dir in matchingDirs)
+                                        {
+                                            var assetFiles = Directory.GetFiles(dir, fileName, SearchOption.AllDirectories);
+                                            if (assetFiles.Length > 0)
+                                            {
+                                                return await LoadImageFromFile(assetFiles[0]);
+                                            }
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Error searching for UWP asset files: {ex.Message}");
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If we couldn't match the specific UWP app, use a generic UWP app icon
+                    return await TryLoadIconFromDll(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll"));
+                }
+                
+                // For other UWP processes, try to find their package folder and app icon
+                if (ProcessName.Contains("App") || WindowTitle.Contains("App"))
+                {
+                    string appsFolder = @"C:\Program Files\WindowsApps";
+                    if (Directory.Exists(appsFolder))
+                    {
+                        // Try to find a matching directory
+                        var dirs = Directory.GetDirectories(appsFolder, "*" + ProcessName + "*");
+                        if (dirs.Length > 0)
+                        {
+                            // Look for logo files in common locations
+                            string[] possibleLogos = {
+                                "Assets\\Logo.png",
+                                "Assets\\StoreLogo.png",
+                                "Assets\\AppIcon.png",
+                                "Assets\\ApplicationIcon.png",
+                                "icon.png",
+                                "logo.png"
+                            };
+                            
+                            foreach (var dir in dirs)
+                            {
+                                foreach (var logoPath in possibleLogos)
+                                {
+                                    string fullPath = Path.Combine(dir, logoPath);
+                                    if (File.Exists(fullPath))
+                                    {
+                                        return await LoadImageFromFile(fullPath);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading UWP app icon for {ProcessName}: {ex.Message}");
+            }
+            
+            return false;
+        }
+        
+        private async Task<bool> LoadImageFromFile(string imagePath)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Loading image from file: {imagePath}");
+                
+                BitmapImage bitmapImage = new BitmapImage();
+                using (var fileStream = new FileStream(imagePath, FileMode.Open, FileAccess.Read))
+                {
+                    using (var memStream = new MemoryStream())
+                    {
+                        await fileStream.CopyToAsync(memStream);
+                        memStream.Position = 0;
+                        
+                        using (var randomAccessStream = new InMemoryRandomAccessStream())
+                        {
+                            using (var writer = new DataWriter(randomAccessStream.GetOutputStreamAt(0)))
+                            {
+                                var bytes = memStream.ToArray();
+                                writer.WriteBytes(bytes);
+                                await writer.StoreAsync();
+                                await writer.FlushAsync();
+                            }
+                            
+                            randomAccessStream.Seek(0);
+                            await bitmapImage.SetSourceAsync(randomAccessStream);
+                        }
+                    }
+                }
+                
+                if (bitmapImage.PixelWidth > 0)
+                {
+                    AppIcon = bitmapImage;
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded image from file for {ProcessName}");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading image from file for {ProcessName}: {ex.Message}");
+            }
+            
+            return false;
         }
     }
 } 
