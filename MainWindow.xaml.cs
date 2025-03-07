@@ -8,6 +8,7 @@ using ScreenTimeTracker.Services;
 using ScreenTimeTracker.Models;
 using System.Runtime.InteropServices;
 using System.Linq;
+using System.Collections.Generic;
 
 namespace ScreenTimeTracker
 {
@@ -179,19 +180,7 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Updating UI for record: {record.ProcessName} ({record.WindowTitle})");
                 
-                // First try to find exact match
-                var existingRecord = _usageRecords.FirstOrDefault(r => 
-                    r.ProcessId == record.ProcessId && 
-                    r.WindowHandle == record.WindowHandle);
-
-                if (existingRecord == null)
-                {
-                    // If no exact match, try to find by process name (consolidate same apps)
-                    existingRecord = _usageRecords.FirstOrDefault(r => 
-                        r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
-                        (r.WindowTitle.Equals(record.WindowTitle, StringComparison.OrdinalIgnoreCase) ||
-                         IsRelatedWindow(r.WindowTitle, record.WindowTitle)));
-                }
+                AppUsageRecord? existingRecord = FindExistingRecord(record);
 
                 if (existingRecord != null)
                 {
@@ -203,25 +192,151 @@ namespace ScreenTimeTracker
                     {
                         existingRecord.WindowTitle = record.WindowTitle;
                     }
+                    
+                    // If we're updating the active status, make sure we unfocus any other records
+                    if (record.IsFocused)
+                    {
+                        foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord && r.IsFocused))
+                        {
+                            otherRecord.SetFocus(false);
+                        }
+                    }
                 }
                 else
                 {
+                    // If we're adding a new focused record, unfocus all other records
+                    if (record.IsFocused)
+                    {
+                        foreach (var otherRecord in _usageRecords.Where(r => r.IsFocused))
+                        {
+                            otherRecord.SetFocus(false);
+                        }
+                    }
+                    
                     _usageRecords.Add(record);
                 }
             });
         }
+        
+        private AppUsageRecord? FindExistingRecord(AppUsageRecord record)
+        {
+            // Try several strategies to find a match
+            
+            // 1. Exact match by window handle (most reliable)
+            var exactMatch = _usageRecords.FirstOrDefault(r => r.WindowHandle == record.WindowHandle);
+            if (exactMatch != null) return exactMatch;
+            
+            // 2. Match by process ID and similar window title
+            var pidMatch = _usageRecords.FirstOrDefault(r => 
+                r.ProcessId == record.ProcessId && 
+                IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle));
+            if (pidMatch != null) return pidMatch;
+            
+            // 3. Match by exact process name and window title
+            var exactNameAndTitleMatch = _usageRecords.FirstOrDefault(r => 
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+                r.WindowTitle.Equals(record.WindowTitle, StringComparison.OrdinalIgnoreCase));
+            if (exactNameAndTitleMatch != null) return exactNameAndTitleMatch;
+            
+            // 4. Match by process name and related window
+            var relatedWindowMatch = _usageRecords.FirstOrDefault(r => 
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+                IsRelatedWindow(r.WindowTitle, record.WindowTitle));
+            if (relatedWindowMatch != null) return relatedWindowMatch;
+            
+            // 5. For special applications like browsers, match just by process name
+            if (IsApplicationThatShouldConsolidate(record.ProcessName))
+            {
+                var nameOnlyMatch = _usageRecords.FirstOrDefault(r => 
+                    r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+                if (nameOnlyMatch != null) return nameOnlyMatch;
+            }
+            
+            // No match found
+            return null;
+        }
+        
+        private bool IsSimilarWindowTitle(string title1, string title2)
+        {
+            // If either title is empty, they can't be similar
+            if (string.IsNullOrEmpty(title1) || string.IsNullOrEmpty(title2))
+                return false;
+                
+            // Check if one title contains the other
+            if (title1.Contains(title2, StringComparison.OrdinalIgnoreCase) ||
+                title2.Contains(title1, StringComparison.OrdinalIgnoreCase))
+                return true;
+                
+            // Check for very similar titles (over 80% similarity)
+            if (GetSimilarity(title1, title2) > 0.8)
+                return true;
+                
+            // Check if they follow the pattern "Document - Application"
+            return IsRelatedWindow(title1, title2);
+        }
+        
+        private double GetSimilarity(string a, string b)
+        {
+            // A simple string similarity measure based on shared words
+            var wordsA = a.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            var wordsB = b.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            
+            int sharedWords = wordsA.Intersect(wordsB).Count();
+            int totalWords = Math.Max(wordsA.Length, wordsB.Length);
+            
+            return totalWords == 0 ? 0 : (double)sharedWords / totalWords;
+        }
+        
+        private bool IsApplicationThatShouldConsolidate(string processName)
+        {
+            // List of applications that should be consolidated even with different window titles
+            string[] consolidateApps = new string[]
+            {
+                "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc", // Browsers
+                "winword", "excel", "powerpnt", "outlook", // Office
+                "code", "vscode", "devenv", // Code editors
+                "minecraft", // Games
+                "spotify", "discord", "slack" // Media/Communication apps
+            };
+            
+            return consolidateApps.Any(app => 
+                processName.Equals(app, StringComparison.OrdinalIgnoreCase) || 
+                processName.Contains(app, StringComparison.OrdinalIgnoreCase));
+        }
 
         private void HandleSpecialCases(AppUsageRecord record)
         {
-            // Handle Java applications like Minecraft
-            if (record.ProcessName.Equals("javaw", StringComparison.OrdinalIgnoreCase))
+            // Handle known browsers
+            if (IsBrowser(record.ProcessName))
             {
-                // Check if it's Minecraft based on window title
-                if (record.WindowTitle.Contains("Minecraft", StringComparison.OrdinalIgnoreCase))
+                string detectedBrowser = DetectBrowserType(record.ProcessName, record.WindowTitle);
+                if (!string.IsNullOrEmpty(detectedBrowser))
                 {
-                    record.ProcessName = "Minecraft";
+                    record.ProcessName = detectedBrowser;
+                    System.Diagnostics.Debug.WriteLine($"Detected browser: {detectedBrowser}");
                 }
-                // Check for other Java applications by window title
+            }
+            // Handle Java applications 
+            else if (record.ProcessName.Equals("javaw", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.Equals("java", StringComparison.OrdinalIgnoreCase))
+            {
+                // Check for Java-based games by window title
+                if (IsJavaBasedGame(record.WindowTitle))
+                {
+                    // Extract game name from window title
+                    string gameName = ExtractGameNameFromTitle(record.WindowTitle);
+                    if (!string.IsNullOrEmpty(gameName))
+                    {
+                        record.ProcessName = gameName;
+                        System.Diagnostics.Debug.WriteLine($"Detected Java game: {gameName} from title: {record.WindowTitle}");
+                    }
+                    else
+                    {
+                        // Default to "Minecraft" if we can't determine specific game
+                        record.ProcessName = "Minecraft";
+                    }
+                }
+                // Check for Java IDEs
                 else if (record.WindowTitle.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))
                 {
                     record.ProcessName = "Eclipse";
@@ -259,6 +374,86 @@ namespace ScreenTimeTracker
                     record.ProcessName = "VS Code";
                 }
             }
+        }
+        
+        private bool IsBrowser(string processName)
+        {
+            string[] browsers = { "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc" };
+            return browsers.Any(b => processName.Equals(b, StringComparison.OrdinalIgnoreCase) || 
+                                    processName.Contains(b, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        private string DetectBrowserType(string processName, string windowTitle)
+        {
+            // Map processes to browser names
+            if (processName.Contains("chrome", StringComparison.OrdinalIgnoreCase))
+                return "Chrome";
+            if (processName.Contains("firefox", StringComparison.OrdinalIgnoreCase))
+                return "Firefox";
+            if (processName.Contains("msedge", StringComparison.OrdinalIgnoreCase))
+                return "Microsoft Edge";
+            if (processName.Contains("iexplore", StringComparison.OrdinalIgnoreCase))
+                return "Internet Explorer";
+            if (processName.Contains("opera", StringComparison.OrdinalIgnoreCase))
+                return "Opera";
+            if (processName.Contains("brave", StringComparison.OrdinalIgnoreCase))
+                return "Brave";
+            if (processName.Contains("arc", StringComparison.OrdinalIgnoreCase))
+                return "Arc";
+                
+            // Extract from window title if possible
+            if (windowTitle.Contains("Chrome", StringComparison.OrdinalIgnoreCase))
+                return "Chrome";
+            if (windowTitle.Contains("Firefox", StringComparison.OrdinalIgnoreCase))
+                return "Firefox";
+            if (windowTitle.Contains("Edge", StringComparison.OrdinalIgnoreCase))
+                return "Microsoft Edge";
+            if (windowTitle.Contains("Internet Explorer", StringComparison.OrdinalIgnoreCase))
+                return "Internet Explorer";
+            if (windowTitle.Contains("Opera", StringComparison.OrdinalIgnoreCase))
+                return "Opera";
+            if (windowTitle.Contains("Brave", StringComparison.OrdinalIgnoreCase))
+                return "Brave";
+            if (windowTitle.Contains("Arc", StringComparison.OrdinalIgnoreCase))
+                return "Arc";
+                
+            // No specific browser detected
+            return string.Empty;
+        }
+        
+        private bool IsJavaBasedGame(string windowTitle)
+        {
+            // List of common Java-based game keywords
+            string[] gameKeywords = {
+                "Minecraft", "MC", "Forge", "Fabric", "CraftBukkit", "Spigot", "Paper", "Optifine",
+                "Game", "Server", "Client", "Launcher", "Mod", "MultiMC", "TLauncher", "Vime"
+            };
+            
+            return gameKeywords.Any(keyword => 
+                windowTitle.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        private string ExtractGameNameFromTitle(string windowTitle)
+        {
+            // A map of known game title patterns to game names
+            Dictionary<string, string> gameTitlePatterns = new Dictionary<string, string>
+            {
+                { "Minecraft", "Minecraft" },
+                { "Forge", "Minecraft" },
+                { "Fabric", "Minecraft" },
+                { "Vime", "Minecraft" },
+                { "MC", "Minecraft" }
+            };
+            
+            foreach (var pattern in gameTitlePatterns.Keys)
+            {
+                if (windowTitle.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                {
+                    return gameTitlePatterns[pattern];
+                }
+            }
+            
+            return string.Empty;
         }
 
         private bool IsRelatedWindow(string title1, string title2)

@@ -222,46 +222,116 @@ namespace ScreenTimeTracker.Models
                 string? iconPath = null;
                 string processNameLower = ProcessName.ToLower();
                 
-                // Special handling for renamed processes
-                if (ProcessName == "Minecraft")
+                // Special handling for browsers
+                if (IsBrowser(ProcessName))
                 {
-                    // Try specific Minecraft paths first
-                    string[] minecraftPaths = {
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages", "Microsoft.4297127D64EC6_8wekyb3d8bbwe", "LocalCache", "Local", "minecraft.exe")
+                    Dictionary<string, string[]> browserPaths = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        { "Arc", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Arc", "app", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Arc", "Arc.exe")
+                        }},
+                        { "Chrome", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe")
+                        }},
+                        { "Firefox", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mozilla Firefox", "firefox.exe")
+                        }},
+                        { "Microsoft Edge", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe")
+                        }},
+                        { "Opera", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Opera", "launcher.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Opera", "launcher.exe")
+                        }},
+                        { "Brave", new string[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+                        }}
                     };
-                    
-                    foreach (var path in minecraftPaths)
+
+                    // Check for browser in standard paths
+                    if (browserPaths.TryGetValue(ProcessName, out string[]? paths))
                     {
-                        if (File.Exists(path))
+                        foreach (var path in paths)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Found Minecraft icon path: {path}");
-                            return await TryLoadIconWithSHGetFileInfo(path);
-                        }
-                    }
-                    
-                    // Try to load Minecraft icon from assets
-                    string minecraftIconPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "assets", "objects");
-                    if (Directory.Exists(minecraftIconPath))
-                    {
-                        // Try to find PNG files that might be the icon
-                        var pngFiles = Directory.GetFiles(minecraftIconPath, "*.png", SearchOption.AllDirectories);
-                        foreach (var file in pngFiles)
-                        {
-                            if (file.Contains("minecraft") || file.Contains("icon"))
+                            if (File.Exists(path))
                             {
-                                if (await LoadImageFromFile(file))
-                                {
-                                    return true;
-                                }
+                                System.Diagnostics.Debug.WriteLine($"Found browser executable for {ProcessName}: {path}");
+                                return await TryLoadIconWithSHGetFileInfo(path);
                             }
                         }
                     }
                     
-                    // Use Java as fallback
-                    processNameLower = "javaw";
+                    // If specific paths don't work, try more generic browser detection
+                    processNameLower = ProcessName.ToLower();
+                }
+                
+                // Special handling for Java-based games (like Minecraft)
+                else if (IsJavaGame(ProcessName))
+                {
+                    // Try game-specific paths
+                    List<string> gamePaths = new List<string>();
+                    
+                    // Add common paths based on the type of game
+                    string gameDir = GetGameDirectory(ProcessName);
+                    if (!string.IsNullOrEmpty(gameDir) && Directory.Exists(gameDir))
+                    {
+                        // Try to find game executable or launcher
+                        gamePaths.AddRange(new[]
+                        {
+                            Path.Combine(gameDir, "launcher", $"{ProcessName}.exe"),
+                            Path.Combine(gameDir, $"{ProcessName}.exe"),
+                            Path.Combine(gameDir, "launcher", "launcher.exe"),
+                            Path.Combine(gameDir, "launcher", "game.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), ProcessName, $"{ProcessName}.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), ProcessName, $"{ProcessName}.exe")
+                        });
+                        
+                        // Try to find icon files
+                        TryFindIconFilesInDirectory(gameDir, gamePaths);
+                    }
+                    
+                    // Try standard Minecraft paths as fallbacks
+                    gamePaths.AddRange(new[] 
+                    {
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe")
+                    });
+                    
+                    foreach (var path in gamePaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Found game icon path: {path}");
+                            if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return await TryLoadIconWithSHGetFileInfo(path);
+                            }
+                            else if (path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || 
+                                     path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return await LoadImageFromFile(path);
+                            }
+                        }
+                    }
+                    
+                    // If we can't find a specific game icon, use Java as fallback
+                    string javaPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Java", "bin", "javaw.exe");
+                    if (File.Exists(javaPath))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Using Java icon for {ProcessName}: {javaPath}");
+                        return await TryLoadIconWithSHGetFileInfo(javaPath);
+                    }
+                    
+                    processNameLower = "javaw"; // Fall back to finding java icon
                 }
                 
                 // Map common processes to known system DLLs/EXEs with good icons
@@ -272,6 +342,9 @@ namespace ScreenTimeTracker.Models
                     { "firefox", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe") },
                     { "msedge", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe") },
                     { "iexplore", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Internet Explorer", "iexplore.exe") },
+                    { "arc", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc", "Arc.exe") },
+                    { "brave", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BraveSoftware", "Brave-Browser", "Application", "brave.exe") },
+                    { "opera", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Opera", "launcher.exe") },
                     
                     // Microsoft Office
                     { "winword", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Office", "root", "Office16", "WINWORD.EXE") },
@@ -372,6 +445,81 @@ namespace ScreenTimeTracker.Models
             {
                 System.Diagnostics.Debug.WriteLine($"Error in TryGetWellKnownSystemIcon: {ex.Message}");
                 return false;
+            }
+        }
+        
+        private bool IsBrowser(string processName)
+        {
+            string[] browsers = { "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc" };
+            return browsers.Any(browser => 
+                processName.Equals(browser, StringComparison.OrdinalIgnoreCase) ||
+                processName.Contains(browser, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        private bool IsJavaGame(string processName)
+        {
+            string[] knownJavaGames = { "minecraft", "forge", "fabric" };
+            return knownJavaGames.Any(g => processName.Contains(g, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        private string GetGameDirectory(string processName)
+        {
+            // Generic logic to determine game directory based on process name
+            string appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            
+            // Try to create a standardized directory name from process name
+            string gameFolder = processName.ToLower();
+            if (gameFolder.Contains("minecraft") || gameFolder == "minecraft")
+            {
+                return Path.Combine(appDataDir, ".minecraft");
+            }
+            
+            // Try directly using the process name with a dot prefix
+            string dotPrefixDir = Path.Combine(appDataDir, $".{gameFolder}");
+            if (Directory.Exists(dotPrefixDir))
+            {
+                return dotPrefixDir;
+            }
+            
+            // Try without dot prefix
+            string noDotDir = Path.Combine(appDataDir, gameFolder);
+            if (Directory.Exists(noDotDir))
+            {
+                return noDotDir;
+            }
+            
+            // If no specific directory found, default to .minecraft
+            return Path.Combine(appDataDir, ".minecraft");
+        }
+        
+        private void TryFindIconFilesInDirectory(string directory, List<string> paths)
+        {
+            try
+            {
+                // Common icon filenames
+                string[] iconFileNames = { "icon.png", "logo.png", "favicon.png", "icon.ico", "launcher.ico" };
+                
+                // Check in main directory and launcher subdirectory
+                string[] dirsToCheck = { directory, Path.Combine(directory, "launcher") };
+                
+                foreach (var dir in dirsToCheck)
+                {
+                    if (Directory.Exists(dir))
+                    {
+                        foreach (var iconName in iconFileNames)
+                        {
+                            string iconPath = Path.Combine(dir, iconName);
+                            if (File.Exists(iconPath))
+                            {
+                                paths.Add(iconPath);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error searching for icon files: {ex.Message}");
             }
         }
         
@@ -615,18 +763,135 @@ namespace ScreenTimeTracker.Models
         {
             try
             {
-                // For special apps that we've renamed for better identification
-                if (ProcessName == "Minecraft")
+                // Check for browsers first (including Arc)
+                if (IsBrowser(ProcessName))
                 {
-                    // Look for Minecraft launcher in common locations
-                    string[] minecraftPaths = {
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe"),
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages", "Microsoft.4297127D64EC6_8wekyb3d8bbwe", "LocalCache", "Local", "runtime", "jre-x64", "bin", "javaw.exe")
+                    // Specific Arc browser detection
+                    if (ProcessName.Equals("Arc", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Common Arc browser paths
+                        string[] arcPaths = {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Arc", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Arc", "app", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Arc", "Arc.exe")
+                        };
+                        
+                        foreach (var path in arcPaths)
+                        {
+                            if (File.Exists(path))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Found Arc browser at {path}");
+                                return path;
+                            }
+                        }
+                        
+                        // Look for executable in user's app data folder
+                        string userAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                        try
+                        {
+                            // Search for Arc in the LocalApplicationData folder with pattern matching
+                            string[] arcDirs = Directory.GetDirectories(userAppData, "Arc*");
+                            foreach (var dir in arcDirs)
+                            {
+                                string exePath = Path.Combine(dir, "Arc.exe");
+                                if (File.Exists(exePath))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Found Arc browser in app data: {exePath}");
+                                    return exePath;
+                                }
+                                
+                                // Check subdirectories
+                                string[] subDirs = { "app", "bin", "Application" };
+                                foreach (var subDir in subDirs)
+                                {
+                                    exePath = Path.Combine(dir, subDir, "Arc.exe");
+                                    if (File.Exists(exePath))
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Found Arc browser in subdirectory: {exePath}");
+                                        return exePath;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error searching for Arc browser: {ex.Message}");
+                        }
+                    }
+                    
+                    // Other browsers detection
+                    Dictionary<string, string[]> browserPaths = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        { "Chrome", new[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe")
+                        }},
+                        { "Firefox", new[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Mozilla Firefox", "firefox.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mozilla Firefox", "firefox.exe")
+                        }},
+                        { "Microsoft Edge", new[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe")
+                        }},
+                        { "Opera", new[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Opera", "launcher.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Opera", "launcher.exe")
+                        }},
+                        { "Brave", new[] {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+                        }}
                     };
                     
-                    foreach (var path in minecraftPaths)
+                    if (browserPaths.TryGetValue(ProcessName, out string[]? paths))
+                    {
+                        foreach (var path in paths)
+                        {
+                            if (File.Exists(path))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Found browser path: {path}");
+                                return path;
+                            }
+                        }
+                    }
+                }
+                
+                // For special apps that are Java-based games
+                if (IsJavaGame(ProcessName))
+                {
+                    // Look for game-specific launcher in common locations
+                    string gameDir = GetGameDirectory(ProcessName);
+
+                    // Try to find executable in the game directory
+                    if (!string.IsNullOrEmpty(gameDir) && Directory.Exists(gameDir))
+                    {
+                        string[] possibleExePaths = {
+                            Path.Combine(gameDir, "launcher", $"{ProcessName}.exe"),
+                            Path.Combine(gameDir, $"{ProcessName}.exe"),
+                            Path.Combine(gameDir, "launcher", "launcher.exe"),
+                            Path.Combine(gameDir, "bin", "launcher.exe")
+                        };
+
+                        foreach (var path in possibleExePaths)
+                        {
+                            if (File.Exists(path))
+                            {
+                                return path;
+                            }
+                        }
+                    }
+                    
+                    // Try standard game installation directories
+                    string[] standardPaths = {
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), ProcessName, $"{ProcessName}.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), ProcessName, $"{ProcessName}.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProcessName, $"{ProcessName}.exe")
+                    };
+                    
+                    foreach (var path in standardPaths)
                     {
                         if (File.Exists(path))
                         {
@@ -634,7 +899,26 @@ namespace ScreenTimeTracker.Models
                         }
                     }
                     
-                    // If we can't find Minecraft specifically, look for Java as a fallback
+                    // If the game is Minecraft or derivative, try Minecraft-specific paths
+                    if (ProcessName.Contains("mine", StringComparison.OrdinalIgnoreCase) || 
+                        ProcessName.Contains("craft", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string[] minecraftPaths = {
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft", "launcher", "Minecraft.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Minecraft", "MinecraftLauncher.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Minecraft Launcher", "MinecraftLauncher.exe")
+                        };
+                        
+                        foreach (var path in minecraftPaths)
+                        {
+                            if (File.Exists(path))
+                            {
+                                return path;
+                            }
+                        }
+                    }
+                    
+                    // If we can't find the game executable, return Java as a fallback
                     string javaPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Java", "bin", "javaw.exe");
                     if (File.Exists(javaPath))
                     {
@@ -661,10 +945,13 @@ namespace ScreenTimeTracker.Models
                 
                 // Then try by name (use original process name for processes that were renamed)
                 string processNameToUse = ProcessName;
-                if (ProcessName == "Minecraft" || 
-                    ProcessName == "Eclipse" || 
-                    ProcessName == "IntelliJ IDEA" ||
-                    ProcessName == "NetBeans")
+                if (IsJavaGame(ProcessName))
+                {
+                    processNameToUse = "javaw";
+                }
+                else if (ProcessName == "Eclipse" || 
+                         ProcessName == "IntelliJ IDEA" ||
+                         ProcessName == "NetBeans")
                 {
                     processNameToUse = "javaw";
                 }
