@@ -102,6 +102,9 @@ namespace ScreenTimeTracker
             {
                 Dispose();
             };
+            
+            // Make sure we start with a clean state (no system processes)
+            CleanupSystemProcesses();
         }
 
         private void ThrowIfDisposed()
@@ -170,7 +173,8 @@ namespace ScreenTimeTracker
 
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
-            if (!record.ShouldTrack) return;
+            // Additional check to make sure we filter out windows system processes
+            if (!record.ShouldTrack || IsWindowsSystemProcess(record.ProcessName)) return;
             if (!record.IsFromDate(_selectedDate)) return;
 
             // Handle special cases like Java applications
@@ -180,7 +184,8 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Updating UI for record: {record.ProcessName} ({record.WindowTitle})");
                 
-                AppUsageRecord? existingRecord = FindExistingRecord(record);
+                // First try to find exact match
+                var existingRecord = FindExistingRecord(record);
 
                 if (existingRecord != null)
                 {
@@ -204,6 +209,9 @@ namespace ScreenTimeTracker
                 }
                 else
                 {
+                    // Additional check before adding to make sure it's not a system process
+                    if (IsWindowsSystemProcess(record.ProcessName)) return;
+                    
                     // If we're adding a new focused record, unfocus all other records
                     if (record.IsFocused)
                     {
@@ -306,7 +314,8 @@ namespace ScreenTimeTracker
                 new HashSet<string> { "chrome", "chrome.exe", "chromedriver", "chromium" },
                 new HashSet<string> { "firefox", "firefox.exe", "firefoxdriver" },
                 new HashSet<string> { "visualstudio", "devenv", "devenv.exe", "msvsmon", "vshost", "vs_installer" },
-                new HashSet<string> { "code", "code.exe", "vscode", "vscode.exe", "code - insiders" }
+                new HashSet<string> { "code", "code.exe", "vscode", "vscode.exe", "code - insiders" },
+                new HashSet<string> { "whatsapp", "whatsapp.exe", "whatsappdesktop", "electron" }
             };
             
             // Check if the two names are in the same group
@@ -336,6 +345,17 @@ namespace ScreenTimeTracker
 
         private void HandleSpecialCases(AppUsageRecord record)
         {
+            // WhatsApp detection (various process names based on install method)
+            if (record.ProcessName.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
+                record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.Contains("WhatsAppDesktop", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.Contains("Electron", StringComparison.OrdinalIgnoreCase) && 
+                record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "WhatsApp";
+                return;
+            }
+            
             // Visual Studio detection (runs as 'devenv')
             if (record.ProcessName.Equals("devenv", StringComparison.OrdinalIgnoreCase))
             {
@@ -420,15 +440,25 @@ namespace ScreenTimeTracker
         {
             // A generic approach to rename common applications to better names
             
+            // WhatsApp related processes
+            if (record.ProcessName.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
+                (record.ProcessName.Contains("Electron", StringComparison.OrdinalIgnoreCase) &&
+                 record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase)))
+            {
+                record.ProcessName = "WhatsApp";
+                return;
+            }
+            
             // Telegram related processes
             if (record.ProcessName.Contains("Telegram", StringComparison.OrdinalIgnoreCase) ||
                 record.ProcessName.StartsWith("tg", StringComparison.OrdinalIgnoreCase))
             {
                 record.ProcessName = "Telegram";
+                return;
             }
             
             // Visual Studio related processes
-            else if (record.ProcessName.Contains("msvsmon", StringComparison.OrdinalIgnoreCase) ||
+            if (record.ProcessName.Contains("msvsmon", StringComparison.OrdinalIgnoreCase) ||
                     record.ProcessName.Contains("vshost", StringComparison.OrdinalIgnoreCase) ||
                     record.ProcessName.Contains("vs_professional", StringComparison.OrdinalIgnoreCase) ||
                     record.ProcessName.Contains("devenv", StringComparison.OrdinalIgnoreCase))
@@ -628,54 +658,123 @@ namespace ScreenTimeTracker
             return false;
         }
 
+        private void CleanupSystemProcesses()
+        {
+            // Create a list of records to remove (can't modify collection while enumerating)
+            var recordsToRemove = _usageRecords
+                .Where(r => IsWindowsSystemProcess(r.ProcessName))
+                .ToList();
+            
+            // Remove each system process from the collection
+            foreach (var record in recordsToRemove)
+            {
+                _usageRecords.Remove(record);
+            }
+        }
+        
         private void DatePicker_DateChanged(CalendarDatePicker sender, CalendarDatePickerDateChangedEventArgs args)
         {
             if (args.NewDate.HasValue)
             {
                 _selectedDate = args.NewDate.Value.Date;
-                // For real-time view, you might clear and reload your list here.
-                // For simplicity, we do nothing if _selectedDate equals today.
+                LoadRecordsForDate(_selectedDate);
+                
+                // Clean up any system processes that might have been added
+                CleanupSystemProcesses();
             }
         }
-
+        
         private void StartButton_Click(object sender, RoutedEventArgs e)
         {
             ThrowIfDisposed();
-            System.Diagnostics.Debug.WriteLine("Starting tracking");
             
-            // First start the update timer
-            if (!_updateTimer.IsEnabled)
+            try
             {
-                System.Diagnostics.Debug.WriteLine("Starting UI update timer");
+                var currentDate = DateTime.Now.Date;
+                
+                // Set the date picker to today
+                if (_selectedDate != currentDate)
+                {
+                    _selectedDate = currentDate;
+                    DatePicker.Date = _selectedDate;
+                    LoadRecordsForDate(_selectedDate);
+                }
+                
+                // Start tracking window activity
+                System.Diagnostics.Debug.WriteLine("Starting window tracking");
+                _trackingService.StartTracking();
+                
+                // Update UI elements
+                StartButton.IsEnabled = false;
+                StopButton.IsEnabled = true;
+                
+                // Start the timer for updating durations
                 _updateTimer.Start();
+                
+                // Clean up any system processes that might have been added
+                CleanupSystemProcesses();
             }
-
-            // Then start the tracking service
-            _trackingService.StartTracking();
-            
-            // Update UI state
-            StartButton.IsEnabled = false;
-            StopButton.IsEnabled = true;
-            
-            // Automatically minimize the tracker window so that external apps become active.
-            if (_presenter != null)
+            catch (Exception ex)
             {
-                _presenter.Minimize();
+                // Log the error
+                System.Diagnostics.Debug.WriteLine($"Error starting tracking: {ex.Message}");
+                
+                // Display an error message
+                var dialog = new ContentDialog
+                {
+                    Title = "Error",
+                    Content = $"Failed to start tracking: {ex.Message}",
+                    CloseButtonText = "OK"
+                };
+                
+                dialog.XamlRoot = this.Content.XamlRoot;
+                _ = dialog.ShowAsync();
             }
         }
 
+        private void LoadRecordsForDate(DateTime date)
+        {
+            // Here you would load records from database or storage for the given date
+            // For now, just clear the list if the date is not today
+            if (date.Date != DateTime.Now.Date)
+            {
+                _usageRecords.Clear();
+            }
+        }
+        
         private void StopButton_Click(object sender, RoutedEventArgs e)
         {
             ThrowIfDisposed();
-            _trackingService.StopTracking();
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled = false;
-            _updateTimer.Stop();
-
-            // Clear focus state for all records.
-            foreach (var record in _usageRecords)
+            
+            try
             {
-                record.SetFocus(false);
+                // Stop tracking
+                System.Diagnostics.Debug.WriteLine("Stopping tracking");
+                _trackingService.StopTracking();
+                
+                // Stop UI updates
+                _updateTimer.Stop();
+                
+                // Update UI state
+                StartButton.IsEnabled = true;
+                StopButton.IsEnabled = false;
+                
+                // Cleanup any system processes one last time
+                CleanupSystemProcesses();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error stopping tracking: {ex.Message}");
+                // Display error dialog
+                var dialog = new ContentDialog
+                {
+                    Title = "Error",
+                    Content = $"Failed to stop tracking: {ex.Message}",
+                    CloseButtonText = "OK"
+                };
+                
+                dialog.XamlRoot = this.Content.XamlRoot;
+                _ = dialog.ShowAsync();
             }
         }
 
@@ -781,6 +880,58 @@ namespace ScreenTimeTracker
                 placeholder.Visibility = Visibility.Visible;
                 iconImage.Visibility = Visibility.Collapsed;
             }
+        }
+
+        private bool IsWindowsSystemProcess(string processName)
+        {
+            if (string.IsNullOrEmpty(processName)) return false;
+            
+            // Common Windows system process names we want to ignore
+            string[] systemProcesses = {
+                "explorer",
+                "SearchHost",
+                "ShellExperienceHost",
+                "StartMenuExperienceHost",
+                "ApplicationFrameHost",
+                "SystemSettings",
+                "TextInputHost",
+                "WindowsTerminal",
+                "cmd",
+                "powershell",
+                "pwsh",
+                "conhost",
+                "WinStore.App",
+                "LockApp",
+                "LogonUI",
+                "fontdrvhost",
+                "dwm",
+                "csrss",
+                "services",
+                "svchost",
+                "taskhostw",
+                "ctfmon",
+                "rundll32",
+                "dllhost",
+                "sihost",
+                "taskmgr",
+                "backgroundtaskhost",
+                "smartscreen",
+                "SecurityHealthService",
+                "Registry",
+                "MicrosoftEdgeUpdate",
+                "WmiPrvSE",
+                "spoolsv",
+                "TabTip",
+                "TabTip32",
+                "SearchUI",
+                "SearchApp",
+                "RuntimeBroker",
+                "SettingsSyncHost",
+                "WUDFHost"
+            };
+            
+            // Check if the processName is in our list
+            return systemProcesses.Contains(processName.ToLower());
         }
     }
 }

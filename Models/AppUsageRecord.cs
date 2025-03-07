@@ -255,6 +255,66 @@ namespace ScreenTimeTracker.Models
                 string? iconPath = null;
                 string processNameLower = ProcessName.ToLower();
                 
+                // Special handling for WhatsApp
+                if (ProcessName.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Common paths for WhatsApp
+                    string[] whatsAppPaths = {
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WhatsApp", "WhatsApp.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhatsApp", "WhatsApp.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "WhatsApp", "WhatsApp.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "WhatsAppDesktop.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "WhatsApp.exe")
+                    };
+                    
+                    foreach (var path in whatsAppPaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Using WhatsApp icon from: {path}");
+                            return await TryLoadIconWithSHGetFileInfo(path);
+                        }
+                    }
+                    
+                    // Search for WhatsApp in WindowsApps directories
+                    try
+                    {
+                        string windowsAppsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
+                        if (Directory.Exists(windowsAppsDir))
+                        {
+                            var whatsAppDirs = Directory.GetDirectories(windowsAppsDir, "*WhatsApp*", SearchOption.AllDirectories);
+                            foreach (var dir in whatsAppDirs)
+                            {
+                                foreach (var ext in new[] { "*.exe", "*.ico", "*.png" })
+                                {
+                                    var files = Directory.GetFiles(dir, ext, SearchOption.AllDirectories);
+                                    foreach (var file in files)
+                                    {
+                                        if (Path.GetFileName(file).Contains("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            if (file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                return await TryLoadIconWithSHGetFileInfo(file);
+                                            }
+                                            else if (file.EndsWith(".ico", StringComparison.OrdinalIgnoreCase) ||
+                                                    file.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                return await LoadImageFromFile(file);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error searching for WhatsApp icon: {ex.Message}");
+                    }
+                    
+                    processNameLower = "whatsapp";
+                }
+                
                 // Special handling for browsers
                 if (IsBrowser(ProcessName))
                 {
@@ -408,6 +468,9 @@ namespace ScreenTimeTracker.Models
                     { "code", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft VS Code", "Code.exe") },
                     { "discord", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Discord", "app-", "Discord.exe") },
                     { "spotify", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0", "Spotify.exe") },
+                    { "whatsapp", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WhatsApp", "WhatsApp.exe") },
+                    { "telegram", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Telegram Desktop", "Telegram.exe") },
+                    { "visualstudio", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Visual Studio", "2022", "Professional", "Common7", "IDE", "devenv.exe") }
                 };
                 
                 // Check if we have a known path for this process
@@ -796,6 +859,102 @@ namespace ScreenTimeTracker.Models
         {
             try
             {
+                // Check for WhatsApp (including Microsoft Store version)
+                if (ProcessName.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
+                    WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Try multiple possible paths for WhatsApp
+                    string[] whatsAppPaths = {
+                        // Standard desktop app
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WhatsApp", "WhatsApp.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhatsApp", "WhatsApp.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "WhatsApp", "WhatsApp.exe"),
+                        
+                        // Microsoft Store version
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "WhatsAppDesktop.exe"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "WhatsApp.exe")
+                    };
+                    
+                    foreach (var path in whatsAppPaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Found WhatsApp path: {path}");
+                            return path;
+                        }
+                    }
+                    
+                    // Check for WhatsApp in WindowsApps folder with wildcard
+                    try
+                    {
+                        string windowsAppsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
+                        if (Directory.Exists(windowsAppsDir))
+                        {
+                            // Search for WhatsApp directories
+                            string[] whatsAppDirs = Directory.GetDirectories(windowsAppsDir, "*WhatsApp*");
+                            foreach (var dir in whatsAppDirs)
+                            {
+                                string exePath = Path.Combine(dir, "WhatsApp.exe");
+                                if (File.Exists(exePath))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Found WhatsApp in WindowsApps: {exePath}");
+                                    return exePath;
+                                }
+                                
+                                exePath = Path.Combine(dir, "WhatsAppDesktop.exe");
+                                if (File.Exists(exePath))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Found WhatsAppDesktop in WindowsApps: {exePath}");
+                                    return exePath;
+                                }
+                                
+                                // Sometimes the main exe is in a subfolder
+                                string[] subdirs = { "app-*", "bin", "app" };
+                                foreach (var subPattern in subdirs)
+                                {
+                                    try
+                                    {
+                                        var matchingSubdirs = Directory.GetDirectories(dir, subPattern);
+                                        foreach (var subdir in matchingSubdirs)
+                                        {
+                                            exePath = Path.Combine(subdir, "WhatsApp.exe");
+                                            if (File.Exists(exePath))
+                                            {
+                                                System.Diagnostics.Debug.WriteLine($"Found WhatsApp in subdirectory: {exePath}");
+                                                return exePath;
+                                            }
+                                        }
+                                    }
+                                    catch { /* Ignore directory access errors */ }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error searching for WhatsApp: {ex.Message}");
+                    }
+                    
+                    // If all else fails, look for electron processes running WhatsApp
+                    try
+                    {
+                        var processes = System.Diagnostics.Process.GetProcessesByName("electron");
+                        foreach (var process in processes)
+                        {
+                            try
+                            {
+                                if (process.MainWindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) &&
+                                    !string.IsNullOrEmpty(process.MainModule?.FileName))
+                                {
+                                    return process.MainModule.FileName;
+                                }
+                            }
+                            catch { /* Skip process if we can't access it */ }
+                        }
+                    }
+                    catch { /* Ignore process access errors */ }
+                }
+                
                 // Check for browsers first (including Arc)
                 if (IsBrowser(ProcessName))
                 {
