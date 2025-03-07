@@ -226,29 +226,30 @@ namespace ScreenTimeTracker
             var exactMatch = _usageRecords.FirstOrDefault(r => r.WindowHandle == record.WindowHandle);
             if (exactMatch != null) return exactMatch;
             
-            // 2. Match by process ID and similar window title
-            var pidMatch = _usageRecords.FirstOrDefault(r => 
+            // 2. Match by process name and process ID - handles multiple instances of same app with different windows
+            var pidAndNameMatch = _usageRecords.FirstOrDefault(r => 
                 r.ProcessId == record.ProcessId && 
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+            if (pidAndNameMatch != null) return pidAndNameMatch;
+            
+            // 3. Match by extracted application name to handle apps with multiple processes (like Telegram, Discord)
+            string baseAppName = GetBaseAppName(record.ProcessName);
+            var appNameMatch = _usageRecords.FirstOrDefault(r => 
+                GetBaseAppName(r.ProcessName).Equals(baseAppName, StringComparison.OrdinalIgnoreCase));
+            if (appNameMatch != null) return appNameMatch;
+            
+            // 4. Match by process name and similar window title (for MDI applications)
+            var similarTitleMatch = _usageRecords.FirstOrDefault(r => 
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
                 IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle));
-            if (pidMatch != null) return pidMatch;
+            if (similarTitleMatch != null) return similarTitleMatch;
             
-            // 3. Match by exact process name and window title
-            var exactNameAndTitleMatch = _usageRecords.FirstOrDefault(r => 
-                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
-                r.WindowTitle.Equals(record.WindowTitle, StringComparison.OrdinalIgnoreCase));
-            if (exactNameAndTitleMatch != null) return exactNameAndTitleMatch;
-            
-            // 4. Match by process name and related window
-            var relatedWindowMatch = _usageRecords.FirstOrDefault(r => 
-                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
-                IsRelatedWindow(r.WindowTitle, record.WindowTitle));
-            if (relatedWindowMatch != null) return relatedWindowMatch;
-            
-            // 5. For special applications like browsers, match just by process name
+            // 5. For special applications like browsers, match just by application type
             if (IsApplicationThatShouldConsolidate(record.ProcessName))
             {
                 var nameOnlyMatch = _usageRecords.FirstOrDefault(r => 
-                    r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+                    r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) ||
+                    IsAlternateProcessNameForSameApp(r.ProcessName, record.ProcessName));
                 if (nameOnlyMatch != null) return nameOnlyMatch;
             }
             
@@ -256,35 +257,60 @@ namespace ScreenTimeTracker
             return null;
         }
         
-        private bool IsSimilarWindowTitle(string title1, string title2)
+        private string GetBaseAppName(string processName)
         {
-            // If either title is empty, they can't be similar
-            if (string.IsNullOrEmpty(title1) || string.IsNullOrEmpty(title2))
-                return false;
+            // Extract the base application name (removing numbers, suffixes, etc.)
+            if (string.IsNullOrEmpty(processName)) return processName;
+            
+            // Remove common process suffixes
+            string cleanName = processName.ToLower()
+                .Replace("64", "")
+                .Replace("32", "")
+                .Replace("x86", "")
+                .Replace("x64", "")
+                .Replace(" (x86)", "")
+                .Replace(" (x64)", "");
                 
-            // Check if one title contains the other
-            if (title1.Contains(title2, StringComparison.OrdinalIgnoreCase) ||
-                title2.Contains(title1, StringComparison.OrdinalIgnoreCase))
-                return true;
+            // Match common app variations
+            if (cleanName.StartsWith("telegram"))
+                return "telegram";
+            if (cleanName.StartsWith("discord"))
+                return "discord";
+            if (cleanName.Contains("chrome") || cleanName.Contains("chromium"))
+                return "chrome";
+            if (cleanName.Contains("firefox"))
+                return "firefox";
+            if (cleanName.Contains("devenv") || cleanName.Contains("visualstudio"))
+                return "visualstudio";
+            if (cleanName.Contains("code") || cleanName.Contains("vscode"))
+                return "vscode";
                 
-            // Check for very similar titles (over 80% similarity)
-            if (GetSimilarity(title1, title2) > 0.8)
-                return true;
-                
-            // Check if they follow the pattern "Document - Application"
-            return IsRelatedWindow(title1, title2);
+            return cleanName;
         }
         
-        private double GetSimilarity(string a, string b)
+        private bool IsAlternateProcessNameForSameApp(string name1, string name2)
         {
-            // A simple string similarity measure based on shared words
-            var wordsA = a.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
-            var wordsB = b.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            // Check if two different process names might belong to the same application
+            if (string.IsNullOrEmpty(name1) || string.IsNullOrEmpty(name2))
+                return false;
+                
+            // Convert to lowercase for case-insensitive comparison
+            name1 = name1.ToLower();
+            name2 = name2.ToLower();
             
-            int sharedWords = wordsA.Intersect(wordsB).Count();
-            int totalWords = Math.Max(wordsA.Length, wordsB.Length);
+            // Define groups of related process names
+            var processGroups = new List<HashSet<string>>
+            {
+                new HashSet<string> { "telegram", "telegramdesktop", "telegram.exe", "updater" },
+                new HashSet<string> { "discord", "discordptb", "discordcanary", "discord.exe", "update.exe" },
+                new HashSet<string> { "chrome", "chrome.exe", "chromedriver", "chromium" },
+                new HashSet<string> { "firefox", "firefox.exe", "firefoxdriver" },
+                new HashSet<string> { "visualstudio", "devenv", "devenv.exe", "msvsmon", "vshost", "vs_installer" },
+                new HashSet<string> { "code", "code.exe", "vscode", "vscode.exe", "code - insiders" }
+            };
             
-            return totalWords == 0 ? 0 : (double)sharedWords / totalWords;
+            // Check if the two names are in the same group
+            return processGroups.Any(group => group.Contains(name1) && group.Contains(name2));
         }
         
         private bool IsApplicationThatShouldConsolidate(string processName)
@@ -294,18 +320,29 @@ namespace ScreenTimeTracker
             {
                 "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc", // Browsers
                 "winword", "excel", "powerpnt", "outlook", // Office
-                "code", "vscode", "devenv", // Code editors
+                "code", "vscode", "devenv", "visualstudio", // Code editors 
                 "minecraft", // Games
-                "spotify", "discord", "slack" // Media/Communication apps
+                "spotify", "discord", "slack", "telegram", "whatsapp", "teams", "skype", // Communication apps
+                "explorer", "firefox", "chrome", "edge" // Common apps
             };
             
+            // Extract base name for broader matching
+            string baseName = GetBaseAppName(processName);
+            
             return consolidateApps.Any(app => 
-                processName.Equals(app, StringComparison.OrdinalIgnoreCase) || 
-                processName.Contains(app, StringComparison.OrdinalIgnoreCase));
+                processName.Contains(app, StringComparison.OrdinalIgnoreCase) || 
+                baseName.Contains(app, StringComparison.OrdinalIgnoreCase));
         }
 
         private void HandleSpecialCases(AppUsageRecord record)
         {
+            // Visual Studio detection (runs as 'devenv')
+            if (record.ProcessName.Equals("devenv", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "Visual Studio";
+                return;
+            }
+            
             // Handle known browsers
             if (IsBrowser(record.ProcessName))
             {
@@ -374,6 +411,83 @@ namespace ScreenTimeTracker
                     record.ProcessName = "VS Code";
                 }
             }
+            
+            // Handle common application renames
+            RenameCommonApplications(record);
+        }
+        
+        private void RenameCommonApplications(AppUsageRecord record)
+        {
+            // A generic approach to rename common applications to better names
+            
+            // Telegram related processes
+            if (record.ProcessName.Contains("Telegram", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.StartsWith("tg", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "Telegram";
+            }
+            
+            // Visual Studio related processes
+            else if (record.ProcessName.Contains("msvsmon", StringComparison.OrdinalIgnoreCase) ||
+                    record.ProcessName.Contains("vshost", StringComparison.OrdinalIgnoreCase) ||
+                    record.ProcessName.Contains("vs_professional", StringComparison.OrdinalIgnoreCase) ||
+                    record.ProcessName.Contains("devenv", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "Visual Studio";
+            }
+            
+            // VS Code related processes
+            else if (record.ProcessName.Contains("Code", StringComparison.OrdinalIgnoreCase) ||
+                    record.ProcessName.Contains("VSCode", StringComparison.OrdinalIgnoreCase) ||
+                    record.ProcessName.Contains("Code - Insiders", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "VS Code";
+            }
+            
+            // Microsoft Office related processes
+            else if (record.ProcessName.Equals("WINWORD", StringComparison.OrdinalIgnoreCase))
+                record.ProcessName = "Word";
+            else if (record.ProcessName.Equals("EXCEL", StringComparison.OrdinalIgnoreCase))
+                record.ProcessName = "Excel";
+            else if (record.ProcessName.Equals("POWERPNT", StringComparison.OrdinalIgnoreCase))
+                record.ProcessName = "PowerPoint";
+            else if (record.ProcessName.Equals("OUTLOOK", StringComparison.OrdinalIgnoreCase))
+                record.ProcessName = "Outlook";
+            
+            // Extract from window title as last resort
+            else if (string.IsNullOrEmpty(record.ProcessName) || record.ProcessName.Length <= 3)
+            {
+                string extractedName = ExtractApplicationNameFromWindowTitle(record.WindowTitle);
+                if (!string.IsNullOrEmpty(extractedName))
+                {
+                    record.ProcessName = extractedName;
+                }
+            }
+        }
+        
+        private string ExtractApplicationNameFromWindowTitle(string windowTitle)
+        {
+            if (string.IsNullOrEmpty(windowTitle)) return string.Empty;
+            
+            // Common title patterns
+            string[] patterns = { " - ", " – ", " | ", ": " };
+            
+            foreach (var pattern in patterns)
+            {
+                if (windowTitle.Contains(pattern))
+                {
+                    string[] parts = windowTitle.Split(new[] { pattern }, StringSplitOptions.None);
+                    if (parts.Length >= 2)
+                    {
+                        // Usually the application name is the last part
+                        string lastPart = parts[parts.Length - 1].Trim();
+                        if (lastPart.Length > 2 && !string.IsNullOrEmpty(lastPart))
+                            return lastPart;
+                    }
+                }
+            }
+            
+            return string.Empty;
         }
         
         private bool IsBrowser(string processName)
@@ -454,6 +568,37 @@ namespace ScreenTimeTracker
             }
             
             return string.Empty;
+        }
+
+        private bool IsSimilarWindowTitle(string title1, string title2)
+        {
+            // If either title is empty, they can't be similar
+            if (string.IsNullOrEmpty(title1) || string.IsNullOrEmpty(title2))
+                return false;
+                
+            // Check if one title contains the other
+            if (title1.Contains(title2, StringComparison.OrdinalIgnoreCase) ||
+                title2.Contains(title1, StringComparison.OrdinalIgnoreCase))
+                return true;
+                
+            // Check for very similar titles (over 80% similarity)
+            if (GetSimilarity(title1, title2) > 0.8)
+                return true;
+                
+            // Check if they follow the pattern "Document - Application"
+            return IsRelatedWindow(title1, title2);
+        }
+        
+        private double GetSimilarity(string a, string b)
+        {
+            // A simple string similarity measure based on shared words
+            var wordsA = a.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            var wordsB = b.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            
+            int sharedWords = wordsA.Intersect(wordsB).Count();
+            int totalWords = Math.Max(wordsA.Length, wordsB.Length);
+            
+            return totalWords == 0 ? 0 : (double)sharedWords / totalWords;
         }
 
         private bool IsRelatedWindow(string title1, string title2)

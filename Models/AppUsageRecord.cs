@@ -50,22 +50,28 @@ namespace ScreenTimeTracker.Models
 
         private static readonly HashSet<string> _ignoredProcesses = new()
         {
+            // Windows explorer and UI components
             "explorer",
             "SearchHost",
             "ShellExperienceHost",
             "StartMenuExperienceHost",
-            "devenv",
             "ApplicationFrameHost",
             "SystemSettings",
             "TextInputHost",
+            
+            // Terminals
             "WindowsTerminal",
             "cmd",
             "powershell",
             "pwsh",
             "conhost",
+            
+            // Windows store and system apps
             "WinStore.App",
             "LockApp",
             "LogonUI",
+            
+            // System processes
             "fontdrvhost",
             "dwm",
             "csrss",
@@ -84,7 +90,34 @@ namespace ScreenTimeTracker.Models
             "WmiPrvSE",
             "spoolsv",
             "TabTip",
-            "TabTip32"
+            "TabTip32",
+            
+            // Background services
+            "igfxEM",
+            "igfxHK",
+            "igfxTray",
+            "audiodg",
+            "smss",
+            "lsass",
+            "NVDisplay.Container",
+            "ONENOTEM",
+            "SettingSyncHost",
+            "uhssvc",
+            "WUDFHost",
+            "AAM Updates Notifier",
+            "CompPkgSrv",
+            "PresentationFontCache",
+            "SearchIndexer",
+            "SgrmBroker",
+            "ShellExperienceHost",
+            "smartscreen",
+            "SpeechRuntime",
+            "startup",
+            "System",
+            "SystemSettingsBroker",
+            "winlogon",
+            "wlanext",
+            "wuauclt"
         };
 
         public event PropertyChangedEventHandler? PropertyChanged;
