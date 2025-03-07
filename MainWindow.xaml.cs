@@ -269,5 +269,67 @@ namespace ScreenTimeTracker
             _trackingService.StopTracking();
             this.Close();
         }
+
+        private void UsageListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+        {
+            if (args.Item is AppUsageRecord record)
+            {
+                System.Diagnostics.Debug.WriteLine($"Container changing for {record.ProcessName}, has icon: {record.AppIcon != null}");
+                
+                // Request the app icon to load
+                record.LoadAppIconIfNeeded();
+                
+                // Get the container and find the UI elements
+                if (args.ItemContainer?.ContentTemplateRoot is Grid grid)
+                {
+                    var placeholderIcon = grid.FindName("PlaceholderIcon") as FontIcon;
+                    var appIconImage = grid.FindName("AppIconImage") as Image;
+                    
+                    if (placeholderIcon != null && appIconImage != null)
+                    {
+                        // Update visibility based on whether the app icon is loaded
+                        UpdateIconVisibility(record, placeholderIcon, appIconImage);
+                        
+                        // Register for property changed to update the UI when the icon loads
+                        record.PropertyChanged += (s, e) =>
+                        {
+                            if (e.PropertyName == nameof(AppUsageRecord.AppIcon))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"AppIcon property changed for {record.ProcessName}");
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    UpdateIconVisibility(record, placeholderIcon, appIconImage);
+                                });
+                            }
+                        };
+                    }
+                }
+                
+                // Register the callback for updating the icon if it's phase 0
+                if (args.Phase == 0)
+                {
+                    args.RegisterUpdateCallback(UsageListView_ContainerContentChanging);
+                }
+            }
+            
+            // Increment the phase
+            args.Handled = true;
+        }
+
+        private void UpdateIconVisibility(AppUsageRecord record, FontIcon placeholder, Image iconImage)
+        {
+            if (record.AppIcon != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"Setting icon visible for {record.ProcessName}");
+                placeholder.Visibility = Visibility.Collapsed;
+                iconImage.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"Setting placeholder visible for {record.ProcessName}");
+                placeholder.Visibility = Visibility.Visible;
+                iconImage.Visibility = Visibility.Collapsed;
+            }
+        }
     }
 }

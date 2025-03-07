@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using System;
+using Microsoft.UI.Dispatching;
 
 namespace ScreenTimeTracker;
 
@@ -23,6 +24,9 @@ public partial class App : Application
         SetProcessDPIAware();
 
         InitializeComponent();
+
+        // Store the UI thread's dispatcher for use throughout the app
+        DispatcherHelper.Initialize(DispatcherQueue.GetForCurrentThread());
     }
 
     /// <summary>

@@ -16,6 +16,7 @@
     <Grid Margin="20">
         <Grid.Resources>
             <local:NullToVisibleConverter x:Key="NullToVisibleConverter"/>
+            <local:NotNullToVisibleConverter x:Key="NotNullToVisibleConverter"/>
         </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -82,7 +83,8 @@
                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                   BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                   BorderThickness="1"
-                  CornerRadius="8">
+                  CornerRadius="8"
+                  ContainerContentChanging="UsageListView_ContainerContentChanging">
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="models:AppUsageRecord">
                     <Grid Margin="12,6">
@@ -96,10 +98,17 @@
                         
                         <!-- Icon with loading state -->
                         <Grid Grid.Column="0" Width="24" Height="24">
-                            <FontIcon Glyph="&#xECAA;"
+                            <FontIcon x:Name="PlaceholderIcon"
+                                     Glyph="&#xECAA;"
                                      FontSize="16"
                                      HorizontalAlignment="Center"
-                                     VerticalAlignment="Center"/>
+                                     VerticalAlignment="Center"
+                                     Visibility="Visible"/>
+                            <Image x:Name="AppIconImage"
+                                   Source="{x:Bind AppIcon, Mode=OneWay}"
+                                   Width="24"
+                                   Height="24"
+                                   Visibility="Collapsed"/>
                         </Grid>
                         
                         <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2"/>
