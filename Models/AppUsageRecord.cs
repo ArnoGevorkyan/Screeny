@@ -769,8 +769,6 @@ namespace ScreenTimeTracker.Models
                 System.Diagnostics.Debug.WriteLine($"Error in TryLoadIconWithSHGetFileInfo: {ex.Message}");
                 return false;
             }
-            
-            return false;
         }
         
         private async Task<bool> TryLoadIconWithExtractAssociatedIcon(string exePath)
@@ -944,7 +942,8 @@ namespace ScreenTimeTracker.Models
                             try
                             {
                                 if (process.MainWindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) &&
-                                    !string.IsNullOrEmpty(process.MainModule?.FileName))
+                                    process.MainModule != null &&
+                                    !string.IsNullOrEmpty(process.MainModule.FileName))
                                 {
                                     return process.MainModule.FileName;
                                 }
@@ -1124,7 +1123,7 @@ namespace ScreenTimeTracker.Models
                     try
                     {
                         var process = System.Diagnostics.Process.GetProcessById(ProcessId);
-                        if (process != null && !string.IsNullOrEmpty(process.MainModule?.FileName))
+                        if (process != null && process.MainModule != null && !string.IsNullOrEmpty(process.MainModule.FileName))
                         {
                             return process.MainModule.FileName;
                         }
@@ -1155,7 +1154,7 @@ namespace ScreenTimeTracker.Models
                 try
                 {
                     var processes = System.Diagnostics.Process.GetProcessesByName(processNameToUse);
-                    if (processes.Length > 0 && !string.IsNullOrEmpty(processes[0].MainModule?.FileName))
+                    if (processes.Length > 0 && processes[0].MainModule != null && !string.IsNullOrEmpty(processes[0].MainModule.FileName))
                     {
                         return processes[0].MainModule.FileName;
                     }
@@ -1243,7 +1242,7 @@ namespace ScreenTimeTracker.Models
             }
         }
 
-        private TimeSpan _accumulatedDuration = TimeSpan.Zero;
+        internal TimeSpan _accumulatedDuration = TimeSpan.Zero;
         private DateTime _lastFocusTime;
 
         public TimeSpan Duration
@@ -1420,10 +1419,10 @@ namespace ScreenTimeTracker.Models
                                 // For UWP app assets, find the file using the pattern
                                 try 
                                 {
-                                    string directory = Path.GetDirectoryName(logoPattern);
+                                    string? directory = Path.GetDirectoryName(logoPattern);
                                     string fileName = Path.GetFileName(logoPattern);
                                     
-                                    if (Directory.Exists(directory))
+                                    if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
                                     {
                                         var matchingDirs = Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly);
                                         foreach (var dir in matchingDirs)

@@ -6,6 +6,7 @@ using WinRT.Interop;
 using System.Collections.ObjectModel;
 using ScreenTimeTracker.Services;
 using ScreenTimeTracker.Models;
+using ScreenTimeTracker.Views;
 using System.Runtime.InteropServices;
 using System.Linq;
 using System.Collections.Generic;
@@ -18,12 +19,14 @@ namespace ScreenTimeTracker
     public sealed partial class MainWindow : Window, IDisposable
     {
         private readonly WindowTrackingService _trackingService;
+        private readonly DatabaseService _databaseService;
         private readonly ObservableCollection<AppUsageRecord> _usageRecords;
         private AppWindow? _appWindow;
         private OverlappedPresenter? _presenter;
         private bool _isMaximized = false;
         private DateTime _selectedDate;
         private DispatcherTimer _updateTimer;
+        private DispatcherTimer _autoSaveTimer;
         private bool _disposed;
 
         // Add these Win32 API declarations at the top of the class
@@ -92,10 +95,51 @@ namespace ScreenTimeTracker
             _trackingService = new WindowTrackingService();
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
             
+            try
+            {
+                _databaseService = new DatabaseService();
+                System.Diagnostics.Debug.WriteLine("Database service initialized successfully");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error initializing database: {ex.Message}");
+                // Show a dialog immediately to inform the user
+                var dialog = new ContentDialog
+                {
+                    Title = "Database Error",
+                    Content = $"Failed to initialize the database: {ex.Message}\n\nThe app will continue running but data will not be saved.",
+                    CloseButtonText = "OK"
+                };
+                
+                // We need to set the XamlRoot after the window is initialized
+                this.Closed += (s, e) => {
+                    if (dialog != null)
+                    {
+                        dialog.Hide();
+                    }
+                };
+                
+                // Attempt to show the dialog after the window is loaded
+                DispatcherQueue.TryEnqueue(async () =>
+                {
+                    try 
+                    {
+                        dialog.XamlRoot = this.Content.XamlRoot;
+                        await dialog.ShowAsync();
+                    }
+                    catch {}
+                });
+            }
+
             // Set up timer for duration updates
             _updateTimer = new DispatcherTimer();
             _updateTimer.Interval = TimeSpan.FromSeconds(1);
             _updateTimer.Tick += UpdateTimer_Tick;
+
+            // Set up auto-save timer
+            _autoSaveTimer = new DispatcherTimer();
+            _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
+            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
 
             // Handle window closing
             this.Closed += (sender, args) =>
@@ -121,16 +165,22 @@ namespace ScreenTimeTracker
             {
                 _trackingService.StopTracking();
                 _updateTimer.Stop();
+                _autoSaveTimer.Stop();
+                
+                // Save any unsaved records
+                SaveRecordsToDatabase();
                 
                 // Clear collections
                 _usageRecords.Clear();
                 
                 // Dispose tracking service
                 _trackingService.Dispose();
+                _databaseService.Dispose();
                 
                 // Remove event handlers
                 _updateTimer.Tick -= UpdateTimer_Tick;
                 _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
+                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
 
                 _disposed = true;
             }
@@ -708,8 +758,9 @@ namespace ScreenTimeTracker
                 StartButton.IsEnabled = false;
                 StopButton.IsEnabled = true;
                 
-                // Start the timer for updating durations
+                // Start the timers
                 _updateTimer.Start();
+                _autoSaveTimer.Start();
                 
                 // Clean up any system processes that might have been added
                 CleanupSystemProcesses();
@@ -734,11 +785,42 @@ namespace ScreenTimeTracker
 
         private void LoadRecordsForDate(DateTime date)
         {
-            // Here you would load records from database or storage for the given date
-            // For now, just clear the list if the date is not today
-            if (date.Date != DateTime.Now.Date)
+            try
             {
+                // Clear existing records
                 _usageRecords.Clear();
+                
+                // Load records from database if available
+                if (_databaseService != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Loading records for date: {date.ToShortDateString()}");
+                    var records = _databaseService.GetAggregatedRecordsForDate(date);
+                    
+                    // Add records to the observable collection
+                    foreach (var record in records.Where(r => !IsWindowsSystemProcess(r.ProcessName)))
+                    {
+                        _usageRecords.Add(record);
+                        // Load app icons for each record
+                        record.LoadAppIconIfNeeded();
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records from database");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
+                
+                // Show error dialog
+                var dialog = new ContentDialog
+                {
+                    Title = "Error",
+                    Content = $"Failed to load records: {ex.Message}",
+                    CloseButtonText = "OK"
+                };
+                
+                dialog.XamlRoot = this.Content.XamlRoot;
+                _ = dialog.ShowAsync();
             }
         }
         
@@ -752,12 +834,16 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine("Stopping tracking");
                 _trackingService.StopTracking();
                 
-                // Stop UI updates
+                // Stop UI updates and auto-save
                 _updateTimer.Stop();
+                _autoSaveTimer.Stop();
                 
                 // Update UI state
                 StartButton.IsEnabled = true;
                 StopButton.IsEnabled = false;
+                
+                // Save all active records to the database
+                SaveRecordsToDatabase();
                 
                 // Cleanup any system processes one last time
                 CleanupSystemProcesses();
@@ -770,6 +856,57 @@ namespace ScreenTimeTracker
                 {
                     Title = "Error",
                     Content = $"Failed to stop tracking: {ex.Message}",
+                    CloseButtonText = "OK"
+                };
+                
+                dialog.XamlRoot = this.Content.XamlRoot;
+                _ = dialog.ShowAsync();
+            }
+        }
+        
+        private void SaveRecordsToDatabase()
+        {
+            // Skip saving if database is not available
+            if (_databaseService == null) return;
+            
+            try
+            {
+                // Save each record that's from today and not a system process
+                foreach (var record in _usageRecords.Where(r => 
+                    r.IsFromDate(DateTime.Now.Date) && 
+                    !IsWindowsSystemProcess(r.ProcessName) &&
+                    r.Duration.TotalSeconds > 0))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Saving record: {record.ProcessName}, Duration: {record.Duration}");
+                    
+                    // Make sure focus is turned off to finalize duration
+                    if (record.IsFocused)
+                    {
+                        record.SetFocus(false);
+                    }
+                    
+                    // If record has an ID greater than 0, it was loaded from the database
+                    if (record.Id > 0)
+                    {
+                        _databaseService.UpdateRecord(record);
+                    }
+                    else
+                    {
+                        _databaseService.SaveRecord(record);
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine("Records saved to database");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error saving records: {ex.Message}");
+                
+                // Show error dialog
+                var dialog = new ContentDialog
+                {
+                    Title = "Error",
+                    Content = $"Failed to save records: {ex.Message}",
                     CloseButtonText = "OK"
                 };
                 
@@ -932,6 +1069,71 @@ namespace ScreenTimeTracker
             
             // Check if the processName is in our list
             return systemProcesses.Contains(processName.ToLower());
+        }
+
+        private void AutoSaveTimer_Tick(object? sender, object e)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine("Auto-save timer tick - saving records");
+                
+                // Save all active records to the database
+                SaveRecordsToDatabase();
+                
+                // Clean up any system processes one last time
+                CleanupSystemProcesses();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in auto-save timer tick: {ex}");
+            }
+        }
+
+        private void DashboardButton_Click(object sender, RoutedEventArgs e)
+        {
+            ThrowIfDisposed();
+            
+            // Save any unsaved records before navigating
+            SaveRecordsToDatabase();
+            
+            // Navigate to the dashboard page
+            Frame mainFrame = new Frame();
+            this.Content = mainFrame;
+            mainFrame.Navigate(typeof(Views.DashboardPage), _databaseService);
+            
+            // Handle back navigation to restore the main window
+            mainFrame.Navigated += (s, args) =>
+            {
+                if (args.NavigationMode == Microsoft.UI.Xaml.Navigation.NavigationMode.Back)
+                {
+                    // Restore the original content
+                    RestoreMainWindowContent();
+                }
+            };
+        }
+        
+        private void RestoreMainWindowContent()
+        {
+            // Re-initialize the main window content
+            InitializeComponent();
+            
+            // Restore tracking state
+            if (StopButton != null && StopButton.IsEnabled)
+            {
+                // If tracking was active, restart it
+                StartButton.IsEnabled = false;
+                StopButton.IsEnabled = true;
+                _updateTimer.Start();
+            }
+            else
+            {
+                // If tracking was stopped, keep it stopped
+                StartButton.IsEnabled = true;
+                StopButton.IsEnabled = false;
+            }
+            
+            // Reload data for the selected date
+            DatePicker.Date = _selectedDate;
         }
     }
 }
