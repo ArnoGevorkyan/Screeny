@@ -9,10 +9,17 @@ using ScreenTimeTracker.Models;
 using System.Runtime.InteropServices;
 using System.Linq;
 using System.Collections.Generic;
-using ScottPlot;
-using ScottPlot.WinUI;
-using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 using Microsoft.UI; // Add this for Win32Interop
+// LiveCharts using directives
+using LiveChartsCore;
+using LiveChartsCore.SkiaSharpView;
+using LiveChartsCore.SkiaSharpView.Painting;
+using LiveChartsCore.SkiaSharpView.VisualElements;
+using LiveChartsCore.SkiaSharpView.WinUI;
+using LiveChartsCore.SkiaSharpView.Painting.Effects;
+using LiveChartsCore.Drawing;
+using SkiaSharp;
+using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 
 namespace ScreenTimeTracker
 {
@@ -32,6 +39,13 @@ namespace ScreenTimeTracker
         private DispatcherTimer _autoSaveTimer;
         private bool _disposed;
         private TimePeriod _currentTimePeriod = TimePeriod.Daily;
+        
+        // Static constructor to configure LiveCharts
+        static MainWindow()
+        {
+            // Configure LiveCharts defaults
+            LiveChartsSettings.ConfigureTheme();
+        }
         
         public enum TimePeriod
         {
@@ -773,13 +787,16 @@ namespace ScreenTimeTracker
         {
             try
             {
+                // Store the selected date
+                _selectedDate = date;
+                
                 // Clear existing records
                 _usageRecords.Clear();
 
                 // Load records from database if available
                 if (_databaseService != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Loading records for date: {date.ToShortDateString()}");
+                    System.Diagnostics.Debug.WriteLine($"Loading records for date: {date.ToShortDateString()} with period: {_currentTimePeriod}");
                     
                     // For weekly and monthly views, we need to get records for a range of dates
                     List<AppUsageRecord> records;
@@ -794,6 +811,10 @@ namespace ScreenTimeTracker
                             
                             // Update chart title
                             ChartTitle.Text = $"Weekly Screen Time ({startOfWeek:MMM dd} - {endOfWeek:MMM dd})";
+                            SummaryTitle.Text = $"Weekly Summary ({startOfWeek:MMM dd} - {endOfWeek:MMM dd})";
+                            
+                            // Show daily average
+                            AveragePanel.Visibility = Visibility.Visible;
                             break;
                             
                         case TimePeriod.Monthly:
@@ -804,19 +825,63 @@ namespace ScreenTimeTracker
                             
                             // Update chart title
                             ChartTitle.Text = $"Monthly Screen Time ({startOfMonth:MMMM yyyy})";
+                            SummaryTitle.Text = $"Monthly Summary ({startOfMonth:MMMM yyyy})";
+                            
+                            // Show daily average
+                            AveragePanel.Visibility = Visibility.Visible;
                             break;
                             
                         case TimePeriod.Daily:
                         default:
-                            // Default to daily view
-                            records = _databaseService.GetAggregatedRecordsForDate(date);
+                            // Default to daily view - include aggregate data and active tracking data
+                            records = new List<AppUsageRecord>();
+                            
+                            // First, get saved records for today's date
+                            var savedRecords = _databaseService.GetAggregatedRecordsForDate(date);
+                            records.AddRange(savedRecords);
+                            
+                            // If viewing today's data and tracking is active, include live records
+                            if (date.Date == DateTime.Today && _trackingService.IsTracking)
+                            {
+                                // Get live tracking records that aren't in the database yet
+                                var liveRecords = _trackingService.GetRecords()
+                                    .Where(r => r.IsFromDate(date) && !IsWindowsSystemProcess(r.ProcessName))
+                                    .ToList();
+                                
+                                System.Diagnostics.Debug.WriteLine($"Adding {liveRecords.Count} live tracking records");
+                                
+                                // Merge with existing records where possible
+                                foreach (var liveRecord in liveRecords)
+                                {
+                                    var existingRecord = records
+                                        .FirstOrDefault(r => r.ProcessName.Equals(liveRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
+                                    
+                                    if (existingRecord != null)
+                                    {
+                                        // Merge duration into existing record
+                                        existingRecord.MergeWith(liveRecord);
+                                    }
+                                    else
+                                    {
+                                        // Add as new record if it has meaningful duration
+                                        if (liveRecord.Duration.TotalSeconds > 1)
+                                        {
+                                            records.Add(liveRecord);
+                                        }
+                                    }
+                                }
+                            }
                             
                             // Update chart title
                             ChartTitle.Text = $"Daily Screen Time ({date:MMM dd, yyyy})";
+                            SummaryTitle.Text = $"Daily Summary ({date:MMM dd, yyyy})";
+                            
+                            // Hide daily average for daily view
+                            AveragePanel.Visibility = Visibility.Collapsed;
                             break;
                     }
 
-                    // Add records to the observable collection
+                    // Add records to the observable collection - filter out system processes
                     foreach (var record in records.Where(r => !IsWindowsSystemProcess(r.ProcessName)))
                     {
                         _usageRecords.Add(record);
@@ -824,7 +889,15 @@ namespace ScreenTimeTracker
                         record.LoadAppIconIfNeeded();
                     }
 
-                    System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records from database");
+                    // Sort records by duration for better display
+                    var sortedRecords = _usageRecords.OrderByDescending(r => r.Duration).ToList();
+                    _usageRecords.Clear();
+                    foreach (var record in sortedRecords)
+                    {
+                        _usageRecords.Add(record);
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records, displayed {_usageRecords.Count} after filtering");
                     
                     // Update the chart
                     UpdateUsageChart();
@@ -884,15 +957,12 @@ namespace ScreenTimeTracker
             try
             {
                 // Check if chart control is available
-                if (UsageChart == null)
+                if (UsageChartLive == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("UsageChart is null - unable to update chart");
+                    System.Diagnostics.Debug.WriteLine("UsageChartLive is null - unable to update chart");
                     return;
                 }
 
-                // Clear the existing plot
-                UsageChart.Plot.Clear();
-                
                 // Get top 10 applications by usage duration
                 var topApps = _usageRecords
                     .OrderByDescending(r => r.Duration)
@@ -902,30 +972,93 @@ namespace ScreenTimeTracker
                 if (topApps.Count == 0)
                 {
                     // No data to display
-                    UsageChart.Plot.Add.Text(
-                        "No data available for the selected period", 
-                        0.5, 0.5);
-                    UsageChart.Refresh();
+                    UsageChartLive.Series = Array.Empty<ISeries>();
+                    // Add an empty chart message
+                    UsageChartLive.Title = new LabelVisual
+                    {
+                        Text = "No data available for the selected period",
+                        TextSize = 20,
+                        Padding = new Padding(15),
+                        Paint = new SolidColorPaint(SKColors.Gray)
+                    };
                     return;
                 }
                 
+                // Create a color for the bars - use a nice blue shade
+                var barColor = new SKColor(98, 100, 167); // #6264A7 (purple)
+
                 // Prepare data for the chart
-                string[] labels = topApps.Select(r => r.ProcessName).ToArray();
-                double[] values = topApps.Select(r => r.Duration.TotalHours).ToArray();
+                var values = topApps.Select(r => r.Duration.TotalHours).ToArray();
+                var columnSeries = new ColumnSeries<double>
+                {
+                    Name = "Hours",
+                    Values = values,
+                    Fill = new SolidColorPaint(barColor),
+                    Stroke = new SolidColorPaint(barColor.WithAlpha(200), 1),
+                    MaxBarWidth = 35
+                };
+
+                // Set the series to the chart
+                UsageChartLive.Series = new ISeries[] { columnSeries };
                 
-                // Create a bar chart
-                var barPlot = UsageChart.Plot.Add.Bars(values);
+                // Configure X axis (applications)
+                UsageChartLive.XAxes = new Axis[] 
+                {
+                    new Axis
+                    {
+                        Name = "Applications",
+                        Labels = topApps.Select(r => r.ProcessName).ToArray(),
+                        LabelsRotation = 45,
+                        TextSize = 12,
+                        SeparatorsPaint = new SolidColorPaint
+                        {
+                            Color = SKColors.LightGray.WithAlpha(100),
+                            StrokeThickness = 1
+                        }
+                    }
+                };
+
+                // Configure Y axis (hours)
+                UsageChartLive.YAxes = new Axis[] 
+                {
+                    new Axis
+                    {
+                        Name = "Time",
+                        NamePaint = new SolidColorPaint(SKColors.Gray),
+                        TextSize = 12,
+                        MinLimit = 0,
+                        SeparatorsPaint = new SolidColorPaint
+                        {
+                            Color = SKColors.LightGray.WithAlpha(100),
+                            StrokeThickness = 1
+                        },
+                        Labeler = (value) => FormatHoursForYAxis(value)
+                    }
+                };
                 
-                // Configure axes
-                UsageChart.Plot.Axes.Bottom.Label.Text = "Applications";
-                UsageChart.Plot.Axes.Left.Label.Text = "Hours";
+                // Use theme colors for chart appearance
+                var isLightTheme = Application.Current.RequestedTheme == ApplicationTheme.Light;
+                var labelsPaint = new SolidColorPaint(isLightTheme ? SKColors.Black : SKColors.White);
                 
-                // Set custom tick labels for bottom axis
-                double[] positions = Enumerable.Range(0, labels.Length).Select(i => (double)i).ToArray();
-                UsageChart.Plot.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(positions, labels);
+                foreach (var axis in UsageChartLive.XAxes.Concat(UsageChartLive.YAxes))
+                {
+                    axis.LabelsPaint = labelsPaint;
+                    axis.NamePaint = labelsPaint;
+                }
                 
-                // Refresh the chart
-                UsageChart.Refresh();
+                // Add chart title
+                UsageChartLive.Title = new LabelVisual
+                {
+                    Text = ChartTitle.Text,
+                    TextSize = 18,
+                    Padding = new Padding(15),
+                    Paint = labelsPaint
+                };
+                
+                // Configure tooltip and legend
+                UsageChartLive.LegendPosition = LiveChartsCore.Measure.LegendPosition.Right;
+                UsageChartLive.TooltipPosition = LiveChartsCore.Measure.TooltipPosition.Top;
+                UsageChartLive.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
             }
             catch (Exception ex)
             {
@@ -933,15 +1066,56 @@ namespace ScreenTimeTracker
                 // Don't throw - allow the application to continue without the chart
             }
         }
-        
+
+        // Helper methods for chart formatting
+        private string FormatTimeSpanForChart(TimeSpan time)
+        {
+            if (time.TotalDays >= 1)
+            {
+                return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";
+            }
+            else if (time.TotalHours >= 1)
+            {
+                return $"{(int)time.TotalHours}h {time.Minutes}m";
+            }
+            else
+            {
+                return $"{(int)time.TotalMinutes}m";
+            }
+        }
+
+        private string FormatHoursForYAxis(double value)
+        {
+            var time = TimeSpan.FromHours(value);
+            
+            if (time.TotalHours < 1)
+            {
+                return $"{time.Minutes}m";
+            }
+            else if (time.TotalHours < 10)
+            {
+                return $"{Math.Floor(time.TotalHours)}h {time.Minutes}m";
+            }
+            else
+            {
+                return $"{Math.Floor(time.TotalHours)}h";
+            }
+        }
+
         private void TimePeriodSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (TimePeriodSelector.SelectedIndex >= 0)
             {
+                System.Diagnostics.Debug.WriteLine($"Time period changed from {_currentTimePeriod} to {(TimePeriod)TimePeriodSelector.SelectedIndex}");
+                
                 _currentTimePeriod = (TimePeriod)TimePeriodSelector.SelectedIndex;
                 
-                // Reload data with the new time period
-                LoadRecordsForDate(_selectedDate);
+                // Keep the same selected date when switching views
+                // If switching to/from weekly or monthly, ensure we stay on the same date
+                DateTime dateToLoad = _selectedDate;
+                
+                // Always reload data when the time period changes
+                LoadRecordsForDate(dateToLoad);
             }
         }
 
@@ -1204,9 +1378,17 @@ namespace ScreenTimeTracker
                 // Clean up any system processes one last time
                 CleanupSystemProcesses();
                 
-                // Update the chart if we're viewing today's data
-                if (_selectedDate.Date == DateTime.Now.Date)
+                // If viewing today's data, reload from database to ensure UI is in sync
+                if (_selectedDate.Date == DateTime.Now.Date && _currentTimePeriod == TimePeriod.Daily)
                 {
+                    System.Diagnostics.Debug.WriteLine("Refreshing today's data after auto-save");
+                    
+                    // Reload data without clearing the selection
+                    LoadRecordsForDate(_selectedDate);
+                }
+                else
+                {
+                    // Otherwise just update the chart and summary
                     UpdateUsageChart();
                     UpdateSummaryTab();
                 }
