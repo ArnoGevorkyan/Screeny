@@ -23,18 +23,27 @@ namespace ScreenTimeTracker.Services
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         public event EventHandler<AppUsageRecord>? UsageRecordUpdated;
+        public event EventHandler? WindowChanged;
+        
+        public bool IsTracking { get; private set; }
+        public AppUsageRecord? CurrentRecord => _currentRecord;
 
         public WindowTrackingService()
         {
             _records = new List<AppUsageRecord>();
-            _timer = new System.Timers.Timer(100); // Poll more frequently
+            _timer = new System.Timers.Timer(50);
             _timer.Elapsed += Timer_Elapsed;
+            IsTracking = false;
+            System.Diagnostics.Debug.WriteLine("WindowTrackingService initialized with timer interval: 50ms");
         }
 
         public void StartTracking()
         {
             ThrowIfDisposed();
+            System.Diagnostics.Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
             _timer.Start();
+            IsTracking = true;
+            System.Diagnostics.Debug.WriteLine($"Timer interval: {_timer.Interval}ms");
             // Force immediate check when starting
             CheckActiveWindow();
         }
@@ -42,7 +51,9 @@ namespace ScreenTimeTracker.Services
         public void StopTracking()
         {
             ThrowIfDisposed();
+            System.Diagnostics.Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking ====");
             _timer.Stop();
+            IsTracking = false;
             if (_currentRecord != null)
             {
                 _currentRecord.SetFocus(false);
@@ -55,6 +66,7 @@ namespace ScreenTimeTracker.Services
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
         {
             if (_disposed) return;
+            System.Diagnostics.Debug.WriteLine("Timer_Elapsed - Checking active window");
             CheckActiveWindow();
         }
 
@@ -62,7 +74,10 @@ namespace ScreenTimeTracker.Services
         {
             var foregroundWindow = GetForegroundWindow();
             if (foregroundWindow == IntPtr.Zero)
+            {
+                System.Diagnostics.Debug.WriteLine("CheckActiveWindow - foregroundWindow is Zero, returning");
                 return;
+            }
             
             // Retrieve the process ID
             uint processId;
@@ -70,17 +85,23 @@ namespace ScreenTimeTracker.Services
             
             // Skip tracking if the window belongs to our tracker process.
             if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
+            {
+                System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Skipping our own process");
                 return;
+            }
 
             // Get the active window title and process name.
             var windowTitle = GetActiveWindowTitle(foregroundWindow);
             var processName = GetProcessName(foregroundWindow);
 
+            System.Diagnostics.Debug.WriteLine($"CheckActiveWindow - Detected window: {processName} ({processId}) - '{windowTitle}'");
+
             // Ignore windows whose title contains our app's name.
             if (windowTitle.IndexOf("Screen Time Tracker", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Ignoring our own window based on title");
                 return;
-
-            System.Diagnostics.Debug.WriteLine($"Active window changed to: {processName} - {windowTitle}");
+            }
 
             // If we have a current record and it's different from the new window, unfocus it
             if (_currentRecord != null && 
@@ -108,6 +129,7 @@ namespace ScreenTimeTracker.Services
                     System.Diagnostics.Debug.WriteLine($"Setting focus to existing record: {processName}");
                     _currentRecord.SetFocus(true);
                     UsageRecordUpdated?.Invoke(this, _currentRecord);
+                    WindowChanged?.Invoke(this, EventArgs.Empty);
                 }
             }
             else
@@ -120,12 +142,19 @@ namespace ScreenTimeTracker.Services
                     WindowTitle = windowTitle,
                     StartTime = DateTime.Now,
                     ProcessId = (int)processId,
-                    WindowHandle = foregroundWindow
+                    WindowHandle = foregroundWindow,
+                    Date = DateTime.Now.Date,
+                    ApplicationName = processName // Default to process name, can be refined later
                 };
                 
                 _currentRecord.SetFocus(true);
                 _records.Add(_currentRecord);
+                
+                System.Diagnostics.Debug.WriteLine($"Firing UsageRecordUpdated event for: {processName}");
                 UsageRecordUpdated?.Invoke(this, _currentRecord);
+                WindowChanged?.Invoke(this, EventArgs.Empty);
+                
+                System.Diagnostics.Debug.WriteLine($"Total records tracked: {_records.Count}");
             }
         }
 

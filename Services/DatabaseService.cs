@@ -5,114 +5,202 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using SQLitePCL;
+using System.Diagnostics;
 
 namespace ScreenTimeTracker.Services
 {
     public class DatabaseService : IDisposable
     {
-        private readonly string _databasePath;
+        private readonly string _dbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ScreenTimeTracker", "screentime.db");
         private readonly SqliteConnection _connection;
-        private bool _disposed;
+        private bool _initializedSuccessfully = false;
+        private bool _disposed = false;
 
         /// <summary>
         /// Initializes a new instance of the DatabaseService class.
         /// </summary>
         public DatabaseService()
         {
-            // Initialize SQLite
-            Batteries_V2.Init();
-            
-            // Set up database file path in the user's AppData folder
-            string appDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ScreenTimeTracker");
-                
-            // Ensure directory exists
-            if (!Directory.Exists(appDataPath))
-            {
-                Directory.CreateDirectory(appDataPath);
-            }
-            
-            _databasePath = Path.Combine(appDataPath, "ScreenTimeData.db");
-            
             try
             {
-                _connection = new SqliteConnection($"Data Source={_databasePath}");
+                // Create directory for database
+                var dataDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ScreenTimeTracker");
+
+                if (!Directory.Exists(dataDirectory))
+                {
+                    Directory.CreateDirectory(dataDirectory);
+                }
+
+                // Path is already initialized in the field declaration
+                Debug.WriteLine($"Database path: {_dbPath}");
+
+                // Create connection string
+                var connectionString = new SqliteConnectionStringBuilder
+                {
+                    DataSource = _dbPath,
+                    Mode = SqliteOpenMode.ReadWriteCreate
+                }.ToString();
+
+                // Create connection
+                _connection = new SqliteConnection(connectionString);
                 
-                // Initialize the database
+                // Initialize database schema
                 InitializeDatabase();
+                
+                _initializedSuccessfully = true;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error initializing database connection: {ex.Message}");
-                throw;
+                // Log the error but don't crash
+                Debug.WriteLine($"Database initialization error: {ex.Message}");
+                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                
+                // We'll still create a connection object with a default in-memory database
+                // so the app can run in a degraded mode without crashing
+                _connection = new SqliteConnection("Data Source=:memory:");
+                try
+                {
+                    _connection.Open();
+                    InitializeInMemoryDatabase();
+                    _initializedSuccessfully = false;
+                }
+                catch (Exception memEx)
+                {
+                    // Last resort - we'll operate without database support
+                    Debug.WriteLine($"In-memory database initialization failed: {memEx.Message}");
+                    _initializedSuccessfully = false;
+                }
             }
         }
 
-        /// <summary>
-        /// Creates database tables if they don't exist
-        /// </summary>
+        private void InitializeInMemoryDatabase()
+        {
+            // Create basic schema for in-memory database
+            using var command = _connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE IF NOT EXISTS app_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    process_name TEXT NOT NULL,
+                    app_name TEXT,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT,
+                    duration INTEGER
+                );";
+            command.ExecuteNonQuery();
+            Debug.WriteLine("In-memory database initialized with basic schema");
+        }
+
+        // Check if database was initialized correctly
+        public bool IsDatabaseInitialized() => _initializedSuccessfully;
+
+        public bool IsFirstRun()
+        {
+            if (!_initializedSuccessfully)
+                return true;
+
+            try
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM app_usage";
+                _connection.Open();
+                var result = Convert.ToInt32(command.ExecuteScalar());
+                _connection.Close();
+                return result == 0;
+            }
+            catch
+            {
+                // If we can't query, assume it's first run
+                return true;
+            }
+        }
+
         private void InitializeDatabase()
         {
             try
             {
+                // Open connection
                 _connection.Open();
 
-                // Create AppUsageRecords table
-                string createTableSql = @"
-                CREATE TABLE IF NOT EXISTS AppUsageRecords (
-                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ProcessName TEXT NOT NULL,
-                    WindowTitle TEXT,
-                    ProcessId INTEGER,
-                    StartTime TEXT NOT NULL,
-                    EndTime TEXT,
-                    AccumulatedDuration INTEGER,
-                    Date TEXT NOT NULL
-                );";
-
-                using (var command = new SqliteCommand(createTableSql, _connection))
+                // Create schema
+                using (var command = _connection.CreateCommand())
                 {
+                    command.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS app_usage (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT NOT NULL,
+                        process_name TEXT NOT NULL,
+                        app_name TEXT,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        duration INTEGER
+                    );";
                     command.ExecuteNonQuery();
                 }
 
-                _connection.Close();
-                System.Diagnostics.Debug.WriteLine("Database initialized successfully");
+                // Create indices for better performance
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage(date);";
+                    command.ExecuteNonQuery();
+                }
+
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_process_name ON app_usage(process_name);";
+                    command.ExecuteNonQuery();
+                }
+
+                Debug.WriteLine("Database initialized successfully");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error initializing database: {ex.Message}");
-                throw;
+                Debug.WriteLine($"Error initializing database: {ex.Message}");
+                throw; // Rethrow to be caught in constructor
+            }
+            finally
+            {
+                // Make sure connection is closed
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
             }
         }
 
         /// <summary>
         /// Saves an app usage record to the database
         /// </summary>
-        public void SaveRecord(AppUsageRecord record)
+        public bool SaveRecord(AppUsageRecord record)
         {
-            ThrowIfDisposed();
-
+            if (!_initializedSuccessfully)
+            {
+                Debug.WriteLine("Database not initialized, skipping save operation");
+                return false;
+            }
+            
             try
             {
                 _connection.Open();
 
                 string insertSql = @"
-                INSERT INTO AppUsageRecords 
-                    (ProcessName, WindowTitle, ProcessId, StartTime, EndTime, AccumulatedDuration, Date)
+                INSERT INTO app_usage 
+                    (process_name, app_name, start_time, end_time, duration)
                 VALUES 
-                    (@ProcessName, @WindowTitle, @ProcessId, @StartTime, @EndTime, @AccumulatedDuration, @Date);
+                    (@ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration);
                 SELECT last_insert_rowid();";
 
                 using (var command = new SqliteCommand(insertSql, _connection))
                 {
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                    command.Parameters.AddWithValue("@WindowTitle", record.WindowTitle ?? "");
-                    command.Parameters.AddWithValue("@ProcessId", record.ProcessId);
+                    command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@StartTime", record.StartTime.ToString("o"));
                     command.Parameters.AddWithValue("@EndTime", record.EndTime.HasValue ? record.EndTime.Value.ToString("o") : null);
-                    command.Parameters.AddWithValue("@AccumulatedDuration", (long)record.Duration.TotalMilliseconds);
-                    command.Parameters.AddWithValue("@Date", record.StartTime.Date.ToString("yyyy-MM-dd"));
+                    command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
                     
                     // Get the ID of the inserted record
                     var result = command.ExecuteScalar();
@@ -125,11 +213,12 @@ namespace ScreenTimeTracker.Services
 
                 _connection.Close();
                 System.Diagnostics.Debug.WriteLine($"Saved record: {record.ProcessName} with ID {record.Id}");
+                return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error saving record: {ex.Message}");
-                throw;
+                return false;
             }
         }
 
@@ -138,28 +227,32 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void UpdateRecord(AppUsageRecord record)
         {
-            ThrowIfDisposed();
+            if (!_initializedSuccessfully)
+            {
+                Debug.WriteLine("Database not initialized, skipping update operation");
+                return;
+            }
 
             try
             {
                 _connection.Open();
 
                 string updateSql = @"
-                UPDATE AppUsageRecords 
+                UPDATE app_usage 
                 SET 
-                    ProcessName = @ProcessName,
-                    WindowTitle = @WindowTitle,
-                    EndTime = @EndTime,
-                    AccumulatedDuration = @AccumulatedDuration
-                WHERE Id = @Id;";
+                    process_name = @ProcessName,
+                    app_name = @ApplicationName,
+                    end_time = @EndTime,
+                    duration = @Duration
+                WHERE id = @Id;";
 
                 using (var command = new SqliteCommand(updateSql, _connection))
                 {
                     command.Parameters.AddWithValue("@Id", record.Id);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                    command.Parameters.AddWithValue("@WindowTitle", record.WindowTitle ?? "");
+                    command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@EndTime", record.EndTime.HasValue ? record.EndTime.Value.ToString("o") : null);
-                    command.Parameters.AddWithValue("@AccumulatedDuration", (long)record.Duration.TotalMilliseconds);
+                    command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
                     
                     command.ExecuteNonQuery();
                 }
@@ -179,61 +272,68 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetRecordsForDate(DateTime date)
         {
-            ThrowIfDisposed();
+            if (!_initializedSuccessfully)
+                return new List<AppUsageRecord>();
 
-            List<AppUsageRecord> records = new List<AppUsageRecord>();
-            string dateString = date.ToString("yyyy-MM-dd");
-
+            var records = new List<AppUsageRecord>();
+            
             try
             {
+                var dateString = date.ToString("yyyy-MM-dd");
+                
+                // Open connection
                 _connection.Open();
-
-                string selectSql = @"
-                SELECT 
-                    Id, ProcessName, WindowTitle, ProcessId, StartTime, EndTime, AccumulatedDuration
-                FROM AppUsageRecords 
-                WHERE Date = @Date;";
-
-                using (var command = new SqliteCommand(selectSql, _connection))
+                
+                using (var command = _connection.CreateCommand())
                 {
-                    command.Parameters.AddWithValue("@Date", dateString);
-
+                    command.CommandText = @"
+                        SELECT id, process_name, app_name, start_time, end_time, duration
+                        FROM app_usage
+                        WHERE date = $date
+                        ORDER BY start_time DESC;";
+                    command.Parameters.AddWithValue("$date", dateString);
+                    
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
                         {
-                            AppUsageRecord record = new AppUsageRecord
+                            var record = new AppUsageRecord
                             {
                                 Id = reader.GetInt32(0),
                                 ProcessName = reader.GetString(1),
-                                WindowTitle = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
-                                ProcessId = reader.GetInt32(3),
-                                StartTime = DateTime.Parse(reader.GetString(4)),
+                                ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : reader.GetString(1),
+                                Date = date,
+                                StartTime = DateTime.Parse(reader.GetString(3))
                             };
-
+                            
+                            if (!reader.IsDBNull(4))
+                            {
+                                record.EndTime = DateTime.Parse(reader.GetString(4));
+                            }
+                            
                             if (!reader.IsDBNull(5))
                             {
-                                record.EndTime = DateTime.Parse(reader.GetString(5));
+                                record._accumulatedDuration = TimeSpan.FromSeconds(reader.GetInt32(5));
                             }
-
-                            // Set the accumulated duration
-                            long durationMs = reader.GetInt64(6);
-                            record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
-
+                            
                             records.Add(record);
                         }
                     }
                 }
-
-                _connection.Close();
-                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records for date {dateString}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error retrieving records: {ex.Message}");
-                throw;
+                Debug.WriteLine($"Error getting records for date: {ex.Message}");
             }
-
+            finally
+            {
+                // Make sure connection is closed
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
+            }
+            
             return records;
         }
 
@@ -242,56 +342,62 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetAggregatedRecordsForDate(DateTime date)
         {
-            ThrowIfDisposed();
-
-            List<AppUsageRecord> records = new List<AppUsageRecord>();
-            string dateString = date.ToString("yyyy-MM-dd");
-
+            if (!_initializedSuccessfully)
+                return new List<AppUsageRecord>();
+                
+            var records = new List<AppUsageRecord>();
+            
             try
             {
+                var dateString = date.ToString("yyyy-MM-dd");
+                
+                // Open connection
                 _connection.Open();
-
-                string selectSql = @"
-                SELECT 
-                    ProcessName, 
-                    MIN(StartTime) as FirstStartTime,
-                    SUM(AccumulatedDuration) as TotalDuration
-                FROM AppUsageRecords 
-                WHERE Date = @Date
-                GROUP BY ProcessName
-                ORDER BY TotalDuration DESC;";
-
-                using (var command = new SqliteCommand(selectSql, _connection))
+                
+                using (var command = _connection.CreateCommand())
                 {
-                    command.Parameters.AddWithValue("@Date", dateString);
-
+                    command.CommandText = @"
+                        SELECT process_name, app_name, SUM(duration)
+                        FROM app_usage
+                        WHERE date = $date
+                        GROUP BY process_name
+                        ORDER BY SUM(duration) DESC;";
+                    command.Parameters.AddWithValue("$date", dateString);
+                    
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
                         {
-                            string processName = reader.GetString(0);
-                            DateTime startTime = DateTime.Parse(reader.GetString(1));
-                            long totalDurationMs = reader.GetInt64(2);
-
-                            // Create an aggregated record
-                            AppUsageRecord record = AppUsageRecord.CreateAggregated(processName, date);
-                            record.StartTime = startTime;
-                            record._accumulatedDuration = TimeSpan.FromMilliseconds(totalDurationMs);
-
+                            var record = new AppUsageRecord
+                            {
+                                ProcessName = reader.GetString(0),
+                                ApplicationName = !reader.IsDBNull(1) ? reader.GetString(1) : reader.GetString(0),
+                                Date = date
+                            };
+                            
+                            if (!reader.IsDBNull(2))
+                            {
+                                record._accumulatedDuration = TimeSpan.FromSeconds(reader.GetInt32(2));
+                            }
+                            
                             records.Add(record);
                         }
                     }
                 }
-
-                _connection.Close();
-                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} aggregated records for date {dateString}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error retrieving aggregated records: {ex.Message}");
-                throw;
+                Debug.WriteLine($"Error getting aggregated records: {ex.Message}");
             }
-
+            finally
+            {
+                // Make sure connection is closed
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
+            }
+            
             return records;
         }
 
@@ -300,7 +406,8 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<(string ProcessName, TimeSpan TotalDuration)> GetUsageReportForDateRange(DateTime startDate, DateTime endDate)
         {
-            ThrowIfDisposed();
+            if (!_initializedSuccessfully)
+                return new List<(string, TimeSpan)>();
 
             List<(string, TimeSpan)> usageData = new List<(string, TimeSpan)>();
             string startDateString = startDate.ToString("yyyy-MM-dd");
@@ -312,11 +419,11 @@ namespace ScreenTimeTracker.Services
 
                 string selectSql = @"
                 SELECT 
-                    ProcessName, 
-                    SUM(AccumulatedDuration) as TotalDuration
-                FROM AppUsageRecords 
-                WHERE Date >= @StartDate AND Date <= @EndDate
-                GROUP BY ProcessName
+                    process_name, 
+                    SUM(duration) as TotalDuration
+                FROM app_usage 
+                WHERE date >= @StartDate AND date <= @EndDate
+                GROUP BY process_name
                 ORDER BY TotalDuration DESC;";
 
                 using (var command = new SqliteCommand(selectSql, _connection))
@@ -354,7 +461,11 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void CleanupExpiredRecords(int daysToKeep)
         {
-            ThrowIfDisposed();
+            if (!_initializedSuccessfully)
+            {
+                Debug.WriteLine("Database not initialized, skipping cleanup operation");
+                return;
+            }
 
             try
             {
@@ -363,7 +474,7 @@ namespace ScreenTimeTracker.Services
 
                 _connection.Open();
 
-                string deleteSql = @"DELETE FROM AppUsageRecords WHERE Date < @CutoffDate;";
+                string deleteSql = @"DELETE FROM app_usage WHERE date < @CutoffDate;";
 
                 using (var command = new SqliteCommand(deleteSql, _connection))
                 {
@@ -381,19 +492,20 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        private void ThrowIfDisposed()
+        public void Dispose()
         {
-            if (_disposed)
-            {
-                throw new ObjectDisposedException(nameof(DatabaseService));
-            }
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
 
-        public void Dispose()
+        protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
             {
-                _connection?.Dispose();
+                if (disposing)
+                {
+                    _connection?.Dispose();
+                }
                 _disposed = true;
             }
         }

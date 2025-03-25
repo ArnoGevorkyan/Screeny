@@ -133,6 +133,8 @@ namespace ScreenTimeTracker.Models
         public string WindowTitle { get; set; } = string.Empty;
         public IntPtr WindowHandle { get; set; }
         public bool IsFocused { get; set; }
+        public string ApplicationName { get; set; } = string.Empty;
+        public DateTime Date { get; set; }
         
         private BitmapImage? _appIcon;
         public BitmapImage? AppIcon
