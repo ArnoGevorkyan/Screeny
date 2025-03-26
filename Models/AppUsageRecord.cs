@@ -1156,9 +1156,23 @@ namespace ScreenTimeTracker.Models
                 try
                 {
                     var processes = System.Diagnostics.Process.GetProcessesByName(processNameToUse);
-                    if (processes.Length > 0 && processes[0].MainModule != null && !string.IsNullOrEmpty(processes[0].MainModule.FileName))
+                    foreach (var process in processes)
                     {
-                        return processes[0].MainModule.FileName;
+                        try
+                        {
+                            if (process != null && process.MainModule != null)
+                            {
+                                string fileName = process.MainModule.FileName;
+                                if (!string.IsNullOrEmpty(fileName))
+                                {
+                                    return fileName;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error accessing process module: {ex.Message}");
+                        }
                     }
                 }
                 catch (Exception ex)
