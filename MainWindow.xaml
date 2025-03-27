@@ -54,9 +54,9 @@
                     Margin="0,0,0,10">
             <TextBlock Text="Select Date:" 
                       VerticalAlignment="Center"/>
-            <CalendarDatePicker x:Name="DatePicker"
-                               PlaceholderText="Pick a date"
-                               DateChanged="DatePicker_DateChanged"/>
+            <Button x:Name="DatePickerButton"
+                   Content="Today"
+                   Click="DatePickerButton_Click"/>
                                
             <!-- Time Period Selector -->
             <TextBlock Text="View:" VerticalAlignment="Center" Margin="20,0,0,0"/>
