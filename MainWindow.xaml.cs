@@ -150,7 +150,7 @@ namespace ScreenTimeTracker
 
         // Add a counter for timer ticks to control periodic chart refreshes
         private int _timerTickCounter = 0;
-        
+
         private void UpdateTimer_Tick(object? sender, object e)
         {
             try
@@ -172,8 +172,8 @@ namespace ScreenTimeTracker
                     // Update the duration
                     focusedRecord.UpdateDuration();
                     
-                    // Check if duration changed meaningfully (by at least 1 second)
-                    if ((focusedRecord.Duration - prevDuration).TotalSeconds >= 1)
+                    // Check if duration changed meaningfully (by at least 0.1 second)
+                    if ((focusedRecord.Duration - prevDuration).TotalSeconds >= 0.1)
                     {
                         didUpdate = true;
                     }
@@ -181,12 +181,12 @@ namespace ScreenTimeTracker
                 
                 // Always update the UI on regular intervals to ensure chart is refreshed,
                 // even if no focused app duration changed
-                if (didUpdate || _timerTickCounter >= 10) // Force update every ~10 seconds
+                if (didUpdate || _timerTickCounter >= 5) // Force update every ~5 seconds
                 {
                     System.Diagnostics.Debug.WriteLine($"Updating UI (didUpdate={didUpdate}, tickCounter={_timerTickCounter})");
                     
                     // Reset counter if we're updating
-                    if (_timerTickCounter >= 10)
+                    if (_timerTickCounter >= 5)
                     {
                         _timerTickCounter = 0;
                     }
@@ -804,13 +804,13 @@ namespace ScreenTimeTracker
         private void StartTracking()
         {
             ThrowIfDisposed();
-
+            
             try
             {
                 System.Diagnostics.Debug.WriteLine("Starting tracking");
-                
+
                 // Start tracking the current window
-                _trackingService.StartTracking();
+            _trackingService.StartTracking();
                 System.Diagnostics.Debug.WriteLine($"Tracking started: IsTracking={_trackingService.IsTracking}");
                 
                 // Log current foreground window
@@ -822,11 +822,11 @@ namespace ScreenTimeTracker
                 {
                     System.Diagnostics.Debug.WriteLine("No current window detected yet");
                 }
-
-                // Update UI state
-                StartButton.IsEnabled = false;
-                StopButton.IsEnabled = true;
-
+            
+            // Update UI state
+            StartButton.IsEnabled = false;
+            StopButton.IsEnabled = true;
+            
                 // Start timer for duration updates
                 _updateTimer.Start();
                 System.Diagnostics.Debug.WriteLine("Update timer started");
@@ -1036,311 +1036,264 @@ namespace ScreenTimeTracker
         
         private void UpdateUsageChart()
         {
-            try
+            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart CALLED ===");
+
+            if (UsageChartLive == null)
             {
-                if (_databaseService == null || UsageChartLive == null)
-                {
-                    return;
-                }
+                System.Diagnostics.Debug.WriteLine("Chart is null, exiting");
+                return;
+            }
 
-                DateTime startDate;
-                DateTime endDate;
-
-                // Determine date range based on selected time period
-                switch (_currentTimePeriod)
-                {
-                    case TimePeriod.Weekly:
-                        // Start of week (Sunday)
-                        startDate = _selectedDate.AddDays(-(int)_selectedDate.DayOfWeek);
-                        endDate = startDate.AddDays(6);
-                        break;
-                    case TimePeriod.Monthly:
-                        // Start of month
-                        startDate = new DateTime(_selectedDate.Year, _selectedDate.Month, 1);
-                        endDate = startDate.AddMonths(1).AddDays(-1);
-                        break;
-                    case TimePeriod.Daily:
-                    default:
-                        startDate = _selectedDate.Date;
-                        endDate = startDate;
-                        break;
-                }
-
-                // Get usage data from database
-                System.Diagnostics.Debug.WriteLine($"Fetching chart data for date range: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
-                var usageData = _databaseService.GetUsageReportForDateRange(startDate, endDate);
+            // Calculate total time for the chart title
+            TimeSpan totalTime = TimeSpan.Zero;
+            foreach (var record in _usageRecords)
+            {
+                totalTime += record.Duration;
+            }
+            ChartTimeValue.Text = FormatTimeSpan(totalTime);
+            System.Diagnostics.Debug.WriteLine($"Total time for chart: {totalTime}");
+            
+            if (_currentChartViewMode == ChartViewMode.Hourly)
+            {
+                System.Diagnostics.Debug.WriteLine("Building HOURLY chart");
                 
-                // Log what we got back
-                if (usageData == null)
+                // Create a dictionary to store hourly usage
+                var hourlyUsage = new Dictionary<int, double>();
+                
+                // Initialize all hours to 0
+                for (int i = 0; i < 24; i++)
                 {
-                    System.Diagnostics.Debug.WriteLine("GetUsageReportForDateRange returned NULL");
+                    hourlyUsage[i] = 0;
                 }
-                else 
+
+                // Process all usage records to distribute time by hour
+                System.Diagnostics.Debug.WriteLine($"Processing {_usageRecords.Count} records for hourly chart");
+                foreach (var record in _usageRecords)
                 {
-                    System.Diagnostics.Debug.WriteLine($"GetUsageReportForDateRange returned {usageData.Count} records");
+                    // Get the hour from the start time
+                    int startHour = record.StartTime.Hour;
                     
-                    // Log the first few records
-                    int count = 0;
-                    foreach (var (processName, duration) in usageData)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"  Record: {processName} = {duration.TotalHours:F2} hours");
-                        if (++count >= 5) break; // Only log up to 5 records
-                    }
-                }
-                
-                if (usageData == null || !usageData.Any())
-                {
-                    System.Diagnostics.Debug.WriteLine("No data to show in chart, clearing chart");
-                    UsageChartLive.Series = new ISeries[] { };
-                    ChartTimeValue.Text = "0h 0m 0s";
-                    return;
+                    // Add the duration to the appropriate hour (convert to hours)
+                    hourlyUsage[startHour] += record.Duration.TotalHours;
+                    
+                    System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, Hour: {startHour}, Duration: {record.Duration.TotalHours:F4} hours");
                 }
 
-                // Calculate total time once for chart title
-                TimeSpan totalTime = TimeSpan.Zero;
-                foreach (var (_, duration) in usageData)
+                // Check if all values are zero
+                bool allZero = true;
+                double maxValue = 0;
+                foreach (var value in hourlyUsage.Values)
                 {
-                    totalTime += duration;
+                    if (value > 0.0001)
+                    {
+                        allZero = false;
+                    }
+                    maxValue = Math.Max(maxValue, value);
                 }
                 
-                // Group the data differently based on chart view mode
-                if (_currentChartViewMode == ChartViewMode.Hourly)
+                System.Diagnostics.Debug.WriteLine($"All values zero? {allZero}, Max value: {maxValue:F4}");
+                
+                // If all values are zero, add a tiny value to the current hour to make the chart visible
+                if (allZero || maxValue < 0.001)
                 {
-                    // Create the series collection for the chart
-                    var seriesCollection = new List<ISeries>();
+                    int currentHour = DateTime.Now.Hour;
+                    hourlyUsage[currentHour] = 0.001; // Add a tiny value
+                    System.Diagnostics.Debug.WriteLine($"Added tiny value to hour {currentHour}");
+                }
 
-                    // For hourly view, we need to aggregate the data by hour
-                    var values = new List<double>();
-                    var labels = new List<string>();
-                    
-                    System.Diagnostics.Debug.WriteLine($"Building hourly chart with {_usageRecords.Count} usage records");
-                    
-                    // If we're looking at today's data, include the latest real-time data from the tracking service
-                    Dictionary<int, double> hourlyUsage = new Dictionary<int, double>();
-                    
-                    // Initialize all hours with zero usage
-                    for (int hour = 0; hour < 24; hour++)
+                // Set up series and labels for the chart
+                var values = new List<double>();
+                var labels = new List<string>();
+                
+                // Add values and labels for each hour
+                for (int i = 0; i < 24; i++)
+                {
+                    values.Add(hourlyUsage[i]);
+                    labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
+                    System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[i]}");
+                }
+
+                // Determine a good Y-axis maximum based on the actual data
+                double yAxisMax = maxValue;
+                if (yAxisMax < 0.005) yAxisMax = 0.01;  // Very small values
+                else if (yAxisMax < 0.05) yAxisMax = 0.1;  // Small values
+                else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
+                else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
+                
+                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
+
+                // Create the line series
+                var lineSeries = new LineSeries<double>
+                {
+                    Values = values,
+                    Fill = null,
+                    GeometrySize = 0,
+                    Stroke = new SolidColorPaint(SKColors.MediumSeaGreen, 2),
+                    Name = "Usage"
+                };
+
+                // Set up the axes
+                UsageChartLive.XAxes = new Axis[]
+                {
+                    new Axis
                     {
-                        hourlyUsage[hour] = 0;
-                    }
-                    
-                    // Add database data
-                    int recordsProcessed = 0;
-                    foreach (var record in _usageRecords)
-                    {
-                        if (record.Duration.TotalSeconds < 1) continue;
-                        
-                        // For simplicity, assign all duration to the hour of the start time
-                        int hour = record.StartTime.Hour;
-                        hourlyUsage[hour] += record.Duration.TotalHours;
-                        recordsProcessed++;
-                        
-                        System.Diagnostics.Debug.WriteLine($"  Added record: {record.ProcessName} at hour {hour}, duration {record.Duration.TotalHours:F2}h");
-                    }
-                    
-                    System.Diagnostics.Debug.WriteLine($"Processed {recordsProcessed} records for hourly chart");
-                    
-                    // Log hourly totals
-                    System.Diagnostics.Debug.WriteLine("Hourly usage totals:");
-                    for (int hour = 0; hour < 24; hour++)
-                    {
-                        if (hourlyUsage[hour] > 0)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"  Hour {hour}: {hourlyUsage[hour]:F2}h");
-                        }
-                    }
-                    
-                    // Build chart data for today
-                    for (int hour = 0; hour < 24; hour++)
-                    {
-                        DateTime hourTime = startDate.Date.AddHours(hour);
-                        
-                        // Only show past hours up through the current hour
-                        if (startDate.Date == DateTime.Today && hour > DateTime.Now.Hour)
-                            break;
-                            
-                        // For past days, show all hours
-                        values.Add(hourlyUsage[hour]);
-                        
-                        // Format hour label with AM/PM
-                        string hourLabel = hourTime.ToString("h tt");
-                        labels.Add(hourLabel);
-                    }
-                    
-                    // Create the line series
-                    var lineSeries = new LineSeries<double>
-                    {
-                        Values = values,
-                        Fill = null,
-                        GeometrySize = 10,
-                        Stroke = new SolidColorPaint(SKColors.MediumSeaGreen, 3),
-                        GeometryStroke = new SolidColorPaint(SKColors.MediumSeaGreen, 3),
-                        GeometryFill = new SolidColorPaint(SKColors.White),
-                        Name = "Total"
-                    };
-                    
-                    // Add the series to the collection
-                    seriesCollection.Add(lineSeries);
-                    
-                    // Create the area series that fills the area below the line
-                    var areaSeries = new LineSeries<double>
-                    {
-                        Values = values,
-                        Fill = new SolidColorPaint(SKColor.Parse("#6690EE90")),
-                        Stroke = null,
-                        GeometrySize = 0,
-                        Name = "Total Area",
-                        IsVisibleAtLegend = false
-                    };
-                    
-                    // Add the area series to the collection
-                    seriesCollection.Add(areaSeries);
-                    
-                    // Configure the X axis
-                    var xAxis = new Axis
-                    {
-                        Labels = labels.ToArray(),
-                        TextSize = 12,
-                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#33000000")),
-                        TicksPaint = new SolidColorPaint(SKColor.Parse("#66000000")),
-                        LabelsPaint = new SolidColorPaint(SKColor.Parse("#99000000"))
-                    };
-                    
-                    // Calculate reasonable Y-axis maximum
-                    double maxValue = values.Count > 0 ? values.Max() : 1.0;
-                    maxValue = Math.Max(maxValue, 0.25); // At least 15 minutes
-                    maxValue = Math.Ceiling(maxValue * 4) / 4; // Round to next 0.25 hour
-                    
-                    // Configure the Y axis
-                    var yAxis = new Axis
-                    {
-                        TextSize = 12,
-                        LabelsPaint = new SolidColorPaint(SKColor.Parse("#99000000")),
-                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#33000000")),
-                        TicksPaint = new SolidColorPaint(SKColor.Parse("#66000000")),
-                        MinLimit = 0,
-                        MaxLimit = maxValue,
+                        Labels = labels,
+                        LabelsRotation = 0,
                         ForceStepToMin = true,
-                        MinStep = 0.25,
-                        NameTextSize = 12,
-                        Name = "Hours",
-                        NamePaint = new SolidColorPaint(SKColor.Parse("#99000000")),
-                        Labeler = value => FormatHoursForYAxis(value)
-                    };
-                    
-                    // Update the chart
-                    UsageChartLive.Series = seriesCollection;
-                    UsageChartLive.XAxes = new Axis[] { xAxis };
-                    UsageChartLive.YAxes = new Axis[] { yAxis };
-                    UsageChartLive.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
-                    UsageChartLive.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
-                    UsageChartLive.Title = null;
-                }
-                else // Daily view mode
+                        MinStep = 1
+                    }
+                };
+
+                UsageChartLive.YAxes = new Axis[]
                 {
-                    // Create daily chart (bar chart showing daily totals)
-                    var seriesCollection = new List<ISeries>();
-                    var values = new List<double>();
-                    var labels = new List<string>();
-                    
-                    // Get daily totals
-                    var daysToShow = _currentTimePeriod == TimePeriod.Daily ? 1 :
-                                    _currentTimePeriod == TimePeriod.Weekly ? 7 : DateTime.DaysInMonth(_selectedDate.Year, _selectedDate.Month);
-                                    
-                    for (int i = 0; i < daysToShow; i++)
+                    new Axis
                     {
-                        var date = _currentTimePeriod == TimePeriod.Daily ? startDate :
-                                  _currentTimePeriod == TimePeriod.Weekly ? startDate.AddDays(i) :
-                                  new DateTime(_selectedDate.Year, _selectedDate.Month, i + 1);
-                                  
-                        // Get usage for this specific date
-                        var dateUsage = _databaseService.GetUsageReportForDateRange(date.Date, date.Date);
-                        
-                        double totalHours = 0;
-                        if (dateUsage != null && dateUsage.Any())
+                        Name = "Hours",
+                        NamePaint = new SolidColorPaint(SKColors.Gray),
+                        NameTextSize = 12,
+                        LabelsPaint = new SolidColorPaint(SKColors.Gray),
+                        TextSize = 10,
+                        MinLimit = 0,
+                        MaxLimit = yAxisMax,
+                        ForceStepToMin = true,
+                        MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
+                        Labeler = FormatHoursForYAxis
+                    }
+                };
+
+                // Update the chart with new series
+                UsageChartLive.Series = new ISeries[] { lineSeries };
+                
+                System.Diagnostics.Debug.WriteLine("Hourly chart updated with values");
+            }
+            else // Daily view
+            {
+                System.Diagnostics.Debug.WriteLine("Building DAILY chart");
+                
+                int daysToShow = 7;
+                if (_currentTimePeriod == TimePeriod.Daily)
+                    daysToShow = 1;
+                else if (_currentTimePeriod == TimePeriod.Weekly)
+                    daysToShow = 7;
+                else if (_currentTimePeriod == TimePeriod.Monthly)
+                    daysToShow = 30;
+                
+                System.Diagnostics.Debug.WriteLine($"Days to show for daily chart: {daysToShow}");
+
+                var values = new List<double>();
+                var labels = new List<string>();
+                
+                DateTime currentDate = DateTime.Now.Date;
+                DateTime startDate = _selectedDate.Date.AddDays(-(daysToShow - 1));
+
+                for (int i = 0; i < daysToShow; i++)
+                {
+                    DateTime date = startDate.AddDays(i);
+                    double totalHours = 0;
+                    
+                    // For today's date, sum up records from _usageRecords
+                    if (date.Date == DateTime.Now.Date)
+                    {
+                        foreach (var record in _usageRecords)
                         {
-                            totalHours = dateUsage.Sum(u => u.TotalDuration.TotalHours);
+                            totalHours += record.Duration.TotalHours;
                         }
-                        
-                        // For today, add any current tracking data not yet in database
-                        if (date.Date == DateTime.Today && _trackingService.IsTracking)
+                    }
+                    else
+                    {
+                        // For other dates, get data from database
+                        if (_databaseService != null)
                         {
-                            var liveRecords = _trackingService.GetRecords()
-                                .Where(r => r.IsFromDate(date) && !IsWindowsSystemProcess(r.ProcessName))
-                                .ToList();
-                                
-                            foreach (var record in liveRecords)
+                            var records = _databaseService.GetAggregatedRecordsForDate(date);
+                            foreach (var record in records)
                             {
-                                // Check if record duration is already counted in database results
-                                if (record.Id <= 0) // Not yet saved to database
-                                {
-                                    totalHours += record.Duration.TotalHours;
-                                }
+                                totalHours += record.Duration.TotalHours;
                             }
                         }
-                        
-                        values.Add(totalHours);
-                        labels.Add(date.ToString("MMM dd"));
                     }
                     
-                    // Create column series for daily data
-                    var columnSeries = new ColumnSeries<double>
-                    {
-                        Values = values,
-                        Fill = new SolidColorPaint(SKColors.MediumSeaGreen),
-                        Name = "Daily Total"
-                    };
-                    
-                    seriesCollection.Add(columnSeries);
-                    
-                    // Configure the X axis
-                    var xAxis = new Axis
-                    {
-                        Labels = labels.ToArray(),
-                        TextSize = 12,
-                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#33000000")),
-                        TicksPaint = new SolidColorPaint(SKColor.Parse("#66000000")),
-                        LabelsPaint = new SolidColorPaint(SKColor.Parse("#99000000"))
-                    };
-                    
-                    // Calculate reasonable Y-axis maximum
-                    double maxValue = values.Count > 0 ? values.Max() : 1.0;
-                    maxValue = Math.Max(maxValue, 1.0); // At least 1 hour
-                    maxValue = Math.Ceiling(maxValue); // Round to next whole hour
-                    
-                    // Configure the Y axis
-                    var yAxis = new Axis
-                    {
-                        TextSize = 12,
-                        LabelsPaint = new SolidColorPaint(SKColor.Parse("#99000000")),
-                        SeparatorsPaint = new SolidColorPaint(SKColor.Parse("#33000000")),
-                        TicksPaint = new SolidColorPaint(SKColor.Parse("#66000000")),
-                        MinLimit = 0,
-                        MaxLimit = maxValue,
-                        ForceStepToMin = true,
-                        MinStep = 1,
-                        NameTextSize = 12,
-                        Name = "Hours per Day",
-                        NamePaint = new SolidColorPaint(SKColor.Parse("#99000000")),
-                        Labeler = value => FormatHoursForYAxis(value)
-                    };
-                    
-                    // Update the chart
-                    UsageChartLive.Series = seriesCollection;
-                    UsageChartLive.XAxes = new Axis[] { xAxis };
-                    UsageChartLive.YAxes = new Axis[] { yAxis };
-                    UsageChartLive.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
-                    UsageChartLive.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
-                    UsageChartLive.Title = null;
+                    values.Add(totalHours);
+                    labels.Add(date.ToString("MM/dd"));
+                    System.Diagnostics.Debug.WriteLine($"Date {date:MM/dd}: {totalHours:F4} hours");
                 }
+                
+                // Check if all values are zero
+                bool allZero = true;
+                double maxValue = 0;
+                foreach (var value in values)
+                {
+                    if (value > 0.0001)
+                    {
+                        allZero = false;
+                    }
+                    maxValue = Math.Max(maxValue, value);
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"All values zero? {allZero}, Max value: {maxValue:F4}");
+                
+                // If all values are zero, add a tiny value to the current day to make the chart visible
+                if (allZero || maxValue < 0.001)
+                {
+                    int lastIndex = values.Count - 1;
+                    values[lastIndex] = 0.001; // Add a tiny value
+                    System.Diagnostics.Debug.WriteLine("Added tiny value to current day");
+                }
+                
+                // Determine a good Y-axis maximum based on the actual data
+                double yAxisMax = maxValue;
+                if (yAxisMax < 0.005) yAxisMax = 0.01;  // Very small values
+                else if (yAxisMax < 0.05) yAxisMax = 0.1;  // Small values
+                else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
+                else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
+                
+                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
-                // Update total time display in the chart title
-                ChartTimeValue.Text = FormatTimeSpan(totalTime);
+                // Create the column series
+                var columnSeries = new ColumnSeries<double>
+                {
+                    Values = values,
+                    Fill = new SolidColorPaint(SKColors.MediumSeaGreen),
+                    Stroke = null,
+                    Name = "Usage"
+                };
+
+                // Set up the axes
+                UsageChartLive.XAxes = new Axis[]
+                {
+                    new Axis
+                    {
+                        Labels = labels,
+                        LabelsRotation = 0,
+                        ForceStepToMin = true,
+                        MinStep = 1
+                    }
+                };
+
+                UsageChartLive.YAxes = new Axis[]
+                {
+                    new Axis
+                    {
+                        Name = "Hours",
+                        NamePaint = new SolidColorPaint(SKColors.Gray),
+                        NameTextSize = 12,
+                        LabelsPaint = new SolidColorPaint(SKColors.Gray),
+                        TextSize = 10,
+                        MinLimit = 0,
+                        MaxLimit = yAxisMax,
+                        ForceStepToMin = true,
+                        MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
+                        Labeler = FormatHoursForYAxis
+                    }
+                };
+
+                // Update the chart with new series
+                UsageChartLive.Series = new ISeries[] { columnSeries };
+                
+                System.Diagnostics.Debug.WriteLine("Daily chart updated with values");
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error updating chart: {ex.Message}");
-            }
+            
+            System.Diagnostics.Debug.WriteLine($"Chart updated with {UsageChartLive.Series?.Count() ?? 0} series");
+            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart COMPLETED ===");
         }
 
         // Helper methods for chart formatting
@@ -1364,16 +1317,24 @@ namespace ScreenTimeTracker
         {
             var time = TimeSpan.FromHours(value);
             
-            if (time.TotalHours < 1)
+            if (time.TotalMinutes < 1)
             {
-                return $"{time.Minutes}m";
+                // Show seconds for very small values
+                return $"{time.TotalSeconds:F0}s";
+            }
+            else if (time.TotalHours < 1)
+            {
+                // Show only minutes for less than an hour
+                return $"{time.TotalMinutes:F0}m";
             }
             else if (time.TotalHours < 10)
             {
+                // Show hours and minutes for moderate times
                 return $"{Math.Floor(time.TotalHours)}h {time.Minutes}m";
             }
             else
             {
+                // Show only hours for large values
                 return $"{Math.Floor(time.TotalHours)}h";
             }
         }
@@ -2055,3 +2016,4 @@ namespace ScreenTimeTracker
         }
     }
 }
+
