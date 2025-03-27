@@ -41,7 +41,7 @@
                    Height="16"
                    Margin="8,0,8,0"/>
             
-            <TextBlock Text="Screen Time Tracker" 
+            <TextBlock Text="Screeny" 
                      Grid.Column="1"
                      VerticalAlignment="Center"
                      Style="{ThemeResource CaptionTextBlockStyle}"/>
@@ -188,7 +188,7 @@
                       BorderThickness="0,0,0,1"
                       Padding="20,12">
                     <TextBlock x:Name="SummaryTitle" 
-                              Text="Screen Time Summary" 
+                              Text="Screeny Summary" 
                               Style="{ThemeResource BodyStrongTextBlockStyle}"
                               VerticalAlignment="Center"/>
                 </Grid>
@@ -298,24 +298,24 @@
                       BorderThickness="1"
                       CornerRadius="8"
                       ContainerContentChanging="UsageListView_ContainerContentChanging">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="models:AppUsageRecord">
-                        <Grid Margin="12,6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="24"/>
-                                <ColumnDefinition Width="12"/>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:AppUsageRecord">
+                    <Grid Margin="12,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="24"/>
+                            <ColumnDefinition Width="12"/>
                                 <ColumnDefinition Width="180"/>
                                 <ColumnDefinition Width="100"/>
                                 <ColumnDefinition Width="100"/>
                                 <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            
-                            <!-- Icon with loading state -->
-                            <Grid Grid.Column="0" Width="24" Height="24">
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Icon with loading state -->
+                        <Grid Grid.Column="0" Width="24" Height="24">
                                 <FontIcon x:Name="PlaceholderIcon"
                                          Glyph="&#xECAA;"
-                                         FontSize="16"
-                                         HorizontalAlignment="Center"
+                                     FontSize="16"
+                                     HorizontalAlignment="Center"
                                          VerticalAlignment="Center"
                                          Visibility="Visible"/>
                                 <Image x:Name="AppIconImage"
@@ -328,25 +328,25 @@
                             <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"/>
                             <TextBlock Text="{x:Bind FormattedDuration, Mode=OneWay}" Grid.Column="3" HorizontalAlignment="Left"/>
                             <TextBlock Text="{x:Bind FormattedStartTime}" Grid.Column="4" HorizontalAlignment="Left"/>
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-                <ListView.Header>
-                    <Grid Margin="12,12,12,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="24"/>
-                            <ColumnDefinition Width="12"/>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+            <ListView.Header>
+                <Grid Margin="12,12,12,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24"/>
+                        <ColumnDefinition Width="12"/>
                             <ColumnDefinition Width="180"/>
                             <ColumnDefinition Width="100"/>
                             <ColumnDefinition Width="100"/>
                             <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
+                    </Grid.ColumnDefinitions>
                         <TextBlock Text="Application" Grid.Column="2" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
                         <TextBlock Text="Duration" Grid.Column="3" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
                         <TextBlock Text="Start Time" Grid.Column="4" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
-                    </Grid>
-                </ListView.Header>
-            </ListView>
+                </Grid>
+            </ListView.Header>
+        </ListView>
         </Grid>
     </Grid>
 </Window>

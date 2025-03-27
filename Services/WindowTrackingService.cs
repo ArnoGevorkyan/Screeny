@@ -97,7 +97,7 @@ namespace ScreenTimeTracker.Services
             System.Diagnostics.Debug.WriteLine($"CheckActiveWindow - Detected window: {processName} ({processId}) - '{windowTitle}'");
 
             // Ignore windows whose title contains our app's name.
-            if (windowTitle.IndexOf("Screen Time Tracker", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (windowTitle.IndexOf("Screeny", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Ignoring our own window based on title");
                 return;

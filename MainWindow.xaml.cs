@@ -1990,7 +1990,7 @@ namespace ScreenTimeTracker
                 
                 if (_appWindow != null)
                 {
-                    _appWindow.Title = "Screen Time Tracker";
+                    _appWindow.Title = "Screeny";
                     _appWindow.TitleBar.ExtendsContentIntoTitleBar = true;
                     _appWindow.TitleBar.ButtonBackgroundColor = MicrosoftUI.Colors.Transparent;
                     _appWindow.TitleBar.ButtonInactiveBackgroundColor = MicrosoftUI.Colors.Transparent;
