@@ -51,8 +51,7 @@ namespace ScreenTimeTracker
         public enum TimePeriod
         {
             Daily,
-            Weekly,
-            Monthly
+            Weekly
         }
 
         public enum ChartViewMode
@@ -858,147 +857,82 @@ namespace ScreenTimeTracker
 
         private void LoadRecordsForDate(DateTime date)
         {
+            System.Diagnostics.Debug.WriteLine($"Loading records for date: {date}");
+            
+            _selectedDate = date;
+            List<AppUsageRecord> records = new List<AppUsageRecord>();
+            
             try
             {
-                // Store the selected date
-                _selectedDate = date;
-                
-                // Update the date display
-                if (DateDisplay != null)
-                {
-                    DateDisplay.Text = date.ToString("MMM dd, yyyy");
-                }
-                
                 // Clear existing records
                 _usageRecords.Clear();
-
-                // Load records from database if available
-                if (_databaseService != null)
+                
+                // Update date display with selected date
+                if (DateDisplay != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Loading records for date: {date.ToShortDateString()} with period: {_currentTimePeriod}");
-                    
-                    // For weekly and monthly views, we need to get records for a range of dates
-                    List<AppUsageRecord> records;
-                    
-                    switch (_currentTimePeriod)
-                    {
-                        case TimePeriod.Weekly:
-                            // Get records for the week containing the selected date
-                            var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
-                            var endOfWeek = startOfWeek.AddDays(6);
-                            records = GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
-                            
-                            // Update chart title - not needed with new design
-                            SummaryTitle.Text = "Screen Time Summary";
-                            
-                            // Show daily average
-                            AveragePanel.Visibility = Visibility.Visible;
-                            break;
-                            
-                        case TimePeriod.Monthly:
-                            // Get records for the month containing the selected date
-                            var startOfMonth = new DateTime(date.Year, date.Month, 1);
-                            var endOfMonth = startOfMonth.AddMonths(1).AddDays(-1);
-                            records = GetAggregatedRecordsForDateRange(startOfMonth, endOfMonth);
-                            
-                            // Update chart title - not needed with new design
-                            SummaryTitle.Text = "Screen Time Summary";
-                            
-                            // Show daily average
-                            AveragePanel.Visibility = Visibility.Visible;
-                            break;
-                            
-                        case TimePeriod.Daily:
-                        default:
-                            // Default to daily view - include aggregate data and active tracking data
-                            records = new List<AppUsageRecord>();
-                            
-                            // First, get saved records for today's date
-                            var savedRecords = _databaseService.GetAggregatedRecordsForDate(date);
-                            records.AddRange(savedRecords);
-                            
-                            // If viewing today's data and tracking is active, include live records
-                            if (date.Date == DateTime.Today && _trackingService.IsTracking)
-                            {
-                                // Get live tracking records that aren't in the database yet
-                                var liveRecords = _trackingService.GetRecords()
-                                    .Where(r => r.IsFromDate(date) && !IsWindowsSystemProcess(r.ProcessName))
-                                    .ToList();
-                                
-                                System.Diagnostics.Debug.WriteLine($"Adding {liveRecords.Count} live tracking records");
-                                
-                                // Merge with existing records where possible
-                                foreach (var liveRecord in liveRecords)
-                                {
-                                    var existingRecord = records
-                                        .FirstOrDefault(r => r.ProcessName.Equals(liveRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
-                                    
-                                    if (existingRecord != null)
-                                    {
-                                        // Merge duration into existing record
-                                        existingRecord.MergeWith(liveRecord);
-                                    }
-                                    else
-                                    {
-                                        // Add as new record if it has meaningful duration
-                                        if (liveRecord.Duration.TotalSeconds > 1)
-                                        {
-                                            records.Add(liveRecord);
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            // Update chart title - not needed with new design
-                            SummaryTitle.Text = "Screen Time Summary";
-                            
-                            // Hide daily average for daily view
-                            AveragePanel.Visibility = Visibility.Collapsed;
-                            break;
-                    }
-
-                    // Add records to the observable collection - filter out system processes
-                    foreach (var record in records.Where(r => !IsWindowsSystemProcess(r.ProcessName)))
-                    {
-                        _usageRecords.Add(record);
-                        // Load app icons for each record
-                        record.LoadAppIconIfNeeded();
-                    }
-
-                    // Sort records by duration for better display
-                    var sortedRecords = _usageRecords.OrderByDescending(r => r.Duration).ToList();
-                    _usageRecords.Clear();
-                    foreach (var record in sortedRecords)
-                    {
-                        _usageRecords.Add(record);
-                    }
-
-                    System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records, displayed {_usageRecords.Count} after filtering");
-                    
-                    // Update the chart
-                    UpdateUsageChart();
-                    
-                    // Update the summary
-                    UpdateSummaryTab();
-                    
-                    // Force a chart refresh to ensure it always renders
-                    ForceChartRefresh();
+                    DateDisplay.Text = date.ToString("MMMM d, yyyy");
                 }
+                
+                // Load records from the database based on current time period
+                switch (_currentTimePeriod)
+                {
+                    case TimePeriod.Weekly:
+                        // Get records for the week containing the selected date
+                        var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
+                        var endOfWeek = startOfWeek.AddDays(6);
+                        records = GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
+                        
+                        // Update chart title
+                        SummaryTitle.Text = "Weekly Screen Time Summary";
+                        
+                        // Show daily average for weekly view
+                        AveragePanel.Visibility = Visibility.Visible;
+                        break;
+                        
+                    case TimePeriod.Daily:
+                    default:
+                        // Get records for the selected date
+                        if (_databaseService != null)
+                        {
+                            records = _databaseService.GetRecordsForDate(date);
+                        }
+                        else
+                        {
+                            // Fallback to tracking service records if database is not available
+                            records = _trackingService.GetRecords()
+                                .Where(r => r.IsFromDate(date))
+                                .ToList();
+                        }
+                        
+                        // Update chart title
+                        SummaryTitle.Text = "Daily Screen Time Summary";
+                        
+                        // Hide daily average for daily view
+                        AveragePanel.Visibility = Visibility.Collapsed;
+                        break;
+                }
+                
+                // Sort records by duration (descending)
+                var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
+                
+                // Add sorted records to the observable collection
+                foreach (var record in sortedRecords)
+                {
+                    _usageRecords.Add(record);
+                }
+                
+                // Update the summary tab
+                UpdateSummaryTab();
+                
+                // Update chart based on current view mode
+                UpdateChartViewMode();
+                
+                System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
-
-                // Show error dialog
-                var dialog = new ContentDialog
-                {
-                    Title = "Error",
-                    Content = $"Failed to load records: {ex.Message}",
-                    CloseButtonText = "OK"
-                };
-
-                dialog.XamlRoot = this.Content.XamlRoot;
-                _ = dialog.ShowAsync();
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
             }
         }
         
@@ -1238,7 +1172,7 @@ namespace ScreenTimeTracker
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
-                        MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
+                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
                         Labeler = FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
@@ -1258,8 +1192,6 @@ namespace ScreenTimeTracker
                     daysToShow = 1;
                 else if (_currentTimePeriod == TimePeriod.Weekly)
                     daysToShow = 7;
-                else if (_currentTimePeriod == TimePeriod.Monthly)
-                    daysToShow = 30;
                 
                 System.Diagnostics.Debug.WriteLine($"Days to show for daily chart: {daysToShow}");
 
@@ -1392,7 +1324,7 @@ namespace ScreenTimeTracker
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
-                        MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
+                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
                         Labeler = FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
@@ -1443,14 +1375,9 @@ namespace ScreenTimeTracker
                 // Show only minutes for less than an hour
                 return $"{time.TotalMinutes:F0}m";
             }
-            else if (time.TotalHours < 10)
-            {
-                // Show hours and minutes for moderate times
-                return $"{Math.Floor(time.TotalHours)}h {time.Minutes}m";
-            }
             else
             {
-                // Show only hours for large values
+                // Just show hour value without minutes for cleaner display
                 return $"{Math.Floor(time.TotalHours)}h";
             }
         }
@@ -1464,8 +1391,28 @@ namespace ScreenTimeTracker
                 _currentTimePeriod = (TimePeriod)TimePeriodSelector.SelectedIndex;
                 
                 // Keep the same selected date when switching views
-                // If switching to/from weekly or monthly, ensure we stay on the same date
                 DateTime dateToLoad = _selectedDate;
+                
+                // Adjust chart view mode automatically based on time period
+                if (_currentTimePeriod == TimePeriod.Daily)
+                {
+                    // For Daily view, only show hourly chart
+                    _currentChartViewMode = ChartViewMode.Hourly;
+                }
+                else // Weekly
+                {
+                    // For Weekly view, only show daily chart
+                    _currentChartViewMode = ChartViewMode.Daily;
+                }
+                
+                // Update UI safely using DispatcherQueue
+                DispatcherQueue.TryEnqueue(() => {
+                    // Update the view mode label
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = _currentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
+                    }
+                });
                 
                 // Always reload data when the time period changes
                 LoadRecordsForDate(dateToLoad);
@@ -1866,55 +1813,66 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded called");
                 
-                // Initialize UI
+                // Initialize UI elements
                 SetUpUiElements();
-
-                // Set the initial date display text
+                
+                // Set the selected date display
                 if (DateDisplay != null)
                 {
-                    DateDisplay.Text = _selectedDate.ToString("MMM dd, yyyy");
+                    DateDisplay.Text = DateTime.Now.ToString("MMMM d, yyyy");
                 }
-
-                // Load initial records
+                
+                // Load today's records
+                _selectedDate = DateTime.Today;
                 LoadRecordsForDate(_selectedDate);
-
-                // TabView is removed - no need to set active tab
-                System.Diagnostics.Debug.WriteLine("TabView removed - using single-page layout");
-
-                // Ensure UsageListView is bound to _usageRecords
+                
+                // Set up the UsageListView
                 if (UsageListView != null && UsageListView.ItemsSource == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("Setting UsageListView.ItemsSource to _usageRecords");
                     UsageListView.ItemsSource = _usageRecords;
                 }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"UsageListView status: {(UsageListView == null ? "null" : "not null")}, ItemsSource: {(UsageListView?.ItemsSource == null ? "null" : "not null")}");
-                }
-
-                // Check if this is first run
+                
+                // Check if this is the first run
                 CheckFirstRun();
-
-                // Make sure we start with a clean state (no system processes)
+                
+                // Clean up system processes that shouldn't be tracked
                 CleanupSystemProcesses();
+                
+                // Set the initial chart view mode based on the current time period
+                if (_currentTimePeriod == TimePeriod.Daily)
+                {
+                    _currentChartViewMode = ChartViewMode.Hourly;
+                    
+                    // Update view mode label
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Hourly View";
+                        }
+                    });
+                }
+                else // Weekly
+                {
+                    _currentChartViewMode = ChartViewMode.Daily;
+                    
+                    // Update view mode label
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Daily View";
+                        }
+                    });
+                }
                 
                 // Start tracking automatically
                 StartTracking();
-                
-                // Set initial view mode
-                UpdateChartViewMode();
-                
-                // Set initial button styles
-                HourlyButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                DailyButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
                 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error during window load: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
-                // Continue with basic functionality even if UI initialization fails
+                System.Diagnostics.Debug.WriteLine($"Error in MainWindow_Loaded: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
             }
         }
 
@@ -2001,10 +1959,13 @@ namespace ScreenTimeTracker
                     {
                         try
                         {
-                            SendMessage(windowHandle, WM_SETICON, ICON_SMALL, LoadImage(IntPtr.Zero, iconPath,
-                                IMAGE_ICON, 0, 0, LR_LOADFROMFILE));
-                            SendMessage(windowHandle, WM_SETICON, ICON_BIG, LoadImage(IntPtr.Zero, iconPath,
-                                IMAGE_ICON, 0, 0, LR_LOADFROMFILE));
+                            // For ICON_SMALL (16x16), explicitly request a small size to improve scaling quality
+                            IntPtr smallIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+                            SendMessage(windowHandle, WM_SETICON, ICON_SMALL, smallIcon);
+                            
+                            // For ICON_BIG, let Windows decide the best size based on DPI settings
+                            IntPtr bigIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+                            SendMessage(windowHandle, WM_SETICON, ICON_BIG, bigIcon);
                         }
                         catch (Exception ex)
                         {
@@ -2051,10 +2012,6 @@ namespace ScreenTimeTracker
                     // A week has 7 days
                     return 7;
                 
-                case TimePeriod.Monthly:
-                    // Get days in the selected month
-                    return DateTime.DaysInMonth(date.Year, date.Month);
-                
                 case TimePeriod.Daily:
                 default:
                     // Daily view is just 1 day
@@ -2062,40 +2019,36 @@ namespace ScreenTimeTracker
             }
         }
 
-        private void HourlyButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentChartViewMode != ChartViewMode.Hourly)
-            {
-                _currentChartViewMode = ChartViewMode.Hourly;
-                UpdateChartViewMode();
-                UpdateUsageChart();
-                
-                // Update button styles
-                HourlyButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                DailyButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-            }
-        }
-
-        private void DailyButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentChartViewMode != ChartViewMode.Daily)
-            {
-                _currentChartViewMode = ChartViewMode.Daily;
-                UpdateChartViewMode();
-                UpdateUsageChart();
-                
-                // Update button styles
-                DailyButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                HourlyButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-            }
-        }
-        
         private void UpdateChartViewMode()
         {
-            // No need to update the chart title text since it's now split into label and value
-            // The actual value will be updated in UpdateUsageChart
+            // Adjust chart view mode automatically based on time period
+            if (_currentTimePeriod == TimePeriod.Daily)
+            {
+                _currentChartViewMode = ChartViewMode.Hourly;
                 
-            // Other chart settings can be updated here based on view mode
+                // Update view mode label
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Hourly View";
+                    }
+                });
+            }
+            else // Weekly
+            {
+                _currentChartViewMode = ChartViewMode.Daily;
+                
+                // Update view mode label
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Daily View";
+                    }
+                });
+            }
+            
+            // Update the chart
+            UpdateUsageChart();
         }
 
         // Add a method to force a chart refresh - useful for debugging and ensuring chart gets updated

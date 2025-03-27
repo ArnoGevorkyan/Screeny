@@ -36,7 +36,7 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             
-            <Image Source="Assets/app-icon.ico" 
+            <Image Source="Assets/app-icon.svg" 
                    Width="16" 
                    Height="16"
                    Margin="8,0,8,0"/>
@@ -66,7 +66,6 @@
                       Width="100">
                 <ComboBoxItem Content="Daily"/>
                 <ComboBoxItem Content="Weekly"/>
-                <ComboBoxItem Content="Monthly"/>
             </ComboBox>
         </StackPanel>
 
@@ -145,18 +144,10 @@
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="1"
                                 Padding="4">
-                        <Button x:Name="HourlyButton" 
-                                Content="Hourly" 
-                                Click="HourlyButton_Click"
-                                Padding="12,4"
-                                Style="{ThemeResource AccentButtonStyle}"
-                                CornerRadius="4"/>
-                        <Button x:Name="DailyButton" 
-                                Content="Daily" 
-                                Click="DailyButton_Click"
-                                Padding="12,4"
-                                Margin="4,0,0,0"
-                                CornerRadius="4"/>
+                        <TextBlock x:Name="ViewModeLabel" 
+                                  Text="Hourly View" 
+                                  Padding="12,4"
+                                  VerticalAlignment="Center"/>
                     </StackPanel>
                 </Grid>
                 
@@ -323,8 +314,8 @@
                                        Width="24"
                                        Height="24"
                                        Visibility="Collapsed"/>
-                            </Grid>
-                            
+                        </Grid>
+                        
                             <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"/>
                             <TextBlock Text="{x:Bind FormattedDuration, Mode=OneWay}" Grid.Column="3" HorizontalAlignment="Left"/>
                             <TextBlock Text="{x:Bind FormattedStartTime}" Grid.Column="4" HorizontalAlignment="Left"/>
