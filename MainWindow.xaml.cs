@@ -1053,6 +1053,36 @@ namespace ScreenTimeTracker
             ChartTimeValue.Text = FormatTimeSpan(totalTime);
             System.Diagnostics.Debug.WriteLine($"Total time for chart: {totalTime}");
             
+            // Get system accent color for chart series
+            SKColor seriesColor;
+            
+            // Try to get the system accent color
+            try
+            {
+                if (Application.Current.Resources.TryGetValue("SystemAccentColor", out object accentColorObj) && 
+                    accentColorObj is Windows.UI.Color accentColor)
+                {
+                    seriesColor = new SKColor(accentColor.R, accentColor.G, accentColor.B);
+                }
+                else
+                {
+                    // Default fallback color if system accent color isn't available
+                    seriesColor = SKColors.DodgerBlue;
+                }
+            }
+            catch
+            {
+                // Fallback color if anything goes wrong
+                seriesColor = SKColors.DodgerBlue;
+            }
+            
+            // Create a darker color for axis text for better contrast
+            SKColor axisColor = SKColors.Black;
+            if (Application.Current.RequestedTheme == ApplicationTheme.Dark)
+            {
+                axisColor = SKColors.White;
+            }
+            
             if (_currentChartViewMode == ChartViewMode.Hourly)
             {
                 System.Diagnostics.Debug.WriteLine("Building HOURLY chart");
@@ -1105,11 +1135,58 @@ namespace ScreenTimeTracker
                 var values = new List<double>();
                 var labels = new List<string>();
                 
-                // Add values and labels for each hour
+                // Create a more concise label format for narrow windows
+                bool useShortLabels = UsageChartLive.ActualWidth < 500;
+                
+                // Add values and labels for each hour (with spacing logic)
                 for (int i = 0; i < 24; i++)
                 {
                     values.Add(hourlyUsage[i]);
-                    labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
+                    
+                    // Use spacing logic to prevent label crowding
+                    // For narrow screens, we only show labels every 2 or 3 hours
+                    if (useShortLabels)
+                    {
+                        // Very narrow: show label only for 12am, 6am, 12pm, 6pm
+                        if (i % 6 == 0)
+                        {
+                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "p" : "a")}");
+                        }
+                        else
+                        {
+                            labels.Add(""); // Empty label for hours we're skipping
+                        }
+                    }
+                    else if (UsageChartLive.ActualWidth < 700)
+                    {
+                        // Narrow: show label every 3 hours (12am, 3am, 6am, etc.)
+                        if (i % 3 == 0)
+                        {
+                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
+                        }
+                        else
+                        {
+                            labels.Add(""); // Empty label for hours we're skipping
+                        }
+                    }
+                    else if (UsageChartLive.ActualWidth < 900)
+                    {
+                        // Medium: show label every 2 hours
+                        if (i % 2 == 0)
+                        {
+                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
+                        }
+                        else
+                        {
+                            labels.Add(""); // Empty label for hours we're skipping
+                        }
+                    }
+                    else
+                    {
+                        // Wide: show all hour labels
+                        labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
+                    }
+                    
                     System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[i]}");
                 }
 
@@ -1122,25 +1199,30 @@ namespace ScreenTimeTracker
                 
                 System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
-                // Create the line series
+                // Create the line series with system accent color
                 var lineSeries = new LineSeries<double>
                 {
                     Values = values,
                     Fill = null,
-                    GeometrySize = 0,
-                    Stroke = new SolidColorPaint(SKColors.MediumSeaGreen, 2),
+                    GeometrySize = 4, // Add small data points for better visibility
+                    Stroke = new SolidColorPaint(seriesColor, 2.5f), // Use system accent color with slightly thicker line
+                    GeometryStroke = new SolidColorPaint(seriesColor, 2), // Match stroke color
+                    GeometryFill = new SolidColorPaint(SKColors.White), // White fill for points
                     Name = "Usage"
                 };
 
-                // Set up the axes
+                // Set up the axes with improved contrast
                 UsageChartLive.XAxes = new Axis[]
                 {
                     new Axis
                     {
                         Labels = labels,
-                        LabelsRotation = 0,
+                        LabelsRotation = useShortLabels ? 0 : 45, // Rotate labels when space is limited
                         ForceStepToMin = true,
-                        MinStep = 1
+                        MinStep = 1,
+                        TextSize = 11, // Slightly larger text
+                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };
 
@@ -1149,15 +1231,16 @@ namespace ScreenTimeTracker
                     new Axis
                     {
                         Name = "Hours",
-                        NamePaint = new SolidColorPaint(SKColors.Gray),
+                        NamePaint = new SolidColorPaint(axisColor),
                         NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(SKColors.Gray),
-                        TextSize = 10,
+                        LabelsPaint = new SolidColorPaint(axisColor),
+                        TextSize = 11, // Slightly larger text
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
                         MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
-                        Labeler = FormatHoursForYAxis
+                        Labeler = FormatHoursForYAxis,
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };
 
@@ -1213,7 +1296,20 @@ namespace ScreenTimeTracker
                     }
                     
                     values.Add(totalHours);
-                    labels.Add(date.ToString("MM/dd"));
+                    
+                    // Adjust label format based on window size and number of days
+                    bool useShortLabels = UsageChartLive.ActualWidth < 500 || daysToShow > 10;
+                    
+                    // For monthly view with many days, we skip some labels to avoid overcrowding
+                    if (daysToShow > 15 && i % 3 != 0 && i != daysToShow - 1)
+                    {
+                        labels.Add(""); // Skip some labels for monthly view
+                    }
+                    else
+                    {
+                        labels.Add(date.ToString(useShortLabels ? "d" : "MM/dd"));
+                    }
+                    
                     System.Diagnostics.Debug.WriteLine($"Date {date:MM/dd}: {totalHours:F4} hours");
                 }
                 
@@ -1248,24 +1344,39 @@ namespace ScreenTimeTracker
                 
                 System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
-                // Create the column series
+                // Create semi-transparent color for fill
+                var fillColor = seriesColor.WithAlpha(180); // 70% opacity
+
+                // Create the column series with system accent color
                 var columnSeries = new ColumnSeries<double>
                 {
                     Values = values,
-                    Fill = new SolidColorPaint(SKColors.MediumSeaGreen),
-                    Stroke = null,
-                    Name = "Usage"
+                    Fill = new SolidColorPaint(fillColor),
+                    Stroke = new SolidColorPaint(seriesColor, 1),
+                    Name = "Usage",
+                    IgnoresBarPosition = false,
+                    Padding = 2 // Add small padding between bars
                 };
 
-                // Set up the axes
+                // Determine rotation angle based on number of days and window width
+                int rotationAngle = 0;
+                if (daysToShow > 10 || UsageChartLive.ActualWidth < 600)
+                {
+                    rotationAngle = 45; // Rotate labels for better spacing
+                }
+
+                // Set up the axes with improved contrast
                 UsageChartLive.XAxes = new Axis[]
                 {
                     new Axis
                     {
                         Labels = labels,
-                        LabelsRotation = 0,
+                        LabelsRotation = rotationAngle,
                         ForceStepToMin = true,
-                        MinStep = 1
+                        MinStep = 1,
+                        TextSize = 11, // Slightly larger text
+                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };
 
@@ -1274,15 +1385,16 @@ namespace ScreenTimeTracker
                     new Axis
                     {
                         Name = "Hours",
-                        NamePaint = new SolidColorPaint(SKColors.Gray),
+                        NamePaint = new SolidColorPaint(axisColor),
                         NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(SKColors.Gray),
-                        TextSize = 10,
+                        LabelsPaint = new SolidColorPaint(axisColor),
+                        TextSize = 11, // Slightly larger text
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
                         MinStep = yAxisMax < 0.1 ? 0.005 : 0.5,
-                        Labeler = FormatHoursForYAxis
+                        Labeler = FormatHoursForYAxis,
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };
 
@@ -1291,6 +1403,10 @@ namespace ScreenTimeTracker
                 
                 System.Diagnostics.Debug.WriteLine("Daily chart updated with values");
             }
+            
+            // Set additional chart properties for better appearance
+            UsageChartLive.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
+            UsageChartLive.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
             
             System.Diagnostics.Debug.WriteLine($"Chart updated with {UsageChartLive.Series?.Count() ?? 0} series");
             System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart COMPLETED ===");

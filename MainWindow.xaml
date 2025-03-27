@@ -304,9 +304,10 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="24"/>
                                 <ColumnDefinition Width="12"/>
-                                <ColumnDefinition Width="264"/>
-                                <ColumnDefinition Width="150"/>
-                                <ColumnDefinition Width="150"/>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             
                             <!-- Icon with loading state -->
@@ -324,9 +325,9 @@
                                        Visibility="Collapsed"/>
                             </Grid>
                             
-                            <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2"/>
-                            <TextBlock Text="{x:Bind FormattedDuration, Mode=OneWay}" Grid.Column="3"/>
-                            <TextBlock Text="{x:Bind FormattedStartTime}" Grid.Column="4"/>
+                            <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"/>
+                            <TextBlock Text="{x:Bind FormattedDuration, Mode=OneWay}" Grid.Column="3" HorizontalAlignment="Left"/>
+                            <TextBlock Text="{x:Bind FormattedStartTime}" Grid.Column="4" HorizontalAlignment="Left"/>
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
@@ -335,13 +336,14 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="24"/>
                             <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="264"/>
-                            <ColumnDefinition Width="150"/>
-                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="Application" Grid.Column="2" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
-                        <TextBlock Text="Duration" Grid.Column="3" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
-                        <TextBlock Text="Start Time" Grid.Column="4" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                        <TextBlock Text="Application" Grid.Column="2" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Duration" Grid.Column="3" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Start Time" Grid.Column="4" Style="{ThemeResource BodyStrongTextBlockStyle}" HorizontalAlignment="Left"/>
                     </Grid>
                 </ListView.Header>
             </ListView>
