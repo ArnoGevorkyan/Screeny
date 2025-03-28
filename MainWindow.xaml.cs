@@ -36,9 +36,6 @@ namespace ScreenTimeTracker
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
         private readonly ObservableCollection<AppUsageRecord> _usageRecords;
-        private AppWindow? _appWindow;
-        private OverlappedPresenter? _presenter;
-        private bool _isMaximized = false;
         private DateTime _selectedDate;
         private DateTime? _selectedEndDate; // For date ranges
         private DispatcherTimer _updateTimer;
@@ -51,27 +48,16 @@ namespace ScreenTimeTracker
         // Static constructor to configure LiveCharts
         static MainWindow()
         {
-            // Configure LiveCharts defaults
+            // Configure global LiveCharts settings
             LiveChartsSettings.ConfigureTheme();
         }
-
-        // Add these Win32 API declarations at the top of the class
-        private const int WM_SETICON = 0x0080;
-        private const int ICON_SMALL = 0;
-        private const int ICON_BIG = 1;
-        private const int IMAGE_ICON = 1;
-        private const int LR_LOADFROMFILE = 0x0010;
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, int wParam, IntPtr lParam);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern IntPtr LoadImage(IntPtr hinst, string lpszName, uint uType,
-                                            int cxDesired, int cyDesired, uint fuLoad);
 
         // Replace the old popup fields with a DatePickerPopup instance
         private DatePickerPopup? _datePickerPopup;
 
+        // Add WindowControlHelper field
+        private readonly WindowControlHelper _windowHelper;
+        
         public MainWindow()
         {
             _disposed = false;
@@ -84,8 +70,8 @@ namespace ScreenTimeTracker
 
             InitializeComponent();
 
-            // Configure window
-            SetUpWindow();
+            // Initialize the WindowControlHelper
+            _windowHelper = new WindowControlHelper(this);
 
             // Initialize services
             _databaseService = new DatabaseService();
@@ -208,14 +194,6 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Error in timer tick: {ex}");
             }
-        }
-
-        private double GetScaleAdjustment()
-        {
-            IntPtr hWnd = WindowNative.GetWindowHandle(this);
-            Microsoft.UI.WindowId wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
-            Microsoft.UI.Windowing.DisplayArea displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(wndId, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
-            return displayArea.OuterBounds.Height / displayArea.WorkArea.Height;
         }
 
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
@@ -681,32 +659,18 @@ namespace ScreenTimeTracker
 
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_presenter != null)
-            {
-                _presenter.Minimize();
-            }
+            _windowHelper.MinimizeWindow();
         }
 
         private void MaximizeButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_presenter == null) return;
-
-            if (_isMaximized)
-            {
-                _presenter.Restore();
-                _isMaximized = false;
-            }
-            else
-            {
-                _presenter.Maximize();
-                _isMaximized = true;
-            }
+            _windowHelper.MaximizeOrRestoreWindow();
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
             _trackingService.StopTracking();
-            this.Close();
+            _windowHelper.CloseWindow();
         }
 
         private void UsageListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
@@ -1078,73 +1042,6 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine($"Error updating UI on window change: {ex.Message}");
                 }
             });
-        }
-
-        // Add the SetUpWindow method
-        private void SetUpWindow()
-        {
-            try
-            {
-                IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-                Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
-                _appWindow = AppWindow.GetFromWindowId(windowId);
-                
-                if (_appWindow != null)
-                {
-                    _appWindow.Title = "Screeny";
-                    _appWindow.TitleBar.ExtendsContentIntoTitleBar = true;
-                    _appWindow.TitleBar.ButtonBackgroundColor = MicrosoftUI.Colors.Transparent;
-                    _appWindow.TitleBar.ButtonInactiveBackgroundColor = MicrosoftUI.Colors.Transparent;
-
-                    // Set the window icon
-                    var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app-icon.ico");
-                    if (File.Exists(iconPath))
-                    {
-                        try
-                        {
-                            // For ICON_SMALL (16x16), explicitly request a small size to improve scaling quality
-                            IntPtr smallIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
-                            SendMessage(windowHandle, WM_SETICON, ICON_SMALL, smallIcon);
-                            
-                            // For ICON_BIG, let Windows decide the best size based on DPI settings
-                            IntPtr bigIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
-                            SendMessage(windowHandle, WM_SETICON, ICON_BIG, bigIcon);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Non-critical failure - continue without icon
-                            System.Diagnostics.Debug.WriteLine($"Failed to set window icon: {ex.Message}");
-                        }
-                    }
-
-                    // Set up presenter
-                    _presenter = _appWindow.Presenter as OverlappedPresenter;
-                    if (_presenter != null)
-                    {
-                        _presenter.IsResizable = true;
-                        _presenter.IsMaximizable = true;
-                        _presenter.IsMinimizable = true;
-                    }
-
-                    // Set default size
-                    try
-                    {
-                        var display = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
-                        var scale = GetScaleAdjustment();
-                        _appWindow.Resize(new Windows.Graphics.SizeInt32 { Width = (int)(1000 * scale), Height = (int)(600 * scale) });
-                    }
-                    catch (Exception ex)
-                    {
-                        // Non-critical failure - window will use default size
-                        System.Diagnostics.Debug.WriteLine($"Failed to set window size: {ex.Message}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error setting up window: {ex.Message}");
-                // Continue with default window settings
-            }
         }
 
         private int GetDayCountForTimePeriod(TimePeriod period, DateTime date)
