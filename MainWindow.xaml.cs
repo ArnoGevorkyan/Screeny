@@ -24,6 +24,7 @@ using SkiaSharp;
 using Windows.Globalization; // For DayOfWeek
 using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 using ScreenTimeTracker.Helpers;
+using Microsoft.UI.Dispatching;
 
 namespace ScreenTimeTracker
 {
@@ -219,563 +220,160 @@ namespace ScreenTimeTracker
 
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
-            // Additional check to make sure we filter out windows system processes
-            if (!record.ShouldTrack || IsWindowsSystemProcess(record.ProcessName)) 
+            try
             {
-                System.Diagnostics.Debug.WriteLine($"Ignoring system process: {record.ProcessName}");
-                return;
-            }
-            
-            if (!record.IsFromDate(_selectedDate)) 
-            {
-                System.Diagnostics.Debug.WriteLine($"Ignoring record from different date: {record.Date}, selected date: {_selectedDate}");
-                return;
-            }
+                // Process the application record to improve its naming
+                ApplicationProcessingHelper.ProcessApplicationRecord(record);
 
-            // Handle special cases like Java applications
-            HandleSpecialCases(record);
-
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                System.Diagnostics.Debug.WriteLine($"UI Update: Processing record for: {record.ProcessName} ({record.WindowTitle})");
-
-                // Track if we made any changes that require UI updates
-                bool recordsChanged = false;
-
-                // First try to find exact match
-                var existingRecord = FindExistingRecord(record);
-
-                if (existingRecord != null)
+                // Additional check to make sure we filter out windows system processes
+                if (!record.ShouldTrack || IsWindowsSystemProcess(record.ProcessName)) 
                 {
-                    System.Diagnostics.Debug.WriteLine($"Found existing record: {existingRecord.ProcessName}");
-                    
-                    // Update the existing record instead of adding a new one
-                    if (existingRecord.IsFocused != record.IsFocused)
-                    {
-                        existingRecord.SetFocus(record.IsFocused);
-                        recordsChanged = true;
-                    }
+                    System.Diagnostics.Debug.WriteLine($"Ignoring system process: {record.ProcessName}");
+                    return;
+                }
+                
+                if (!record.IsFromDate(_selectedDate)) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"Ignoring record from different date: {record.Date}, selected date: {_selectedDate}");
+                    return;
+                }
 
-                    // If the window title of the existing record is empty, use the new one
-                    if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(record.WindowTitle))
-                    {
-                        existingRecord.WindowTitle = record.WindowTitle;
-                    }
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    System.Diagnostics.Debug.WriteLine($"UI Update: Processing record for: {record.ProcessName} ({record.WindowTitle})");
 
-                    // If we're updating the active status, make sure we unfocus any other records
-                    if (record.IsFocused)
+                    // Track if we made any changes that require UI updates
+                    bool recordsChanged = false;
+
+                    // First try to find exact match
+                    var existingRecord = FindExistingRecord(record);
+
+                    if (existingRecord != null)
                     {
-                        foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord && r.IsFocused))
+                        System.Diagnostics.Debug.WriteLine($"Found existing record: {existingRecord.ProcessName}");
+                        
+                        // Update the existing record instead of adding a new one
+                        if (existingRecord.IsFocused != record.IsFocused)
                         {
-                            otherRecord.SetFocus(false);
+                            existingRecord.SetFocus(record.IsFocused);
                             recordsChanged = true;
                         }
-                    }
-                }
-                else
-                {
-                    // Additional check before adding to make sure it's not a system process
-                    if (IsWindowsSystemProcess(record.ProcessName))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Skipping system process: {record.ProcessName}");
-                        return;
-                    }
 
-                    System.Diagnostics.Debug.WriteLine($"Adding new record: {record.ProcessName}");
-                    
-                    // If we're adding a new focused record, unfocus all other records
-                    if (record.IsFocused)
-                    {
-                        foreach (var otherRecord in _usageRecords.Where(r => r.IsFocused))
+                        // If the window title of the existing record is empty, use the new one
+                        if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(record.WindowTitle))
                         {
-                            otherRecord.SetFocus(false);
+                            existingRecord.WindowTitle = record.WindowTitle;
+                        }
+
+                        // If we're updating the active status, make sure we unfocus any other records
+                        if (record.IsFocused)
+                        {
+                            foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord && r.IsFocused))
+                            {
+                                otherRecord.SetFocus(false);
+                                recordsChanged = true;
+                            }
                         }
                     }
-
-                    _usageRecords.Add(record);
-                    recordsChanged = true;
-                    System.Diagnostics.Debug.WriteLine($"Record added to _usageRecords, collection count: {_usageRecords.Count}");
-                    System.Diagnostics.Debug.WriteLine($"Added record details: Process={record.ProcessName}, Duration={record.Duration.TotalSeconds:F1}s, Start={record.StartTime}, IsFocused={record.IsFocused}");
-                    
-                    // Log full collection details for troubleshooting
-                    System.Diagnostics.Debug.WriteLine("Current _usageRecords collection:");
-                    foreach (var r in _usageRecords.Take(5)) // Show first 5 records
+                    else
                     {
-                        System.Diagnostics.Debug.WriteLine($"  - {r.ProcessName}: {r.Duration.TotalSeconds:F1}s, IsFocused={r.IsFocused}");
-                    }
-                    if (_usageRecords.Count > 5)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"  - ... and {_usageRecords.Count - 5} more records");
-                    }
-                    
-                    // Make sure the list view is actually showing the new record
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        // Ensure the UsageListView has the updated data
-                        if (UsageListView != null)
+                        // Additional check before adding to make sure it's not a system process
+                        if (IsWindowsSystemProcess(record.ProcessName))
                         {
-                            System.Diagnostics.Debug.WriteLine("Manually refreshing UsageListView");
-                            UsageListView.ItemsSource = null;
-                            UsageListView.ItemsSource = _usageRecords;
-                }
-            });
-        }
+                            System.Diagnostics.Debug.WriteLine($"Skipping system process: {record.ProcessName}");
+                            return;
+                        }
 
-                // Only update the UI if we made changes
-                if (recordsChanged)
-                {
-                    // Update the summary and chart in real-time
-                    System.Diagnostics.Debug.WriteLine("Updating summary and chart in real-time");
-                    UpdateSummaryTab();
-                    UpdateUsageChart();
-                }
-            });
+                        System.Diagnostics.Debug.WriteLine($"Adding new record: {record.ProcessName}");
+                        
+                        // If we're adding a new focused record, unfocus all other records
+                        if (record.IsFocused)
+                        {
+                            foreach (var otherRecord in _usageRecords.Where(r => r.IsFocused))
+                            {
+                                otherRecord.SetFocus(false);
+                            }
+                        }
+
+                        _usageRecords.Add(record);
+                        recordsChanged = true;
+                        System.Diagnostics.Debug.WriteLine($"Record added to _usageRecords, collection count: {_usageRecords.Count}");
+                        System.Diagnostics.Debug.WriteLine($"Added record details: Process={record.ProcessName}, Duration={record.Duration.TotalSeconds:F1}s, Start={record.StartTime}, IsFocused={record.IsFocused}");
+                        
+                        // Log full collection details for troubleshooting
+                        System.Diagnostics.Debug.WriteLine("Current _usageRecords collection:");
+                        foreach (var r in _usageRecords.Take(5)) // Show first 5 records
+                        {
+                            System.Diagnostics.Debug.WriteLine($"  - {r.ProcessName}: {r.Duration.TotalSeconds:F1}s, IsFocused={r.IsFocused}");
+                        }
+                        if (_usageRecords.Count > 5)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"  - ... and {_usageRecords.Count - 5} more records");
+                        }
+                        
+                        // Make sure the list view is actually showing the new record
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            // Ensure the UsageListView has the updated data
+                            if (UsageListView != null)
+                            {
+                                System.Diagnostics.Debug.WriteLine("Manually refreshing UsageListView");
+                                UsageListView.ItemsSource = null;
+                                UsageListView.ItemsSource = _usageRecords;
+                            }
+                        });
+                    }
+
+                    // Only update the UI if we made changes
+                    if (recordsChanged)
+                    {
+                        // Update the summary and chart in real-time
+                        System.Diagnostics.Debug.WriteLine("Updating summary and chart in real-time");
+                        UpdateSummaryTab();
+                        UpdateUsageChart();
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error handling usage record update: {ex.Message}");
+            }
         }
 
         private AppUsageRecord? FindExistingRecord(AppUsageRecord record)
         {
-            // Try several strategies to find a match
+            if (record == null)
+                return null;
 
-            // 1. Exact match by window handle (most reliable)
-            var exactMatch = _usageRecords.FirstOrDefault(r => r.WindowHandle == record.WindowHandle);
-            if (exactMatch != null) return exactMatch;
-
-            // 2. Match by process name and process ID - handles multiple instances of same app with different windows
-            var pidAndNameMatch = _usageRecords.FirstOrDefault(r =>
-                r.ProcessId == record.ProcessId &&
-                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
-            if (pidAndNameMatch != null) return pidAndNameMatch;
-
-            // 3. Match by extracted application name to handle apps with multiple processes (like Telegram, Discord)
-            string baseAppName = GetBaseAppName(record.ProcessName);
-            var appNameMatch = _usageRecords.FirstOrDefault(r =>
-                GetBaseAppName(r.ProcessName).Equals(baseAppName, StringComparison.OrdinalIgnoreCase));
-            if (appNameMatch != null) return appNameMatch;
-
-            // 4. Match by process name and similar window title (for MDI applications)
-            var similarTitleMatch = _usageRecords.FirstOrDefault(r =>
-                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
-                IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle));
-            if (similarTitleMatch != null) return similarTitleMatch;
-
-            // 5. For special applications like browsers, match just by application type
-            if (IsApplicationThatShouldConsolidate(record.ProcessName))
+            // Check existing records for a match based on process name and window title
+            foreach (var r in _usageRecords)
             {
-                var nameOnlyMatch = _usageRecords.FirstOrDefault(r =>
-                    r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) ||
-                    IsAlternateProcessNameForSameApp(r.ProcessName, record.ProcessName));
-                if (nameOnlyMatch != null) return nameOnlyMatch;
+                // If it's the exact same window, return it
+                if (r.WindowHandle == record.WindowHandle)
+                    return r;
+
+                // For applications that should be consolidated, look for matching process names
+                string baseAppName = ApplicationProcessingHelper.GetBaseAppName(record.ProcessName);
+                if (!string.IsNullOrEmpty(baseAppName) && 
+                    ApplicationProcessingHelper.GetBaseAppName(r.ProcessName).Equals(baseAppName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // For applications we want to consolidate, just match on process name
+                    if (ApplicationProcessingHelper.IsApplicationThatShouldConsolidate(record.ProcessName))
+                        return r;
+                    
+                    // For other applications, match on process name + check if they're related processes
+                    if (r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) ||
+                       ApplicationProcessingHelper.IsAlternateProcessNameForSameApp(r.ProcessName, record.ProcessName))
+                    {
+                        // If window titles are similar, consider it the same application
+                        if (ApplicationProcessingHelper.IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle))
+                            return r;
+                    }
+                }
             }
 
             // No match found
             return null;
-        }
-
-        private string GetBaseAppName(string processName)
-        {
-            // Extract the base application name (removing numbers, suffixes, etc.)
-            if (string.IsNullOrEmpty(processName)) return processName;
-
-            // Remove common process suffixes
-            string cleanName = processName.ToLower()
-                .Replace("64", "")
-                .Replace("32", "")
-                .Replace("x86", "")
-                .Replace("x64", "")
-                .Replace(" (x86)", "")
-                .Replace(" (x64)", "");
-
-            // Match common app variations
-            if (cleanName.StartsWith("telegram"))
-                return "telegram";
-            if (cleanName.StartsWith("discord"))
-                return "discord";
-            if (cleanName.Contains("chrome") || cleanName.Contains("chromium"))
-                return "chrome";
-            if (cleanName.Contains("firefox"))
-                return "firefox";
-            if (cleanName.Contains("devenv") || cleanName.Contains("visualstudio"))
-                return "visualstudio";
-            if (cleanName.Contains("code") || cleanName.Contains("vscode"))
-                return "vscode";
-
-            return cleanName;
-        }
-
-        private bool IsAlternateProcessNameForSameApp(string name1, string name2)
-        {
-            // Check if two different process names might belong to the same application
-            if (string.IsNullOrEmpty(name1) || string.IsNullOrEmpty(name2))
-                return false;
-
-            // Convert to lowercase for case-insensitive comparison
-            name1 = name1.ToLower();
-            name2 = name2.ToLower();
-
-            // Define groups of related process names
-            var processGroups = new List<HashSet<string>>
-            {
-                new HashSet<string> { "telegram", "telegramdesktop", "telegram.exe", "updater" },
-                new HashSet<string> { "discord", "discordptb", "discordcanary", "discord.exe", "update.exe" },
-                new HashSet<string> { "chrome", "chrome.exe", "chromedriver", "chromium" },
-                new HashSet<string> { "firefox", "firefox.exe", "firefoxdriver" },
-                new HashSet<string> { "visualstudio", "devenv", "devenv.exe", "msvsmon", "vshost", "vs_installer" },
-                new HashSet<string> { "code", "code.exe", "vscode", "vscode.exe", "code - insiders" },
-                new HashSet<string> { "whatsapp", "whatsapp.exe", "whatsappdesktop", "electron" }
-            };
-
-            // Check if the two names are in the same group
-            return processGroups.Any(group => group.Contains(name1) && group.Contains(name2));
-        }
-
-        private bool IsApplicationThatShouldConsolidate(string processName)
-        {
-            // List of applications that should be consolidated even with different window titles
-            string[] consolidateApps = new string[]
-            {
-                "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc", // Browsers
-                "winword", "excel", "powerpnt", "outlook", // Office
-                "code", "vscode", "devenv", "visualstudio", // Code editors
-                "minecraft", // Games
-                "spotify", "discord", "slack", "telegram", "whatsapp", "teams", "skype", // Communication apps
-                "explorer", "firefox", "chrome", "edge" // Common apps
-            };
-
-            // Extract base name for broader matching
-            string baseName = GetBaseAppName(processName);
-
-            return consolidateApps.Any(app =>
-                processName.Contains(app, StringComparison.OrdinalIgnoreCase) ||
-                baseName.Contains(app, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private void HandleSpecialCases(AppUsageRecord record)
-        {
-            // WhatsApp detection (various process names based on install method)
-            if (record.ProcessName.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
-                record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
-                record.ProcessName.Contains("WhatsAppDesktop", StringComparison.OrdinalIgnoreCase) ||
-                record.ProcessName.Contains("Electron", StringComparison.OrdinalIgnoreCase) &&
-                record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase))
-            {
-                record.ProcessName = "WhatsApp";
-                return;
-            }
-
-            // Visual Studio detection (runs as 'devenv')
-            if (record.ProcessName.Equals("devenv", StringComparison.OrdinalIgnoreCase))
-            {
-                record.ProcessName = "Visual Studio";
-                return;
-            }
-
-            // Handle known browsers
-            if (IsBrowser(record.ProcessName))
-            {
-                string detectedBrowser = DetectBrowserType(record.ProcessName, record.WindowTitle);
-                if (!string.IsNullOrEmpty(detectedBrowser))
-                {
-                    record.ProcessName = detectedBrowser;
-                    System.Diagnostics.Debug.WriteLine($"Detected browser: {detectedBrowser}");
-                }
-            }
-            // Handle Java applications
-            else if (record.ProcessName.Equals("javaw", StringComparison.OrdinalIgnoreCase) ||
-                record.ProcessName.Equals("java", StringComparison.OrdinalIgnoreCase))
-            {
-                // Check for Java-based games by window title
-                if (IsJavaBasedGame(record.WindowTitle))
-                {
-                    // Extract game name from window title
-                    string gameName = ExtractGameNameFromTitle(record.WindowTitle);
-                    if (!string.IsNullOrEmpty(gameName))
-                    {
-                        record.ProcessName = gameName;
-                        System.Diagnostics.Debug.WriteLine($"Detected Java game: {gameName} from title: {record.WindowTitle}");
-                    }
-                    else
-                    {
-                        // Default to "Minecraft" if we can't determine specific game
-                        record.ProcessName = "Minecraft";
-                    }
-                }
-                // Check for Java IDEs
-                else if (record.WindowTitle.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "Eclipse";
-                }
-                else if (record.WindowTitle.Contains("IntelliJ", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "IntelliJ IDEA";
-                }
-                else if (record.WindowTitle.Contains("NetBeans", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "NetBeans";
-                }
-            }
-
-            // Handle Python applications
-            else if (record.ProcessName.Equals("python", StringComparison.OrdinalIgnoreCase) ||
-                     record.ProcessName.Equals("pythonw", StringComparison.OrdinalIgnoreCase))
-            {
-                // Check window title for clues about which Python app is running
-                if (record.WindowTitle.Contains("PyCharm", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "PyCharm";
-                }
-                else if (record.WindowTitle.Contains("Jupyter", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "Jupyter Notebook";
-                }
-            }
-
-            // Handle node.js applications
-            else if (record.ProcessName.Equals("node", StringComparison.OrdinalIgnoreCase))
-            {
-                if (record.WindowTitle.Contains("VS Code", StringComparison.OrdinalIgnoreCase))
-                {
-                    record.ProcessName = "VS Code";
-                }
-            }
-
-            // Handle common application renames
-            RenameCommonApplications(record);
-        }
-
-        private void RenameCommonApplications(AppUsageRecord record)
-        {
-            // A generic approach to rename common applications to better names
-
-            // WhatsApp related processes
-            if (record.ProcessName.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) ||
-                (record.ProcessName.Contains("Electron", StringComparison.OrdinalIgnoreCase) &&
-                 record.WindowTitle.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase)))
-            {
-                record.ProcessName = "WhatsApp";
-                return;
-            }
-
-            // Telegram related processes
-            if (record.ProcessName.Contains("Telegram", StringComparison.OrdinalIgnoreCase) ||
-                record.ProcessName.StartsWith("tg", StringComparison.OrdinalIgnoreCase))
-            {
-                record.ProcessName = "Telegram";
-                return;
-            }
-
-            // Visual Studio related processes
-            if (record.ProcessName.Contains("msvsmon", StringComparison.OrdinalIgnoreCase) ||
-                    record.ProcessName.Contains("vshost", StringComparison.OrdinalIgnoreCase) ||
-                    record.ProcessName.Contains("vs_professional", StringComparison.OrdinalIgnoreCase) ||
-                    record.ProcessName.Contains("devenv", StringComparison.OrdinalIgnoreCase))
-            {
-                record.ProcessName = "Visual Studio";
-            }
-
-            // VS Code related processes
-            else if (record.ProcessName.Contains("Code", StringComparison.OrdinalIgnoreCase) ||
-                    record.ProcessName.Contains("VSCode", StringComparison.OrdinalIgnoreCase) ||
-                    record.ProcessName.Contains("Code - Insiders", StringComparison.OrdinalIgnoreCase))
-            {
-                record.ProcessName = "VS Code";
-            }
-
-            // Microsoft Office related processes
-            else if (record.ProcessName.Equals("WINWORD", StringComparison.OrdinalIgnoreCase))
-                record.ProcessName = "Word";
-            else if (record.ProcessName.Equals("EXCEL", StringComparison.OrdinalIgnoreCase))
-                record.ProcessName = "Excel";
-            else if (record.ProcessName.Equals("POWERPNT", StringComparison.OrdinalIgnoreCase))
-                record.ProcessName = "PowerPoint";
-            else if (record.ProcessName.Equals("OUTLOOK", StringComparison.OrdinalIgnoreCase))
-                record.ProcessName = "Outlook";
-
-            // Extract from window title as last resort
-            else if (string.IsNullOrEmpty(record.ProcessName) || record.ProcessName.Length <= 3)
-            {
-                string extractedName = ExtractApplicationNameFromWindowTitle(record.WindowTitle);
-                if (!string.IsNullOrEmpty(extractedName))
-                {
-                    record.ProcessName = extractedName;
-                }
-            }
-        }
-
-        private string ExtractApplicationNameFromWindowTitle(string windowTitle)
-        {
-            if (string.IsNullOrEmpty(windowTitle)) return string.Empty;
-
-            // Common title patterns
-            string[] patterns = { " - ", " – ", " | ", ": " };
-
-            foreach (var pattern in patterns)
-            {
-                if (windowTitle.Contains(pattern))
-                {
-                    string[] parts = windowTitle.Split(new[] { pattern }, StringSplitOptions.None);
-                    if (parts.Length >= 2)
-                    {
-                        // Usually the application name is the last part
-                        string lastPart = parts[parts.Length - 1].Trim();
-                        if (lastPart.Length > 2 && !string.IsNullOrEmpty(lastPart))
-                            return lastPart;
-                    }
-                }
-            }
-
-            return string.Empty;
-        }
-
-        private bool IsBrowser(string processName)
-        {
-            string[] browsers = { "chrome", "firefox", "msedge", "iexplore", "opera", "brave", "arc" };
-            return browsers.Any(b => processName.Equals(b, StringComparison.OrdinalIgnoreCase) ||
-                                    processName.Contains(b, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private string DetectBrowserType(string processName, string windowTitle)
-        {
-            // Map processes to browser names
-            if (processName.Contains("chrome", StringComparison.OrdinalIgnoreCase))
-                return "Chrome";
-            if (processName.Contains("firefox", StringComparison.OrdinalIgnoreCase))
-                return "Firefox";
-            if (processName.Contains("msedge", StringComparison.OrdinalIgnoreCase))
-                return "Microsoft Edge";
-            if (processName.Contains("iexplore", StringComparison.OrdinalIgnoreCase))
-                return "Internet Explorer";
-            if (processName.Contains("opera", StringComparison.OrdinalIgnoreCase))
-                return "Opera";
-            if (processName.Contains("brave", StringComparison.OrdinalIgnoreCase))
-                return "Brave";
-            if (processName.Contains("arc", StringComparison.OrdinalIgnoreCase))
-                return "Arc";
-
-            // Extract from window title if possible
-            if (windowTitle.Contains("Chrome", StringComparison.OrdinalIgnoreCase))
-                return "Chrome";
-            if (windowTitle.Contains("Firefox", StringComparison.OrdinalIgnoreCase))
-                return "Firefox";
-            if (windowTitle.Contains("Edge", StringComparison.OrdinalIgnoreCase))
-                return "Microsoft Edge";
-            if (windowTitle.Contains("Internet Explorer", StringComparison.OrdinalIgnoreCase))
-                return "Internet Explorer";
-            if (windowTitle.Contains("Opera", StringComparison.OrdinalIgnoreCase))
-                return "Opera";
-            if (windowTitle.Contains("Brave", StringComparison.OrdinalIgnoreCase))
-                return "Brave";
-            if (windowTitle.Contains("Arc", StringComparison.OrdinalIgnoreCase))
-                return "Arc";
-
-            // No specific browser detected
-            return string.Empty;
-        }
-
-        private bool IsJavaBasedGame(string windowTitle)
-        {
-            // List of common Java-based game keywords
-            string[] gameKeywords = {
-                "Minecraft", "MC", "Forge", "Fabric", "CraftBukkit", "Spigot", "Paper", "Optifine",
-                "Game", "Server", "Client", "Launcher", "Mod", "MultiMC", "TLauncher", "Vime"
-            };
-
-            return gameKeywords.Any(keyword =>
-                windowTitle.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private string ExtractGameNameFromTitle(string windowTitle)
-        {
-            // A map of known game title patterns to game names
-            Dictionary<string, string> gameTitlePatterns = new Dictionary<string, string>
-            {
-                { "Minecraft", "Minecraft" },
-                { "Forge", "Minecraft" },
-                { "Fabric", "Minecraft" },
-                { "Vime", "Minecraft" },
-                { "MC", "Minecraft" }
-            };
-
-            foreach (var pattern in gameTitlePatterns.Keys)
-            {
-                if (windowTitle.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                {
-                    return gameTitlePatterns[pattern];
-                }
-            }
-
-            return string.Empty;
-        }
-
-        private bool IsSimilarWindowTitle(string title1, string title2)
-        {
-            // If either title is empty, they can't be similar
-            if (string.IsNullOrEmpty(title1) || string.IsNullOrEmpty(title2))
-                return false;
-
-            // Check if one title contains the other
-            if (title1.Contains(title2, StringComparison.OrdinalIgnoreCase) ||
-                title2.Contains(title1, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Check for very similar titles (over 80% similarity)
-            if (GetSimilarity(title1, title2) > 0.8)
-                return true;
-
-            // Check if they follow the pattern "Document - Application"
-            return IsRelatedWindow(title1, title2);
-        }
-
-        private double GetSimilarity(string a, string b)
-        {
-            // A simple string similarity measure based on shared words
-            var wordsA = a.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
-            var wordsB = b.ToLower().Split(new[] { ' ', '-', '_', ':', '|', '.' }, StringSplitOptions.RemoveEmptyEntries);
-
-            int sharedWords = wordsA.Intersect(wordsB).Count();
-            int totalWords = Math.Max(wordsA.Length, wordsB.Length);
-
-            return totalWords == 0 ? 0 : (double)sharedWords / totalWords;
-        }
-
-        private bool IsRelatedWindow(string title1, string title2)
-        {
-            // Check if two window titles appear to be from the same application
-            // This helps consolidate things like "Document1 - Word" and "Document2 - Word"
-
-            // Check if both titles end with the same application name
-            string[] separators = { " - ", " – ", " | " };
-
-            foreach (var separator in separators)
-            {
-                // Check if both titles have the separator
-                if (title1.Contains(separator) && title2.Contains(separator))
-                {
-                    // Get the app name (usually after the last separator)
-                    string app1 = title1.Substring(title1.LastIndexOf(separator) + separator.Length);
-                    string app2 = title2.Substring(title2.LastIndexOf(separator) + separator.Length);
-
-                    if (app1.Equals(app2, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private void CleanupSystemProcesses()
-        {
-            // Create a list of records to remove (can't modify collection while enumerating)
-            var recordsToRemove = _usageRecords
-                .Where(r => IsWindowsSystemProcess(r.ProcessName))
-                .ToList();
-
-            // Remove each system process from the collection
-            foreach (var record in recordsToRemove)
-            {
-                _usageRecords.Remove(record);
-            }
         }
 
         private void StartButton_Click(object sender, RoutedEventArgs e)
@@ -1755,6 +1353,20 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+            }
+        }
+
+        private void CleanupSystemProcesses()
+        {
+            // Create a list of records to remove (can't modify collection while enumerating)
+            var recordsToRemove = _usageRecords
+                .Where(r => IsWindowsSystemProcess(r.ProcessName))
+                .ToList();
+
+            // Remove each system process from the collection
+            foreach (var record in recordsToRemove)
+            {
+                _usageRecords.Remove(record);
             }
         }
     }
