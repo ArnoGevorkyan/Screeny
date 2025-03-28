@@ -58,6 +58,9 @@ namespace ScreenTimeTracker
         // Add WindowControlHelper field
         private readonly WindowControlHelper _windowHelper;
         
+        // Counter for auto-save cycles to run database maintenance periodically
+        private int _autoSaveCycleCount = 0;
+        
         public MainWindow()
         {
             _disposed = false;
@@ -811,6 +814,27 @@ namespace ScreenTimeTracker
                 // Clean up any system processes one last time
                 CleanupSystemProcesses();
                 
+                // Increment counter and run database maintenance every 12 cycles (approximately once per hour)
+                _autoSaveCycleCount++;
+                if (_autoSaveCycleCount >= 12 && _databaseService != null)
+                {
+                    _autoSaveCycleCount = 0;
+                    System.Diagnostics.Debug.WriteLine("Running periodic database maintenance");
+                    
+                    // Run maintenance in background thread to avoid blocking UI
+                    Task.Run(() => 
+                    {
+                        try
+                        {
+                            _databaseService.PerformDatabaseMaintenance();
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error during periodic database maintenance: {ex.Message}");
+                        }
+                    });
+                }
+                
                 // If viewing today's data, reload from database to ensure UI is in sync
                 if (_selectedDate.Date == DateTime.Now.Date && _currentTimePeriod == TimePeriod.Daily)
                 {
@@ -931,6 +955,24 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded called");
                 
+                // Perform database maintenance on startup (in background)
+                if (_databaseService != null)
+                {
+                    Task.Run(() => 
+                    {
+                        try
+                        {
+                            // This will perform integrity checks and optimization
+                            bool integrityPassed = _databaseService.PerformDatabaseMaintenance();
+                            System.Diagnostics.Debug.WriteLine($"Database maintenance completed. Integrity passed: {integrityPassed}");
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Database maintenance error: {ex.Message}");
+                        }
+                    });
+                }
+                
                 // Initialize UI elements
                 SetUpUiElements();
                 
@@ -947,7 +989,7 @@ namespace ScreenTimeTracker
                 
                 // Load today's records
                 LoadRecordsForDate(_selectedDate);
-                
+
                 // Set up the UsageListView
                 if (UsageListView != null && UsageListView.ItemsSource == null)
                 {
@@ -963,14 +1005,20 @@ namespace ScreenTimeTracker
                 // Set the initial chart view mode
                 _currentChartViewMode = ChartViewMode.Hourly;
                 
-                // Update view mode label
+                // Update view mode label and hide toggle panel (since we start with Today view)
                 DispatcherQueue.TryEnqueue(() => {
                     if (ViewModeLabel != null)
                     {
                         ViewModeLabel.Text = "Hourly View";
                     }
+                    
+                    // Hide the view mode panel (user can't change the view for Today)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
                 });
-                
+
                 // Start tracking automatically
                 StartTracking();
                 
@@ -1061,30 +1109,91 @@ namespace ScreenTimeTracker
 
         private void UpdateChartViewMode()
         {
-            // Adjust chart view mode automatically based on time period
-            if (_currentTimePeriod == TimePeriod.Daily)
+            // Get today and yesterday dates for comparison
+            var today = DateTime.Today;
+            var yesterday = today.AddDays(-1);
+            
+            // Check if this is a "Last 7 days" selection
+            bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
+            
+            // Force specific view modes based on selection
+            if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
             {
+                // Today or Yesterday: Force Hourly view
                 _currentChartViewMode = ChartViewMode.Hourly;
                 
-                // Update view mode label
+                // Update view mode label and hide toggle panel (since it can't be changed)
                 DispatcherQueue.TryEnqueue(() => {
                     if (ViewModeLabel != null)
                     {
                         ViewModeLabel.Text = "Hourly View";
                     }
+                    
+                    // Hide the view mode panel (user can't change the view)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
                 });
             }
-            else // Weekly
+            else if (isLast7Days)
             {
+                // Last 7 days: Force Daily view
                 _currentChartViewMode = ChartViewMode.Daily;
                 
-                // Update view mode label
+                // Update view mode label and hide toggle panel (since it can't be changed)
                 DispatcherQueue.TryEnqueue(() => {
                     if (ViewModeLabel != null)
                     {
                         ViewModeLabel.Text = "Daily View";
                     }
+                    
+                    // Hide the view mode panel (user can't change the view)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
                 });
+            }
+            else
+            {
+                // Default behavior based on time period for other selections
+                if (_currentTimePeriod == TimePeriod.Daily)
+                {
+                    _currentChartViewMode = ChartViewMode.Hourly;
+                    
+                    // Update view mode label
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Hourly View";
+                        }
+                        
+                        // Show the view mode panel (user can change the view)
+                        if (ViewModePanel != null)
+                        {
+                            ViewModePanel.Visibility = Visibility.Visible;
+                        }
+                    });
+                }
+                else // Weekly or Custom
+                {
+                    _currentChartViewMode = ChartViewMode.Daily;
+                    
+                    // Update view mode label
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Daily View";
+                        }
+                        
+                        // Show the view mode panel (user can change the view)
+                        if (ViewModePanel != null)
+                        {
+                            ViewModePanel.Visibility = Visibility.Visible;
+                        }
+                    });
+                }
             }
             
             // Update the chart
@@ -1127,11 +1236,41 @@ namespace ScreenTimeTracker
             // Update button text
             UpdateDatePickerButtonText();
             
+            // Set the time period to Daily for single date selection
+            _currentTimePeriod = TimePeriod.Daily;
+            
             // Load records for the selected date
             LoadRecordsForDate(_selectedDate);
             
-            // Adjust the chart view mode based on whether this is a today/yesterday vs. other date
-            UpdateChartViewMode();
+            // Force Hourly view for Today and Yesterday
+            var today = DateTime.Today;
+            var yesterday = today.AddDays(-1);
+            if (selectedDate == today || selectedDate == yesterday)
+            {
+                _currentChartViewMode = ChartViewMode.Hourly;
+                
+                // Update view mode label and hide toggle panel
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Hourly View";
+                    }
+                    
+                    // Hide the view mode panel (user can't change the view)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
+                });
+                
+                // Update the chart
+                UpdateUsageChart();
+            }
+            else
+            {
+                // For other single dates, use the normal update logic
+                UpdateChartViewMode();
+            }
         }
         
         private void DatePickerPopup_DateRangeSelected(object? sender, (DateTime Start, DateTime End) dateRange)
@@ -1142,6 +1281,28 @@ namespace ScreenTimeTracker
             
             // Update button text
             UpdateDatePickerButtonText();
+            
+            // For Last 7 days, ensure we're in Weekly time period and force Daily view
+            var today = DateTime.Today;
+            if (_selectedDate == today.AddDays(-6) && _selectedEndDate == today)
+            {
+                _currentTimePeriod = TimePeriod.Weekly;
+                _currentChartViewMode = ChartViewMode.Daily;
+                
+                // Update view mode label and hide toggle panel
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Daily View";
+                    }
+                    
+                    // Hide the view mode panel (user can't change the view)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
+                });
+            }
             
             // Load records for the date range
             LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
@@ -1240,16 +1401,45 @@ namespace ScreenTimeTracker
                 // Update the summary tab
                 UpdateSummaryTab();
                 
-                // Update chart based on current view mode
-                _currentChartViewMode = ChartViewMode.Daily; // Force daily chart for range
-                UpdateChartViewMode();
+                // Check if this is the Last 7 days selection
+                var today = DateTime.Today;
+                bool isLast7Days = startDate == today.AddDays(-6) && endDate == today;
+                
+                if (isLast7Days)
+                {
+                    // Force daily chart for Last 7 days
+                    _currentChartViewMode = ChartViewMode.Daily;
+                    
+                    // Update view mode label and hide toggle panel
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Daily View";
+                        }
+                        
+                        // Hide the view mode panel (user can't change the view)
+                        if (ViewModePanel != null)
+                        {
+                            ViewModePanel.Visibility = Visibility.Collapsed;
+                        }
+                    });
+                    
+                    // Update the chart
+                    UpdateUsageChart();
+                }
+                else
+                {
+                    // For other date ranges, use default behavior
+                    // Update chart based on current view mode
+                    _currentChartViewMode = ChartViewMode.Daily; // Default to daily for ranges
+                    UpdateChartViewMode();
+                }
                 
                 System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records for date range");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
             }
         }
 

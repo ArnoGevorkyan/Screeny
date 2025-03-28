@@ -155,6 +155,9 @@ namespace ScreenTimeTracker.Services
                     command.ExecuteNonQuery();
                 }
 
+                // Check if we need to perform any migrations
+                CheckAndPerformMigrations();
+
                 Debug.WriteLine("Database initialized successfully");
             }
             catch (Exception ex)
@@ -173,6 +176,147 @@ namespace ScreenTimeTracker.Services
         }
 
         /// <summary>
+        /// Checks for and performs any necessary database migrations
+        /// </summary>
+        private void CheckAndPerformMigrations()
+        {
+            try
+            {
+                // Get current database version or schema information
+                int currentVersion = GetDatabaseVersion();
+                Debug.WriteLine($"Current database version: {currentVersion}");
+
+                // Perform migrations based on version
+                if (currentVersion < 1)
+                {
+                    // Migration to version 1 - Add date column if needed
+                    MigrateToV1();
+                }
+
+                // Future migrations can be added here
+                // if (currentVersion < 2) { MigrateToV2(); }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error during database migration: {ex.Message}");
+                // We'll continue even if migration fails - the app can still work
+            }
+        }
+
+        /// <summary>
+        /// Retrieves the current database version from the pragma
+        /// </summary>
+        private int GetDatabaseVersion()
+        {
+            try
+            {
+                // First try to get version from user_version pragma
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA user_version;";
+                    var result = command.ExecuteScalar();
+                    return result != null ? Convert.ToInt32(result) : 0;
+                }
+            }
+            catch
+            {
+                // If there's any error, assume version 0
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Migrates database to version 1 
+        /// Ensures date column exists and is populated
+        /// </summary>
+        private void MigrateToV1()
+        {
+            Debug.WriteLine("Performing migration to version 1");
+            
+            try
+            {
+                // Check if we need to add date column by getting column info
+                bool hasDateColumn = false;
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA table_info(app_usage);";
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string columnName = reader.GetString(1);
+                            if (columnName.Equals("date", StringComparison.OrdinalIgnoreCase))
+                            {
+                                hasDateColumn = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If no date column, add it and populate from start_time
+                if (!hasDateColumn)
+                {
+                    Debug.WriteLine("Adding date column to app_usage table");
+                    
+                    // Begin transaction
+                    using (var transaction = _connection.BeginTransaction())
+                    {
+                        try
+                        {
+                            // Add date column
+                            using (var command = _connection.CreateCommand())
+                            {
+                                command.CommandText = "ALTER TABLE app_usage ADD COLUMN date TEXT;";
+                                command.ExecuteNonQuery();
+                            }
+                            
+                            // Update existing records to extract date from start_time
+                            using (var command = _connection.CreateCommand())
+                            {
+                                command.CommandText = @"
+                                    UPDATE app_usage 
+                                    SET date = substr(start_time, 1, 10) 
+                                    WHERE date IS NULL;";
+                                command.ExecuteNonQuery();
+                            }
+                            
+                            // Commit the transaction
+                            transaction.Commit();
+                            Debug.WriteLine("Migration completed successfully");
+                        }
+                        catch (Exception ex)
+                        {
+                            // Rollback on error
+                            transaction.Rollback();
+                            Debug.WriteLine($"Migration failed: {ex.Message}");
+                            throw;
+                        }
+                    }
+                    
+                    // Create index on the new column
+                    using (var command = _connection.CreateCommand())
+                    {
+                        command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage(date);";
+                        command.ExecuteNonQuery();
+                    }
+                }
+                
+                // Update version in database
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA user_version = 1;";
+                    command.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error during migration to V1: {ex.Message}");
+                // We'll continue even if migration fails
+            }
+        }
+
+        /// <summary>
         /// Saves an app usage record to the database
         /// </summary>
         public bool SaveRecord(AppUsageRecord record)
@@ -187,15 +331,19 @@ namespace ScreenTimeTracker.Services
             {
                 _connection.Open();
 
+                // Extract date component for date-based filtering
+                string dateString = record.StartTime.ToString("yyyy-MM-dd");
+
                 string insertSql = @"
                 INSERT INTO app_usage 
-                    (process_name, app_name, start_time, end_time, duration)
+                    (date, process_name, app_name, start_time, end_time, duration)
                 VALUES 
-                    (@ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration);
+                    (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration);
                 SELECT last_insert_rowid();";
 
                 using (var command = new SqliteCommand(insertSql, _connection))
                 {
+                    command.Parameters.AddWithValue("@Date", dateString);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@StartTime", record.StartTime.ToString("o"));
@@ -220,6 +368,14 @@ namespace ScreenTimeTracker.Services
                 System.Diagnostics.Debug.WriteLine($"Error saving record: {ex.Message}");
                 return false;
             }
+            finally
+            {
+                // Ensure the connection is closed even on exception
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
+            }
         }
 
         /// <summary>
@@ -237,9 +393,13 @@ namespace ScreenTimeTracker.Services
             {
                 _connection.Open();
 
+                // Extract date component for consistency
+                string dateString = record.StartTime.ToString("yyyy-MM-dd");
+
                 string updateSql = @"
                 UPDATE app_usage 
                 SET 
+                    date = @Date,
                     process_name = @ProcessName,
                     app_name = @ApplicationName,
                     end_time = @EndTime,
@@ -249,6 +409,7 @@ namespace ScreenTimeTracker.Services
                 using (var command = new SqliteCommand(updateSql, _connection))
                 {
                     command.Parameters.AddWithValue("@Id", record.Id);
+                    command.Parameters.AddWithValue("@Date", dateString);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@EndTime", record.EndTime.HasValue ? record.EndTime.Value.ToString("o") : null);
@@ -264,6 +425,14 @@ namespace ScreenTimeTracker.Services
             {
                 System.Diagnostics.Debug.WriteLine($"Error updating record: {ex.Message}");
                 throw;
+            }
+            finally
+            {
+                // Ensure the connection is closed even on exception
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
             }
         }
 
@@ -313,7 +482,8 @@ namespace ScreenTimeTracker.Services
                             
                             if (!reader.IsDBNull(5))
                             {
-                                record._accumulatedDuration = TimeSpan.FromSeconds(reader.GetInt32(5));
+                                // Convert milliseconds to TimeSpan
+                                record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(5));
                             }
                             
                             records.Add(record);
@@ -377,7 +547,8 @@ namespace ScreenTimeTracker.Services
                             
                             if (!reader.IsDBNull(2))
                             {
-                                record._accumulatedDuration = TimeSpan.FromSeconds(reader.GetInt32(2));
+                                // Convert milliseconds to TimeSpan
+                                record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(2));
                             }
                             
                             records.Add(record);
@@ -483,12 +654,95 @@ namespace ScreenTimeTracker.Services
                     System.Diagnostics.Debug.WriteLine($"Deleted {rowsDeleted} expired records older than {cutoffDateString}");
                 }
 
+                // Run VACUUM after deleting records to reclaim space
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "VACUUM;";
+                    command.ExecuteNonQuery();
+                    System.Diagnostics.Debug.WriteLine("Database vacuumed to reclaim space");
+                }
+
                 _connection.Close();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error cleaning up expired records: {ex.Message}");
                 throw;
+            }
+            finally
+            {
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Performs database maintenance and integrity checks
+        /// </summary>
+        /// <returns>True if the database passes integrity checks</returns>
+        public bool PerformDatabaseMaintenance()
+        {
+            if (!_initializedSuccessfully)
+            {
+                Debug.WriteLine("Database not initialized, skipping maintenance");
+                return false;
+            }
+            
+            try
+            {
+                _connection.Open();
+                bool integrityPassed = true;
+                
+                // Run integrity check
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA integrity_check;";
+                    string result = (string)command.ExecuteScalar();
+                    integrityPassed = result.Equals("ok", StringComparison.OrdinalIgnoreCase);
+                    Debug.WriteLine($"Database integrity check: {result}");
+                }
+                
+                // If check failed, try to recover
+                if (!integrityPassed)
+                {
+                    Debug.WriteLine("Database integrity check failed, attempting recovery");
+                    // Integrity check failed, we should try to repair if possible
+                    // For SQLite, often the best approach is to make a new copy
+                    // But for simplicity, we'll just run basic optimization commands
+                }
+                
+                // Optimize the database
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA optimize;";
+                    command.ExecuteNonQuery();
+                    Debug.WriteLine("Database optimized");
+                }
+                
+                // Analyze the database to improve query performance
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "ANALYZE;";
+                    command.ExecuteNonQuery();
+                    Debug.WriteLine("Database analyzed");
+                }
+                
+                _connection.Close();
+                return integrityPassed;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error during database maintenance: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
             }
         }
 

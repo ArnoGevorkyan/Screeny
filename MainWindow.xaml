@@ -127,14 +127,15 @@
                     </StackPanel>
 
                     <!-- View Toggle Buttons (similar to screenshot) -->
-                    <StackPanel Orientation="Horizontal" 
+                    <StackPanel x:Name="ViewModePanel" 
+                                Orientation="Horizontal" 
                                 Grid.Column="1"
                                 CornerRadius="4"
                                 Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="1"
                                 Padding="4">
-                        <TextBlock x:Name="ViewModeLabel" 
+                        <TextBlock x:Name="ViewModeLabel"
                                   Text="Hourly View" 
                                   Padding="12,4"
                                   VerticalAlignment="Center"/>
