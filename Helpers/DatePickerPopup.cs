@@ -119,20 +119,75 @@ namespace ScreenTimeTracker.Helpers
 
             if (_datePickerPopup != null)
             {
-                // Position the popup near the button
-                var button = sender as Button;
-                if (button != null)
-                {
-                    var transform = button.TransformToVisual(null);
-                    var point = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
-                    
-                    // Set the position of the popup
-                    _datePickerPopup.HorizontalOffset = point.X;
-                    _datePickerPopup.VerticalOffset = point.Y;
-                }
+                // Position the popup near the button and adjust for screen boundaries
+                PositionPopup(sender as Button);
                 
                 // Show the popup
                 _datePickerPopup.IsOpen = true;
+            }
+        }
+
+        /// <summary>
+        /// Positions the popup relative to the button and adjusts for screen boundaries
+        /// </summary>
+        /// <param name="button">The button that triggered the popup</param>
+        private void PositionPopup(Button? button)
+        {
+            if (button == null || _datePickerPopup == null) return;
+            
+            try
+            {
+                // Get the button position
+                var transform = button.TransformToVisual(null);
+                var point = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
+                
+                // Get window dimensions
+                var windowWidth = _owner.Bounds.Width;
+                var windowHeight = _owner.Bounds.Height;
+                
+                // Default popup position
+                double horizontalOffset = point.X;
+                double verticalOffset = point.Y;
+                
+                // Popup dimensions
+                const double popupWidth = 350;
+                const double popupHeight = 580;
+                
+                // Adjust horizontal position if needed
+                if (horizontalOffset + popupWidth > windowWidth - 20) // 20px safety margin
+                {
+                    // If popup would go beyond right edge, align it to the right
+                    horizontalOffset = windowWidth - popupWidth - 20;
+                }
+                
+                // Adjust vertical position if needed
+                if (verticalOffset + popupHeight > windowHeight - 20) // 20px safety margin
+                {
+                    // If popup would go beyond bottom edge, show it above the button
+                    verticalOffset = point.Y - popupHeight - button.ActualHeight;
+                    
+                    // If that would put it above the top of the window, just align to top with margin
+                    if (verticalOffset < 20)
+                    {
+                        verticalOffset = 20;
+                    }
+                }
+                
+                // Set the position of the popup
+                _datePickerPopup.HorizontalOffset = horizontalOffset;
+                _datePickerPopup.VerticalOffset = verticalOffset;
+                
+                System.Diagnostics.Debug.WriteLine($"Positioned popup at X:{horizontalOffset}, Y:{verticalOffset}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error positioning popup: {ex.Message}");
+                
+                // Fallback positioning - just position at the button location
+                var fallbackTransform = button.TransformToVisual(null);
+                var fallbackPoint = fallbackTransform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
+                _datePickerPopup.HorizontalOffset = fallbackPoint.X;
+                _datePickerPopup.VerticalOffset = fallbackPoint.Y;
             }
         }
 
@@ -157,8 +212,8 @@ namespace ScreenTimeTracker.Helpers
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(16),
-                    Width = 300,
-                    MaxHeight = 480
+                    Width = 350, // Increased width to avoid content being cut off
+                    MaxHeight = 580 // Increased max height to ensure calendar fits properly
                 };
                 
                 // Set up row definitions
@@ -180,35 +235,48 @@ namespace ScreenTimeTracker.Helpers
                 
                 // Create first row of buttons (Today, Yesterday)
                 var topButtonsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                topButtonsRow.HorizontalAlignment = HorizontalAlignment.Stretch; // Make sure the row takes full width
+                
+                // Create column definitions for the button row to ensure equal widths
+                var todayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
+                var yesterdayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
+                
+                // Convert StackPanel to Grid for better layout control
+                var topButtonsGrid = new Grid();
+                topButtonsGrid.ColumnDefinitions.Add(todayColumn);
+                topButtonsGrid.ColumnDefinitions.Add(yesterdayColumn);
                 
                 // Create Today button
                 _todayButton = new Button
                 {
                     Content = "Today",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Width = 125,
+                    Margin = new Thickness(0, 0, 4, 0),
                     Style = Application.Current.Resources["AccentButtonStyle"] as Style
                 };
                 _todayButton.Click += QuickSelect_Today_Click;
-                topButtonsRow.Children.Add(_todayButton);
+                Grid.SetColumn(_todayButton, 0);
+                topButtonsGrid.Children.Add(_todayButton);
                 
                 // Create Yesterday button
                 _yesterdayButton = new Button
                 {
                     Content = "Yesterday",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Width = 125
+                    Margin = new Thickness(4, 0, 0, 0)
                 };
                 _yesterdayButton.Click += QuickSelect_Yesterday_Click;
-                topButtonsRow.Children.Add(_yesterdayButton);
+                Grid.SetColumn(_yesterdayButton, 1);
+                topButtonsGrid.Children.Add(_yesterdayButton);
                 
-                buttonsGrid.Children.Add(topButtonsRow);
+                buttonsGrid.Children.Add(topButtonsGrid);
                 
                 // Create second row with just Last 7 days button
                 _last7DaysButton = new Button
                 {
                     Content = "Last 7 days",
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0, 0, 0, 0) // Even margin
                 };
                 _last7DaysButton.Click += QuickSelect_Last7Days_Click;
                 buttonsGrid.Children.Add(_last7DaysButton);
@@ -243,7 +311,12 @@ namespace ScreenTimeTracker.Helpers
                     FirstDayOfWeek = Windows.Globalization.DayOfWeek.Monday,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     VerticalAlignment = VerticalAlignment.Stretch,
-                    MaxDate = DateTimeOffset.Now // Can't select future dates
+                    MaxDate = DateTimeOffset.Now, // Can't select future dates
+                    MinHeight = 320, // Set minimum height to ensure calendar isn't too small
+                    Margin = new Thickness(0, 0, 0, 0), // Even margin
+                    CalendarIdentifier = "GregorianCalendar", // Explicitly set calendar type
+                    IsGroupLabelVisible = true, // Show month/year label
+                    IsTodayHighlighted = true // Highlight today's date
                 };
                 calendar.SelectedDatesChanged += Calendar_SelectedDatesChanged;
                 calendar.CalendarViewDayItemChanging += Calendar_DayItemChanging;
