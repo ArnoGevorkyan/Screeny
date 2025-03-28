@@ -21,7 +21,9 @@ using LiveChartsCore.SkiaSharpView.WinUI;
 using LiveChartsCore.SkiaSharpView.Painting.Effects;
 using LiveChartsCore.Drawing;
 using SkiaSharp;
+using Windows.Globalization; // For DayOfWeek
 using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
+using ScreenTimeTracker.Helpers;
 
 namespace ScreenTimeTracker
 {
@@ -52,18 +54,6 @@ namespace ScreenTimeTracker
             LiveChartsSettings.ConfigureTheme();
         }
         
-        public enum TimePeriod
-        {
-            Daily,
-            Weekly
-        }
-
-        public enum ChartViewMode
-        {
-            Hourly,
-            Daily
-        }
-
         // Add these Win32 API declarations at the top of the class
         private const int WM_SETICON = 0x0080;
         private const int ICON_SMALL = 0;
@@ -80,12 +70,9 @@ namespace ScreenTimeTracker
 
         // Fields for the custom date picker
         private Popup? _datePickerPopup;
-        private CalendarView? _customCalendarView;
         private Button? _todayButton;
         private Button? _yesterdayButton;
         private Button? _last7DaysButton;
-        private Button? _last30DaysButton;
-        private Button? _thisMonthButton;
 
         public MainWindow()
         {
@@ -328,10 +315,10 @@ namespace ScreenTimeTracker
                             System.Diagnostics.Debug.WriteLine("Manually refreshing UsageListView");
                             UsageListView.ItemsSource = null;
                             UsageListView.ItemsSource = _usageRecords;
-                        }
-                    });
                 }
-                
+            });
+        }
+
                 // Only update the UI if we made changes
                 if (recordsChanged)
                 {
@@ -988,453 +975,17 @@ namespace ScreenTimeTracker
         
         private void UpdateUsageChart()
         {
-            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart CALLED ===");
-
-            if (UsageChartLive == null)
-            {
-                System.Diagnostics.Debug.WriteLine("Chart is null, exiting");
-                return;
-            }
-
-            // Calculate total time for the chart title
-            TimeSpan totalTime = TimeSpan.Zero;
-            foreach (var record in _usageRecords)
-            {
-                totalTime += record.Duration;
-            }
-            ChartTimeValue.Text = FormatTimeSpan(totalTime);
-            System.Diagnostics.Debug.WriteLine($"Total time for chart: {totalTime}");
-            
-            // Get system accent color for chart series
-            SKColor seriesColor;
-            
-            // Try to get the system accent color
-            try
-            {
-                if (Application.Current.Resources.TryGetValue("SystemAccentColor", out object accentColorObj) && 
-                    accentColorObj is Windows.UI.Color accentColor)
-                {
-                    seriesColor = new SKColor(accentColor.R, accentColor.G, accentColor.B);
-                }
-                else
-                {
-                    // Default fallback color if system accent color isn't available
-                    seriesColor = SKColors.DodgerBlue;
-                }
-            }
-            catch
-            {
-                // Fallback color if anything goes wrong
-                seriesColor = SKColors.DodgerBlue;
-            }
-            
-            // Create a darker color for axis text for better contrast
-            SKColor axisColor = SKColors.Black;
-            if (Application.Current.RequestedTheme == ApplicationTheme.Dark)
-            {
-                axisColor = SKColors.White;
-            }
-            
-            if (_currentChartViewMode == ChartViewMode.Hourly)
-            {
-                System.Diagnostics.Debug.WriteLine("Building HOURLY chart");
+            // Call the ChartHelper method to update the chart
+            TimeSpan totalTime = ChartHelper.UpdateUsageChart(
+                UsageChartLive, 
+                _usageRecords, 
+                _currentChartViewMode, 
+                _currentTimePeriod, 
+                _selectedDate, 
+                _selectedEndDate);
                 
-                // Create a dictionary to store hourly usage
-                var hourlyUsage = new Dictionary<int, double>();
-                
-                // Initialize all hours to 0
-                for (int i = 0; i < 24; i++)
-                {
-                    hourlyUsage[i] = 0;
-                }
-
-                // Process all usage records to distribute time by hour
-                System.Diagnostics.Debug.WriteLine($"Processing {_usageRecords.Count} records for hourly chart");
-                foreach (var record in _usageRecords)
-                {
-                    // Get the hour from the start time
-                    int startHour = record.StartTime.Hour;
-                    
-                    // Add the duration to the appropriate hour (convert to hours)
-                    hourlyUsage[startHour] += record.Duration.TotalHours;
-                    
-                    System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, Hour: {startHour}, Duration: {record.Duration.TotalHours:F4} hours");
-                }
-
-                // Check if all values are zero
-                bool allZero = true;
-                double maxValue = 0;
-                foreach (var value in hourlyUsage.Values)
-                {
-                    if (value > 0.0001)
-                    {
-                        allZero = false;
-                    }
-                    maxValue = Math.Max(maxValue, value);
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"All values zero? {allZero}, Max value: {maxValue:F4}");
-                
-                // If all values are zero, add a tiny value to the current hour to make the chart visible
-                if (allZero || maxValue < 0.001)
-                {
-                    int currentHour = DateTime.Now.Hour;
-                    hourlyUsage[currentHour] = 0.001; // Add a tiny value
-                    System.Diagnostics.Debug.WriteLine($"Added tiny value to hour {currentHour}");
-                }
-
-                // Set up series and labels for the chart
-                var values = new List<double>();
-                var labels = new List<string>();
-                
-                // Create a more concise label format for narrow windows
-                bool useShortLabels = UsageChartLive.ActualWidth < 500;
-                
-                // Add values and labels for each hour (with spacing logic)
-                for (int i = 0; i < 24; i++)
-                {
-                    values.Add(hourlyUsage[i]);
-                    
-                    // Use spacing logic to prevent label crowding
-                    // For narrow screens, we only show labels every 2 or 3 hours
-                    if (useShortLabels)
-                    {
-                        // Very narrow: show label only for 12am, 6am, 12pm, 6pm
-                        if (i % 6 == 0)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "p" : "a")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
-                    }
-                    else if (UsageChartLive.ActualWidth < 700)
-                    {
-                        // Narrow: show label every 3 hours (12am, 3am, 6am, etc.)
-                        if (i % 3 == 0)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
-                    }
-                    else if (UsageChartLive.ActualWidth < 900)
-                    {
-                        // Medium: show label every 2 hours
-                        if (i % 2 == 0)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
-                    }
-                    else
-                    {
-                        // Wide: show all hour labels
-                        labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
-                    }
-                    
-                    System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[i]}");
-                }
-
-                // Determine a good Y-axis maximum based on the actual data
-                double yAxisMax = maxValue;
-                if (yAxisMax < 0.005) yAxisMax = 0.01;  // Very small values
-                else if (yAxisMax < 0.05) yAxisMax = 0.1;  // Small values
-                else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
-                else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
-                
-                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
-
-                // Create the line series with system accent color
-                var lineSeries = new LineSeries<double>
-                {
-                    Values = values,
-                    Fill = null,
-                    GeometrySize = 4, // Add small data points for better visibility
-                    Stroke = new SolidColorPaint(seriesColor, 2.5f), // Use system accent color with slightly thicker line
-                    GeometryStroke = new SolidColorPaint(seriesColor, 2), // Match stroke color
-                    GeometryFill = new SolidColorPaint(SKColors.White), // White fill for points
-                    Name = "Usage"
-                };
-
-                // Set up the axes with improved contrast
-                UsageChartLive.XAxes = new Axis[]
-                {
-                    new Axis
-                    {
-                        Labels = labels,
-                        LabelsRotation = useShortLabels ? 0 : 45, // Rotate labels when space is limited
-                        ForceStepToMin = true,
-                        MinStep = 1,
-                        TextSize = 11, // Slightly larger text
-                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
-                    }
-                };
-
-                UsageChartLive.YAxes = new Axis[]
-                {
-                    new Axis
-                    {
-                        Name = "Hours",
-                        NamePaint = new SolidColorPaint(axisColor),
-                        NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(axisColor),
-                        TextSize = 11, // Slightly larger text
-                        MinLimit = 0,
-                        MaxLimit = yAxisMax,
-                        ForceStepToMin = true,
-                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
-                        Labeler = FormatHoursForYAxis,
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
-                    }
-                };
-
-                // Update the chart with new series
-                UsageChartLive.Series = new ISeries[] { lineSeries };
-                
-                System.Diagnostics.Debug.WriteLine("Hourly chart updated with values");
-            }
-            else // Daily view
-            {
-                System.Diagnostics.Debug.WriteLine("Building DAILY chart");
-                
-                int daysToShow = 7;
-                if (_currentTimePeriod == TimePeriod.Daily)
-                    daysToShow = 1;
-                else if (_currentTimePeriod == TimePeriod.Weekly)
-                    daysToShow = 7;
-                
-                System.Diagnostics.Debug.WriteLine($"Days to show for daily chart: {daysToShow}");
-
-                var values = new List<double>();
-                var labels = new List<string>();
-                
-                DateTime currentDate = DateTime.Now.Date;
-                DateTime startDate = _selectedDate.Date.AddDays(-(daysToShow - 1));
-
-                for (int i = 0; i < daysToShow; i++)
-                {
-                    DateTime date = startDate.AddDays(i);
-                    double totalHours = 0;
-                    
-                    // For today's date, sum up records from _usageRecords
-                    if (date.Date == DateTime.Now.Date)
-                    {
-                        foreach (var record in _usageRecords)
-                        {
-                            totalHours += record.Duration.TotalHours;
-                        }
-                    }
-                    else
-                    {
-                        // For other dates, get data from database
-                        if (_databaseService != null)
-                        {
-                            var records = _databaseService.GetAggregatedRecordsForDate(date);
-                            foreach (var record in records)
-                            {
-                                totalHours += record.Duration.TotalHours;
-                            }
-                        }
-                    }
-                    
-                    values.Add(totalHours);
-                    
-                    // Adjust label format based on window size and number of days
-                    bool useShortLabels = UsageChartLive.ActualWidth < 500 || daysToShow > 10;
-                    
-                    // For monthly view with many days, we skip some labels to avoid overcrowding
-                    if (daysToShow > 15 && i % 3 != 0 && i != daysToShow - 1)
-                    {
-                        labels.Add(""); // Skip some labels for monthly view
-                    }
-                    else
-                    {
-                        labels.Add(date.ToString(useShortLabels ? "d" : "MM/dd"));
-                    }
-                    
-                    System.Diagnostics.Debug.WriteLine($"Date {date:MM/dd}: {totalHours:F4} hours");
-                }
-                
-                // Check if all values are zero
-                bool allZero = true;
-                double maxValue = 0;
-                foreach (var value in values)
-                {
-                    if (value > 0.0001)
-                    {
-                        allZero = false;
-                    }
-                    maxValue = Math.Max(maxValue, value);
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"All values zero? {allZero}, Max value: {maxValue:F4}");
-                
-                // If all values are zero, add a tiny value to the current day to make the chart visible
-                if (allZero || maxValue < 0.001)
-                {
-                    int lastIndex = values.Count - 1;
-                    values[lastIndex] = 0.001; // Add a tiny value
-                    System.Diagnostics.Debug.WriteLine("Added tiny value to current day");
-                }
-                
-                // Determine a good Y-axis maximum based on the actual data
-                double yAxisMax = maxValue;
-                if (yAxisMax < 0.005) yAxisMax = 0.01;  // Very small values
-                else if (yAxisMax < 0.05) yAxisMax = 0.1;  // Small values
-                else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
-                else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
-                
-                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
-
-                // Create semi-transparent color for fill
-                var fillColor = seriesColor.WithAlpha(180); // 70% opacity
-
-                // Create the column series with system accent color
-                var columnSeries = new ColumnSeries<double>
-                {
-                    Values = values,
-                    Fill = new SolidColorPaint(fillColor),
-                    Stroke = new SolidColorPaint(seriesColor, 1),
-                    Name = "Usage",
-                    IgnoresBarPosition = false,
-                    Padding = 2 // Add small padding between bars
-                };
-
-                // Determine rotation angle based on number of days and window width
-                int rotationAngle = 0;
-                if (daysToShow > 10 || UsageChartLive.ActualWidth < 600)
-                {
-                    rotationAngle = 45; // Rotate labels for better spacing
-                }
-
-                // Set up the axes with improved contrast
-                UsageChartLive.XAxes = new Axis[]
-                {
-                    new Axis
-                    {
-                        Labels = labels,
-                        LabelsRotation = rotationAngle,
-                        ForceStepToMin = true,
-                        MinStep = 1,
-                        TextSize = 11, // Slightly larger text
-                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
-                    }
-                };
-
-                UsageChartLive.YAxes = new Axis[]
-                {
-                    new Axis
-                    {
-                        Name = "Hours",
-                        NamePaint = new SolidColorPaint(axisColor),
-                        NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(axisColor),
-                        TextSize = 11, // Slightly larger text
-                        MinLimit = 0,
-                        MaxLimit = yAxisMax,
-                        ForceStepToMin = true,
-                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
-                        Labeler = FormatHoursForYAxis,
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
-                    }
-                };
-
-                // Update the chart with new series
-                UsageChartLive.Series = new ISeries[] { columnSeries };
-                
-                System.Diagnostics.Debug.WriteLine("Daily chart updated with values");
-            }
-            
-            // Set additional chart properties for better appearance
-            UsageChartLive.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
-            UsageChartLive.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
-            
-            System.Diagnostics.Debug.WriteLine($"Chart updated with {UsageChartLive.Series?.Count() ?? 0} series");
-            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart COMPLETED ===");
-        }
-
-        // Helper methods for chart formatting
-        private string FormatTimeSpanForChart(TimeSpan time)
-        {
-            if (time.TotalDays >= 1)
-            {
-                return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";
-            }
-            else if (time.TotalHours >= 1)
-            {
-                return $"{(int)time.TotalHours}h {time.Minutes}m";
-            }
-            else
-            {
-                return $"{(int)time.TotalMinutes}m";
-            }
-        }
-
-        private string FormatHoursForYAxis(double value)
-        {
-            var time = TimeSpan.FromHours(value);
-            
-            if (time.TotalMinutes < 1)
-            {
-                // Show seconds for very small values
-                return $"{time.TotalSeconds:F0}s";
-            }
-            else if (time.TotalHours < 1)
-            {
-                // Show only minutes for less than an hour
-                return $"{time.TotalMinutes:F0}m";
-            }
-            else
-            {
-                // Just show hour value without minutes for cleaner display
-                return $"{Math.Floor(time.TotalHours)}h";
-            }
-        }
-
-        private void TimePeriodSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (TimePeriodSelector.SelectedIndex >= 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"Time period changed from {_currentTimePeriod} to {(TimePeriod)TimePeriodSelector.SelectedIndex}");
-                
-                _currentTimePeriod = (TimePeriod)TimePeriodSelector.SelectedIndex;
-                
-                // Keep the same selected date when switching views
-                DateTime dateToLoad = _selectedDate;
-                
-                // Adjust chart view mode automatically based on time period
-                if (_currentTimePeriod == TimePeriod.Daily)
-                {
-                    // For Daily view, only show hourly chart
-                    _currentChartViewMode = ChartViewMode.Hourly;
-                }
-                else // Weekly
-                {
-                    // For Weekly view, only show daily chart
-                    _currentChartViewMode = ChartViewMode.Daily;
-                }
-                
-                // Update UI safely using DispatcherQueue
-                DispatcherQueue.TryEnqueue(() => {
-                    // Update the view mode label
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = _currentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
-                    }
-                });
-                
-                // Always reload data when the time period changes
-                LoadRecordsForDate(dateToLoad);
-            }
+            // Update the chart time display
+            ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
         }
 
         private void StopButton_Click(object sender, RoutedEventArgs e)
@@ -1806,22 +1357,7 @@ namespace ScreenTimeTracker
         
         private string FormatTimeSpan(TimeSpan time)
         {
-            if (time.TotalDays >= 1)
-            {
-                return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";
-            }
-            else if (time.TotalHours >= 1)
-            {
-                return $"{(int)time.TotalHours}h {time.Minutes}m";
-            }
-            else if (time.TotalMinutes >= 1)
-            {
-                return $"{(int)time.TotalMinutes}m {time.Seconds}s";
-            }
-            else
-            {
-                return $"{time.Seconds}s";
-            }
+            return ChartHelper.FormatTimeSpan(time);
         }
 
         // New method to handle initialization after window is loaded
@@ -1836,6 +1372,7 @@ namespace ScreenTimeTracker
                 
                 // Set today's date and update button text
                 _selectedDate = DateTime.Today;
+                _currentTimePeriod = TimePeriod.Daily; // Default to daily view
                 UpdateDatePickerButtonText();
                 
                 // Set the selected date display
@@ -1859,31 +1396,16 @@ namespace ScreenTimeTracker
                 // Clean up system processes that shouldn't be tracked
                 CleanupSystemProcesses();
                 
-                // Set the initial chart view mode based on the current time period
-                if (_currentTimePeriod == TimePeriod.Daily)
-                {
-                    _currentChartViewMode = ChartViewMode.Hourly;
-                    
-                    // Update view mode label
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Hourly View";
-                        }
-                    });
-                }
-                else // Weekly
-                {
-                    _currentChartViewMode = ChartViewMode.Daily;
-                    
-                    // Update view mode label
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Daily View";
-                        }
-                    });
-                }
+                // Set the initial chart view mode
+                _currentChartViewMode = ChartViewMode.Hourly;
+                
+                // Update view mode label
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Hourly View";
+                    }
+                });
                 
                 // Start tracking automatically
                 StartTracking();
@@ -1964,7 +1486,7 @@ namespace ScreenTimeTracker
             try
             {
                 IntPtr windowHandle = WindowNative.GetWindowHandle(this);
-                Microsoft.UI.WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+                Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
                 _appWindow = AppWindow.GetFromWindowId(windowId);
                 
                 if (_appWindow != null)
@@ -2075,34 +1597,17 @@ namespace ScreenTimeTracker
         // Add a method to force a chart refresh - useful for debugging and ensuring chart gets updated
         private void ForceChartRefresh()
         {
-            System.Diagnostics.Debug.WriteLine("Force refreshing chart...");
-            
-            // Log the current state of data
-            System.Diagnostics.Debug.WriteLine($"Current records in collection: {_usageRecords.Count}");
-            if (_usageRecords.Count > 0)
-            {
-                System.Diagnostics.Debug.WriteLine("First 3 records:");
-                foreach (var record in _usageRecords.Take(3))
-                {
-                    System.Diagnostics.Debug.WriteLine($"  - {record.ProcessName}: {record.Duration.TotalMinutes:F1}m, Start={record.StartTime}");
-                }
-            }
-            
-            // Manually clear and rebuild the chart
-            if (UsageChartLive != null)
-            {
-                // First clear the chart
-                UsageChartLive.Series = new ISeries[] { };
+            // Call the ChartHelper method to force refresh the chart
+            TimeSpan totalTime = ChartHelper.ForceChartRefresh(
+                UsageChartLive, 
+                _usageRecords, 
+                _currentChartViewMode, 
+                _currentTimePeriod, 
+                _selectedDate, 
+                _selectedEndDate);
                 
-                // Then update it
-                UpdateUsageChart();
-                
-                System.Diagnostics.Debug.WriteLine("Chart refresh completed");
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine("ERROR: UsageChartLive is null, cannot refresh chart");
-            }
+            // Update the chart time display
+            ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
         }
 
         private void DatePickerButton_Click(object sender, RoutedEventArgs e)
@@ -2116,62 +1621,65 @@ namespace ScreenTimeTracker
             {
                 // Ensure XamlRoot is set (in case it was lost)
                 _datePickerPopup.XamlRoot = Content.XamlRoot;
+                
+                // When reopening, update the selected date in the calendar
+                if (_datePickerPopup.Child is Grid rootGrid)
+                {
+                    // Find the calendar and date display
+                    var calendar = rootGrid.Children.OfType<CalendarView>().FirstOrDefault();
+                    var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
+                    var dateDisplayText = dateDisplayBorder?.Child as TextBlock;
+                    
+                    if (calendar != null)
+                    {
+                        // Clear previous selection
+                        calendar.SelectedDates.Clear();
+                        
+                        // Set the current selected date
+                        calendar.SelectedDates.Add(new DateTimeOffset(_selectedDate));
+                        
+                        // Reset button highlighting
+                        ResetQuickSelectButtonStyles();
+                        
+                        // Update the quick selection button highlighting
+                        var today = DateTime.Today;
+                        var yesterday = today.AddDays(-1);
+                        
+                        if (_selectedDate == today && !_isDateRangeSelected)
+                        {
+                            HighlightQuickSelectButton("Today");
+                            if (dateDisplayText != null)
+                                dateDisplayText.Text = "Today";
+                        }
+                        else if (_selectedDate == yesterday && !_isDateRangeSelected)
+                        {
+                            HighlightQuickSelectButton("Yesterday");
+                            if (dateDisplayText != null)
+                                dateDisplayText.Text = "Yesterday";
+                        }
+                        else if (_isDateRangeSelected && _selectedEndDate.HasValue &&
+                                 _selectedDate == today.AddDays(-6) && _selectedEndDate.Value == today)
+                        {
+                            HighlightQuickSelectButton("Last 7 Days");
+                            if (dateDisplayText != null)
+                                dateDisplayText.Text = "Last 7 days";
+                        }
+                        else
+                        {
+                            // Regular date or unrecognized preset
+                            if (dateDisplayText != null)
+                            {
+                                dateDisplayText.Text = _isDateRangeSelected && _selectedEndDate.HasValue ? 
+                                    $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}" : 
+                                    _selectedDate.ToString("MMM dd");
+                            }
+                        }
+                    }
+                }
             }
 
-            if (_datePickerPopup != null && _customCalendarView != null)
+            if (_datePickerPopup != null)
             {
-                // Update calendar view selection
-                _customCalendarView.SelectedDates.Clear();
-                _customCalendarView.SelectedDates.Add(_selectedDate);
-                
-                // Reset all button styles
-                ResetQuickSelectButtonStyles();
-                
-                // Highlight the appropriate quick selection button based on current selection
-                if (_selectedEndDate.HasValue)
-                {
-                    // Date range is selected
-                    var today = DateTime.Today;
-                    var yesterday = today.AddDays(-1);
-                    var sevenDaysAgo = today.AddDays(-6);
-                    var thirtyDaysAgo = today.AddDays(-29);
-                    var firstDayOfMonth = new DateTime(today.Year, today.Month, 1);
-                    
-                    // Find the matching button and highlight it
-                    if (_selectedDate == today && _selectedEndDate == today)
-                    {
-                        HighlightQuickSelectButton("Today");
-                    }
-                    else if (_selectedDate == yesterday && _selectedEndDate == yesterday)
-                    {
-                        HighlightQuickSelectButton("Yesterday");
-                    }
-                    else if (_selectedDate == sevenDaysAgo && _selectedEndDate == today)
-                    {
-                        HighlightQuickSelectButton("Last 7 days");
-                    }
-                    else if (_selectedDate == thirtyDaysAgo && _selectedEndDate == today)
-                    {
-                        HighlightQuickSelectButton("Last 30 days");
-                    }
-                    else if (_selectedDate == firstDayOfMonth && _selectedEndDate == today)
-                    {
-                        HighlightQuickSelectButton("This month");
-                    }
-                }
-                else
-                {
-                    // Single date is selected
-                    if (_selectedDate == DateTime.Today)
-                    {
-                        HighlightQuickSelectButton("Today");
-                    }
-                    else if (_selectedDate == DateTime.Today.AddDays(-1))
-                    {
-                        HighlightQuickSelectButton("Yesterday");
-                    }
-                }
-                
                 // Position the popup near the button
                 var button = sender as Button;
                 if (button != null)
@@ -2191,499 +1699,126 @@ namespace ScreenTimeTracker
         
         private void CreateDatePickerPopup()
         {
-            // Create a new popup
-            _datePickerPopup = new Popup();
-            
-            // Set the XamlRoot property to connect the popup to the UI tree
-            _datePickerPopup.XamlRoot = Content.XamlRoot;
-            
-            // Create the root grid for the popup content
-            var rootGrid = new Grid
+            try
             {
-                Background = Application.Current.Resources["ApplicationPageBackgroundThemeBrush"] as Brush,
-                BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(20),
-                Width = 450
-            };
-            
-            // Set up row definitions
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Header
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(12) }); // Spacing
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Quick selection buttons
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(12) }); // Spacing
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Calendar
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(16) }); // Spacing
-            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Action buttons
-            
-            // Create header text
-            var headerText = new TextBlock
-            {
-                Text = "Select date range",
-                Style = Application.Current.Resources["BodyStrongTextBlockStyle"] as Style,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 0, 0, 0)
-            };
-            Grid.SetRow(headerText, 0);
-            rootGrid.Children.Add(headerText);
-            
-            // Create quick selection buttons in a more compact layout
-            var buttonsStackPanel = new StackPanel
-            {
-                Orientation = Orientation.Vertical,
-                Spacing = 8
-            };
-            Grid.SetRow(buttonsStackPanel, 2);
-            
-            // Create two rows of buttons
-            var topRowPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Margin = new Thickness(0, 0, 0, 8)
-            };
-            
-            var bottomRowPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            
-            // Create button style with smaller padding
-            var compactButtonStyle = new Style(typeof(Button));
-            compactButtonStyle.Setters.Add(new Setter(Button.PaddingProperty, new Thickness(8, 4, 8, 4)));
-            compactButtonStyle.Setters.Add(new Setter(Button.MinHeightProperty, 32.0));
-            
-            // Create accent button style with smaller padding
-            var compactAccentButtonStyle = new Style(typeof(Button), Application.Current.Resources["AccentButtonStyle"] as Style);
-            compactAccentButtonStyle.Setters.Add(new Setter(Button.PaddingProperty, new Thickness(8, 4, 8, 4)));
-            compactAccentButtonStyle.Setters.Add(new Setter(Button.MinHeightProperty, 32.0));
-            
-            // Create Today and Yesterday buttons in the top row
-            _todayButton = new Button
-            {
-                Content = "Today",
-                Style = compactAccentButtonStyle,
-                MinWidth = 100
-            };
-            _todayButton.Click += QuickSelect_Today_Click;
-            topRowPanel.Children.Add(_todayButton);
-            
-            _yesterdayButton = new Button
-            {
-                Content = "Yesterday",
-                Style = compactButtonStyle,
-                MinWidth = 100
-            };
-            _yesterdayButton.Click += QuickSelect_Yesterday_Click;
-            topRowPanel.Children.Add(_yesterdayButton);
-            
-            // Create Last 7 days, Last 30 days and This month buttons in the bottom row
-            _last7DaysButton = new Button
-            {
-                Content = "Last 7 days",
-                Style = compactButtonStyle,
-                MinWidth = 100
-            };
-            _last7DaysButton.Click += QuickSelect_Last7Days_Click;
-            bottomRowPanel.Children.Add(_last7DaysButton);
-            
-            _last30DaysButton = new Button
-            {
-                Content = "Last 30 days",
-                Style = compactButtonStyle,
-                MinWidth = 100
-            };
-            _last30DaysButton.Click += QuickSelect_Last30Days_Click;
-            bottomRowPanel.Children.Add(_last30DaysButton);
-            
-            _thisMonthButton = new Button
-            {
-                Content = "This month",
-                Style = compactButtonStyle,
-                MinWidth = 100
-            };
-            _thisMonthButton.Click += QuickSelect_ThisMonth_Click;
-            bottomRowPanel.Children.Add(_thisMonthButton);
-            
-            // Add rows to the stack panel
-            buttonsStackPanel.Children.Add(topRowPanel);
-            buttonsStackPanel.Children.Add(bottomRowPanel);
-            
-            rootGrid.Children.Add(buttonsStackPanel);
-            
-            // Create calendar view with better range selection
-            _customCalendarView = new CalendarView
-            {
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                SelectionMode = CalendarViewSelectionMode.Multiple,
-                MinHeight = 320
-            };
-            
-            // Add handler for day item changing to visualize the range
-            _customCalendarView.DayItemChanging += CustomCalendarView_DayItemChanging;
-            _customCalendarView.SelectedDatesChanged += CustomCalendarView_SelectedDatesChanged;
-            
-            // Set selection hints
-            var selectionHint = new TextBlock
-            {
-                Text = "Tip: Click multiple dates to select a range",
-                Style = Application.Current.Resources["CaptionTextBlockStyle"] as Style,
-                Opacity = 0.7,
-                Margin = new Thickness(0, 4, 0, 0)
-            };
-            
-            var calendarContainer = new StackPanel();
-            calendarContainer.Children.Add(_customCalendarView);
-            calendarContainer.Children.Add(selectionHint);
-            
-            Grid.SetRow(calendarContainer, 4);
-            rootGrid.Children.Add(calendarContainer);
-            
-            // Create action buttons grid
-            var actionsGrid = new Grid();
-            actionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            actionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetRow(actionsGrid, 6);
-            
-            // Create Cancel button
-            var cancelButton = new Button
-            {
-                Content = "Cancel",
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            cancelButton.Click += DatePickerCancel_Click;
-            Grid.SetColumn(cancelButton, 0);
-            actionsGrid.Children.Add(cancelButton);
-            
-            // Create Done button
-            var doneButton = new Button
-            {
-                Content = "Done",
-                Style = Application.Current.Resources["AccentButtonStyle"] as Style
-            };
-            doneButton.Click += DatePickerDone_Click;
-            Grid.SetColumn(doneButton, 1);
-            actionsGrid.Children.Add(doneButton);
-            
-            rootGrid.Children.Add(actionsGrid);
-            
-            // Set the popup content
-            _datePickerPopup.Child = rootGrid;
-        }
-        
-        private void HighlightQuickSelectButton(string buttonContent)
-        {
-            if (_todayButton != null && buttonContent == "Today")
-                _todayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-            else if (_yesterdayButton != null && buttonContent == "Yesterday")
-                _yesterdayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-            else if (_last7DaysButton != null && buttonContent == "Last 7 days")
-                _last7DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-            else if (_last30DaysButton != null && buttonContent == "Last 30 days")
-                _last30DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-            else if (_thisMonthButton != null && buttonContent == "This month")
-                _thisMonthButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-        }
-        
-        private void ResetQuickSelectButtonStyles()
-        {
-            var defaultStyle = Application.Current.Resources["DefaultButtonStyle"] as Style;
-            
-            if (_todayButton != null)
-                _todayButton.Style = defaultStyle;
-            if (_yesterdayButton != null)
-                _yesterdayButton.Style = defaultStyle;
-            if (_last7DaysButton != null)
-                _last7DaysButton.Style = defaultStyle;
-            if (_last30DaysButton != null)
-                _last30DaysButton.Style = defaultStyle;
-            if (_thisMonthButton != null)
-                _thisMonthButton.Style = defaultStyle;
-        }
-        
-        private void QuickSelect_Today_Click(object sender, RoutedEventArgs e)
-        {
-            _selectedDate = DateTime.Today;
-            _selectedEndDate = null;
-            _isDateRangeSelected = false;
-            
-            if (_customCalendarView != null)
-            {
-                _customCalendarView.SelectedDates.Clear();
-                _customCalendarView.SelectedDates.Add(_selectedDate);
-            }
-            
-            LoadRecordsForDate(_selectedDate);
-            UpdateDatePickerButtonText();
-            HighlightQuickSelectButton("Today");
-            
-            // Set time period to Daily
-            if (TimePeriodSelector.SelectedIndex != (int)TimePeriod.Daily)
-            {
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Daily;
-            }
-            else
-            {
-                // Force refresh since the selection changed event won't fire
-                UpdateChartViewMode();
-                LoadRecordsForDate(_selectedDate);
-                UpdateUsageChart();
-            }
-            
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
-        
-        private void QuickSelect_Yesterday_Click(object sender, RoutedEventArgs e)
-        {
-            _selectedDate = DateTime.Today.AddDays(-1);
-            _selectedEndDate = null;
-            _isDateRangeSelected = false;
-            
-            if (_customCalendarView != null)
-            {
-                _customCalendarView.SelectedDates.Clear();
-                _customCalendarView.SelectedDates.Add(_selectedDate);
-            }
-            
-            LoadRecordsForDate(_selectedDate);
-            UpdateDatePickerButtonText();
-            HighlightQuickSelectButton("Yesterday");
-            
-            // Set time period to Daily
-            if (TimePeriodSelector.SelectedIndex != (int)TimePeriod.Daily)
-            {
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Daily;
-            }
-            else
-            {
-                // Force refresh since the selection changed event won't fire
-                UpdateChartViewMode();
-                LoadRecordsForDate(_selectedDate);
-                UpdateUsageChart();
-            }
-            
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
-        
-        private void QuickSelect_Last7Days_Click(object sender, RoutedEventArgs e)
-        {
-            _selectedEndDate = DateTime.Today;
-            _selectedDate = DateTime.Today.AddDays(-6);
-            _isDateRangeSelected = true;
-            
-            if (_customCalendarView != null)
-            {
-                _customCalendarView.SelectedDates.Clear();
-                for (var date = _selectedDate; date <= _selectedEndDate; date = date.AddDays(1))
-                {
-                    _customCalendarView.SelectedDates.Add(date);
-                }
-            }
-            
-            LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-            UpdateDatePickerButtonText();
-            HighlightQuickSelectButton("Last 7 Days");
-            
-            // Set time period to Weekly
-            if (TimePeriodSelector.SelectedIndex != (int)TimePeriod.Weekly)
-            {
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Weekly;
-            }
-            else
-            {
-                // Force refresh since the selection changed event won't fire
-                UpdateChartViewMode();
-                LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                UpdateUsageChart();
-            }
-            
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
-        
-        private void QuickSelect_Last30Days_Click(object sender, RoutedEventArgs e)
-        {
-            _selectedEndDate = DateTime.Today;
-            _selectedDate = DateTime.Today.AddDays(-29);
-            _isDateRangeSelected = true;
-            
-            if (_customCalendarView != null)
-            {
-                _customCalendarView.SelectedDates.Clear();
-                for (var date = _selectedDate; date <= _selectedEndDate; date = date.AddDays(1))
-                {
-                    _customCalendarView.SelectedDates.Add(date);
-                }
-            }
-            
-            LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-            UpdateDatePickerButtonText();
-            HighlightQuickSelectButton("Last 30 Days");
-            
-            // Set time period to Weekly
-            if (TimePeriodSelector.SelectedIndex != (int)TimePeriod.Weekly)
-            {
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Weekly;
-            }
-            else
-            {
-                // Force refresh since the selection changed event won't fire
-                UpdateChartViewMode();
-                LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                UpdateUsageChart();
-            }
-            
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
-        
-        private void QuickSelect_ThisMonth_Click(object sender, RoutedEventArgs e)
-        {
-            var today = DateTime.Today;
-            _selectedDate = new DateTime(today.Year, today.Month, 1);
-            _selectedEndDate = today;
-            _isDateRangeSelected = true;
-            
-            if (_customCalendarView != null)
-            {
-                _customCalendarView.SelectedDates.Clear();
-                for (var date = _selectedDate; date <= _selectedEndDate; date = date.AddDays(1))
-                {
-                    _customCalendarView.SelectedDates.Add(date);
-                }
-            }
-            
-            LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-            UpdateDatePickerButtonText();
-            HighlightQuickSelectButton("This Month");
-            
-            // Set time period to Weekly
-            if (TimePeriodSelector.SelectedIndex != (int)TimePeriod.Weekly)
-            {
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Weekly;
-            }
-            else
-            {
-                // Force refresh since the selection changed event won't fire
-                UpdateChartViewMode();
-                LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                UpdateUsageChart();
-            }
-            
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
-        
-        private void CustomCalendarView_DayItemChanging(CalendarView sender, CalendarViewDayItemChangingEventArgs args)
-        {
-            // Only process phase 1 (first phase)
-            if (args.Phase == 0)
-            {
-                // Register for future phases
-                args.RegisterUpdateCallback(CustomCalendarView_DayItemChanging);
-            }
-            else if (args.Phase == 1 && _customCalendarView != null)
-            {
-                // Check if this date is between the first and last selected dates (but not one of them)
-                if (_customCalendarView.SelectedDates.Count >= 2)
-                {
-                    var sortedDates = _customCalendarView.SelectedDates.OrderBy(d => d.Date).ToList();
-                    var firstDate = sortedDates.First().Date;
-                    var lastDate = sortedDates.Last().Date;
-                    
-                    // Check if this date is in the range between first and last
-                    if (args.Item.Date.Date > firstDate && args.Item.Date.Date < lastDate)
-                    {
-                        // Mark dates in the range with a lighter selection visual
-                        args.Item.IsInRange = true;
-                    }
-                }
-            }
-        }
-        
-        private void CustomCalendarView_SelectedDatesChanged(CalendarView sender, CalendarViewSelectedDatesChangedEventArgs args)
-        {
-            if (_customCalendarView == null) return;
-            
-            // Handle date selection for ranges
-            if (_customCalendarView.SelectedDates.Count >= 2)
-            {
-                // Get all selected dates sorted
-                var sortedDates = _customCalendarView.SelectedDates.OrderBy(d => d.Date).ToList();
+                // Create a new popup
+                _datePickerPopup = new Popup();
                 
-                // Use the first and last dates as range boundaries
-                _selectedDate = sortedDates.First().Date;
-                _selectedEndDate = sortedDates.Last().Date;
-                _isDateRangeSelected = true;
+                // Set the XamlRoot property to connect the popup to the UI tree
+                _datePickerPopup.XamlRoot = Content.XamlRoot;
                 
-                // If we have exactly two dates, ensure all dates in between are marked as in range
-                if (sortedDates.Count == 2)
+                // Create the root grid for the popup content
+                var rootGrid = new Grid
                 {
-                    // The calendar will automatically connect these as a range
-                    System.Diagnostics.Debug.WriteLine($"Date range selected: {_selectedDate:d} to {_selectedEndDate:d}");
-                }
+                    Background = Application.Current.Resources["ApplicationPageBackgroundThemeBrush"] as Brush,
+                    BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(16),
+                    Width = 300,
+                    MaxHeight = 480
+                };
                 
-                // Reset quick selection button styles
-                ResetQuickSelectButtonStyles();
+                // Set up row definitions
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Quick selection buttons 
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(12) }); // Spacing
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Date display
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // Spacing
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Calendar
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(16) }); // Spacing
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Action buttons
                 
-                // Check if the selected range matches any of our predefined ranges
-                var today = DateTime.Today;
-                var yesterday = today.AddDays(-1);
-                var sevenDaysAgo = today.AddDays(-6);
-                var thirtyDaysAgo = today.AddDays(-29);
-                var firstDayOfMonth = new DateTime(today.Year, today.Month, 1);
+                // Create quick selection buttons in a simple horizontal grid layout
+                var buttonsGrid = new StackPanel
+                { 
+                    Orientation = Orientation.Vertical,
+                    Spacing = 8
+                };
+                Grid.SetRow(buttonsGrid, 0);
                 
-                if (_selectedDate == today && _selectedEndDate == today)
-                {
-                    HighlightQuickSelectButton("Today");
-                }
-                else if (_selectedDate == yesterday && _selectedEndDate == yesterday)
-                {
-                    HighlightQuickSelectButton("Yesterday");
-                }
-                else if (_selectedDate == sevenDaysAgo && _selectedEndDate == today)
-                {
-                    HighlightQuickSelectButton("Last 7 Days");
-                }
-                else if (_selectedDate == thirtyDaysAgo && _selectedEndDate == today)
-                {
-                    HighlightQuickSelectButton("Last 30 Days");
-                }
-                else if (_selectedDate == firstDayOfMonth && _selectedEndDate == today)
-                {
-                    HighlightQuickSelectButton("This Month");
-                }
-            }
-            else if (_customCalendarView.SelectedDates.Count == 1)
-            {
-                // Single date selection
-                _selectedDate = _customCalendarView.SelectedDates[0].Date;
-                _selectedEndDate = null;
-                _isDateRangeSelected = false;
+                // Create first row of buttons (Today, Yesterday)
+                var topButtonsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
                 
-                // Reset quick selection button styles
-                ResetQuickSelectButtonStyles();
+                // Create Today button
+                _todayButton = new Button
+                {
+                    Content = "Today",
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Width = 125,
+                    Style = Application.Current.Resources["AccentButtonStyle"] as Style
+                };
+                _todayButton.Click += QuickSelect_Today_Click;
+                topButtonsRow.Children.Add(_todayButton);
                 
-                // Check if the selected date matches any of our predefined dates
+                // Create Yesterday button
+                _yesterdayButton = new Button
+                {
+                    Content = "Yesterday",
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Width = 125
+                };
+                _yesterdayButton.Click += QuickSelect_Yesterday_Click;
+                topButtonsRow.Children.Add(_yesterdayButton);
+                
+                buttonsGrid.Children.Add(topButtonsRow);
+                
+                // Create second row with just Last 7 days button
+                _last7DaysButton = new Button
+                {
+                    Content = "Last 7 days",
+                    HorizontalAlignment = HorizontalAlignment.Stretch
+                };
+                _last7DaysButton.Click += QuickSelect_Last7Days_Click;
+                buttonsGrid.Children.Add(_last7DaysButton);
+                
+                rootGrid.Children.Add(buttonsGrid);
+                
+                // Create date display text block to show selected date/range
+                var dateDisplayBorder = new Border
+                {
+                    Background = Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"] as Brush,
+                    BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(8),
+                    Margin = new Thickness(0, 0, 0, 0)
+                };
+                
+                var dateDisplayText = new TextBlock
+                {
+                    Text = _isDateRangeSelected && _selectedEndDate.HasValue ? 
+                           $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}" : 
+                           _selectedDate.ToString("MMM dd"),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Style = Application.Current.Resources["BodyStrongTextBlockStyle"] as Style
+                };
+                
+                dateDisplayBorder.Child = dateDisplayText;
+                Grid.SetRow(dateDisplayBorder, 2);
+                rootGrid.Children.Add(dateDisplayBorder);
+                
+                // Create a simple Calendar control
+                var calendar = new CalendarView
+                {
+                    SelectionMode = CalendarViewSelectionMode.Single,
+                    IsTodayHighlighted = true,
+                    FirstDayOfWeek = Windows.Globalization.DayOfWeek.Sunday,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    // Disable future dates by setting MaxDate to today
+                    MaxDate = DateTimeOffset.Now
+                };
+                
+                // Set initial selection based on current selected date
                 var today = DateTime.Today;
                 var yesterday = today.AddDays(-1);
                 
+                // Clear any default selection
+                calendar.SelectedDates.Clear();
+                
+                // Add the current selected date
+                calendar.SelectedDates.Add(new DateTimeOffset(_selectedDate));
+                
+                // Update button highlighting based on current selection
                 if (_selectedDate == today)
                 {
                     HighlightQuickSelectButton("Today");
@@ -2692,6 +1827,328 @@ namespace ScreenTimeTracker
                 {
                     HighlightQuickSelectButton("Yesterday");
                 }
+                else if (_selectedDate == today.AddDays(-6) && _selectedEndDate == today)
+                {
+                    HighlightQuickSelectButton("Last 7 Days");
+                }
+                else
+                {
+                    // Reset if none match
+                    ResetQuickSelectButtonStyles();
+                }
+                
+                // Handle date selection changes
+                calendar.SelectedDatesChanged += (s, e) =>
+                {
+                    try
+                    {
+                        if (calendar.SelectedDates.Count > 0)
+                        {
+                            var selectedDate = calendar.SelectedDates.First().Date;
+                            _selectedDate = selectedDate;
+                            _selectedEndDate = null;  // Clear end date since we're in single mode
+                            _isDateRangeSelected = false;
+                            
+                            dateDisplayText.Text = _selectedDate.ToString("MMM dd");
+                            
+                            // Reset quick selection button styles
+                            ResetQuickSelectButtonStyles();
+                            
+                            // Check if the selection matches any preset
+                            var currentToday = DateTime.Today;
+                            var currentYesterday = currentToday.AddDays(-1);
+                            
+                            if (_selectedDate == currentToday)
+                            {
+                                HighlightQuickSelectButton("Today");
+                            }
+                            else if (_selectedDate == currentYesterday)
+                            {
+                                HighlightQuickSelectButton("Yesterday");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Exception in calendar.SelectedDatesChanged: {ex.Message}");
+                    }
+                };
+                
+                Grid.SetRow(calendar, 4);
+                rootGrid.Children.Add(calendar);
+                
+                // Create action buttons grid
+                var actionsGrid = new Grid();
+                actionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                actionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Grid.SetRow(actionsGrid, 6);
+                
+                // Create Cancel button
+                var cancelButton = new Button
+                {
+                    Content = "Cancel",
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                cancelButton.Click += DatePickerCancel_Click;
+                Grid.SetColumn(cancelButton, 0);
+                actionsGrid.Children.Add(cancelButton);
+                
+                // Create Apply button
+                var applyButton = new Button
+                {
+                    Content = "Apply",
+                    Style = Application.Current.Resources["AccentButtonStyle"] as Style
+                };
+                applyButton.Click += DatePickerDone_Click;
+                Grid.SetColumn(applyButton, 1);
+                actionsGrid.Children.Add(applyButton);
+                
+                rootGrid.Children.Add(actionsGrid);
+                
+                // Set the popup content
+                _datePickerPopup.Child = rootGrid;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in CreateDatePickerPopup: {ex.Message}");
+            }
+        }
+
+        private void HighlightQuickSelectButton(string buttonContent)
+        {
+            ResetQuickSelectButtonStyles();
+
+            try
+            {
+                switch (buttonContent.ToLower())
+                {
+                    case "today":
+                        if (_todayButton != null)
+                            _todayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
+                        break;
+                    case "yesterday":
+                        if (_yesterdayButton != null)
+                            _yesterdayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
+                        break;
+                    case "last 7 days":
+                        if (_last7DaysButton != null)
+                            _last7DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
+                        break;
+                    // Removed Last 30 days and This month cases as these buttons have been removed
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error highlighting button: {ex.Message}");
+            }
+        }
+
+        private void ResetQuickSelectButtonStyles()
+        {
+            try
+            {
+                // Try to get the standard button style, or just create a new default one
+                Style? standardStyle = null;
+                try
+                {
+                    standardStyle = Application.Current.Resources["ButtonStyle"] as Style;
+                }
+                catch
+                {
+                    // Style doesn't exist, use default
+                }
+
+                // If we couldn't get the style, create a new button to get its default style
+                if (standardStyle == null)
+                {
+                    standardStyle = new Button().Style;
+                }
+                
+                if (_todayButton != null && _todayButton.Style != standardStyle)
+                    _todayButton.Style = standardStyle;
+                
+                if (_yesterdayButton != null && _yesterdayButton.Style != standardStyle)
+                    _yesterdayButton.Style = standardStyle;
+                
+                if (_last7DaysButton != null && _last7DaysButton.Style != standardStyle)
+                    _last7DaysButton.Style = standardStyle;
+                
+                // Removed Last 30 days and This month buttons reset
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error resetting button styles: {ex.Message}");
+            }
+        }
+        
+        private void QuickSelect_Today_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Set to today's date
+                _selectedDate = DateTime.Today;
+                _selectedEndDate = null;
+                _isDateRangeSelected = false;
+                
+                // Set time period to Daily for Today
+                _currentTimePeriod = TimePeriod.Daily;
+                
+                // Highlight the Today button and update the UI
+                HighlightQuickSelectButton("Today");
+                UpdateDatePickerButtonText();
+                
+                // Load records for today
+                LoadRecordsForDate(_selectedDate);
+                
+                // Update chart view mode
+                UpdateChartViewMode();
+                
+                // Close the popup if it's open
+                if (_datePickerPopup != null && _datePickerPopup.IsOpen)
+                {
+                    _datePickerPopup.IsOpen = false;
+                    _datePickerPopup = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in QuickSelect_Today_Click: {ex.Message}");
+            }
+        }
+        
+        private void QuickSelect_Yesterday_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Set to yesterday's date
+                _selectedDate = DateTime.Today.AddDays(-1);
+                _selectedEndDate = null;
+                _isDateRangeSelected = false;
+                
+                // Set time period to Daily for Yesterday
+                _currentTimePeriod = TimePeriod.Daily;
+                
+                // Highlight the Yesterday button and update the UI
+                HighlightQuickSelectButton("Yesterday");
+                UpdateDatePickerButtonText();
+                
+                // Load records for yesterday
+                LoadRecordsForDate(_selectedDate);
+                
+                // Update chart view mode
+                UpdateChartViewMode();
+                
+                // Close the popup if it's open
+                if (_datePickerPopup != null && _datePickerPopup.IsOpen)
+                {
+                    _datePickerPopup.IsOpen = false;
+                    _datePickerPopup = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in QuickSelect_Yesterday_Click: {ex.Message}");
+            }
+        }
+        
+        private void QuickSelect_Last7Days_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // For Last 7 days, we'll still use today's date but load a 7-day range
+                _selectedDate = DateTime.Today;
+                DateTime startDate = _selectedDate.AddDays(-6); // Last 7 days includes today
+                
+                // Set time period to Weekly for Last 7 days
+                _currentTimePeriod = TimePeriod.Weekly;
+                
+                // Highlight the Last 7 days button and update the UI
+                HighlightQuickSelectButton("Last 7 Days");
+                UpdateDatePickerButtonText();
+                
+                // Load records for the last 7 days
+                LoadRecordsForDateRange(startDate, _selectedDate);
+                
+                // Update chart view mode
+                UpdateChartViewMode();
+                
+                // Close the popup if it's open
+                if (_datePickerPopup != null && _datePickerPopup.IsOpen)
+                {
+                    _datePickerPopup.IsOpen = false;
+                    _datePickerPopup = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in QuickSelect_Last7Days_Click: {ex.Message}");
+            }
+        }
+        
+        private void QuickSelect_Last30Days_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _selectedEndDate = DateTime.Today;
+                _selectedDate = DateTime.Today.AddDays(-29);
+                _isDateRangeSelected = true;
+                
+                // Set time period to Weekly directly
+                _currentTimePeriod = TimePeriod.Weekly;
+                
+                if (_selectedEndDate.HasValue)
+                {
+                    LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                }
+                
+                UpdateDatePickerButtonText();
+                HighlightQuickSelectButton("Last 30 Days");
+                
+                // Update chart view mode
+                UpdateChartViewMode();
+                
+                if (_datePickerPopup != null)
+                {
+                    _datePickerPopup.IsOpen = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in QuickSelect_Last30Days_Click: {ex.Message}");
+            }
+        }
+        
+        private void QuickSelect_ThisMonth_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var today = DateTime.Today;
+                _selectedDate = new DateTime(today.Year, today.Month, 1);
+                _selectedEndDate = today;
+                _isDateRangeSelected = true;
+                
+                // Set time period to Weekly directly
+                _currentTimePeriod = TimePeriod.Weekly;
+                
+                if (_selectedEndDate.HasValue)
+                {
+                    LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                }
+                
+                UpdateDatePickerButtonText();
+                HighlightQuickSelectButton("This Month");
+                
+                // Update chart view mode
+                UpdateChartViewMode();
+                
+                if (_datePickerPopup != null)
+                {
+                    _datePickerPopup.IsOpen = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in QuickSelect_ThisMonth_Click: {ex.Message}");
             }
         }
         
@@ -2706,55 +2163,87 @@ namespace ScreenTimeTracker
         
         private void DatePickerDone_Click(object sender, RoutedEventArgs e)
         {
-            // Apply the selected date/range and close the popup
-            if (_datePickerPopup != null)
+            try
             {
-                _datePickerPopup.IsOpen = false;
+                if (_datePickerPopup != null)
+                {
+                    _datePickerPopup.IsOpen = false;
+                    _datePickerPopup = null;
+                }
+
+                UpdateDatePickerButtonText();
+
+                // If a date range is selected, load data for range and set to Weekly view
+                if (_isDateRangeSelected && _selectedEndDate.HasValue)
+                {
+                    // For date ranges, automatically use Weekly view
+                    _currentTimePeriod = TimePeriod.Weekly;
+                    LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                }
+                else
+                {
+                    // For single dates, automatically use Daily view
+                    _currentTimePeriod = TimePeriod.Daily;
+                    LoadRecordsForDate(_selectedDate);
+                }
+
+                // Update chart view mode based on selected time period
+                UpdateChartViewMode();
             }
-            
-            // Update the button text to reflect the selected date or range
-            UpdateDatePickerButtonText();
-            
-            // Load records for the selected date/range
-            if (_isDateRangeSelected && _selectedEndDate.HasValue)
+            catch (Exception ex)
             {
-                // For date ranges, we'll use Weekly time period
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Weekly;
-                LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-            }
-            else
-            {
-                // For single dates, use Daily time period
-                TimePeriodSelector.SelectedIndex = (int)TimePeriod.Daily;
-                LoadRecordsForDate(_selectedDate);
+                System.Diagnostics.Debug.WriteLine($"Error in DatePickerDone_Click: {ex.Message}");
             }
         }
         
         private void UpdateDatePickerButtonText()
         {
-            if (_isDateRangeSelected && _selectedEndDate.HasValue)
+            try
             {
-                // Format for date range
-                DatePickerButton.Content = $"{_selectedDate:MM/dd} - {_selectedEndDate:MM/dd}";
+                if (DatePickerButton != null)
+                {
+                    // First check if we're in any of the quick select modes
+                    var today = DateTime.Today;
+                    
+                    if (_selectedDate == today && !_isDateRangeSelected)
+                    {
+                        DatePickerButton.Content = "Today";
+                        return;
+                    }
+                    
+                    if (_selectedDate == today.AddDays(-1) && !_isDateRangeSelected)
+                    {
+                        DatePickerButton.Content = "Yesterday";
+                        return;
+                    }
+                    
+                    // Special case for Last 7 days
+                    if (_selectedDate == today && _isDateRangeSelected && 
+                        _currentTimePeriod == TimePeriod.Weekly)
+                    {
+                        DatePickerButton.Content = "Last 7 days";
+                        return;
+                    }
+                    
+                    // For single date selection
+                    if (!_isDateRangeSelected)
+                    {
+                        DatePickerButton.Content = _selectedDate.ToString("MMM dd");
+                    }
+                    // For date range selection
+                    else if (_selectedEndDate.HasValue)
+                    {
+                        DatePickerButton.Content = $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}";
+                    }
+                }
             }
-            else
+            catch (Exception ex)
             {
-                // Format for single date
-                var today = DateTime.Today;
-                var yesterday = today.AddDays(-1);
-                
-                if (_selectedDate == today)
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateDatePickerButtonText: {ex.Message}");
+                // Set a fallback value
+                if (DatePickerButton != null)
                 {
-                    DatePickerButton.Content = "Today";
-                }
-                else if (_selectedDate == yesterday)
-                {
-                    DatePickerButton.Content = "Yesterday";
-                }
-                else
-                {
-                    // Format single date without year for cleaner display
-                    DatePickerButton.Content = _selectedDate.ToString("MMM d");
+                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
                 }
             }
         }
