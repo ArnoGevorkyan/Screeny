@@ -272,54 +272,67 @@ namespace ScreenTimeTracker.Helpers
                     daysToShow = (selectedEndDate.Value - selectedDate).Days + 1;
                 }
 
+                // Create a dictionary to track the days and their data to prevent duplication
+                var dayData = new Dictionary<DateTime, double>();
+                var dayLabels = new Dictionary<DateTime, string>();
+
+                // Get data for each day in the range
                 for (int i = 0; i < daysToShow; i++)
                 {
                     DateTime date = startDate.AddDays(i);
                     double totalHours = 0;
                     
-                    // For today's date, sum up records from usageRecords
+                    // Calculate total hours for this date from records
                     if (date.Date == DateTime.Now.Date)
                     {
-                        foreach (var record in usageRecords)
+                        // For today, use all records with today's date
+                        foreach (var record in usageRecords.Where(r => r.StartTime.Date == date.Date))
                         {
                             totalHours += record.Duration.TotalHours;
                         }
                     }
                     else
                     {
-                        // For past days, check history in the usageRecords data
-                        // This assumes the records contain historical data
-                        foreach (var record in usageRecords.Where(r => r.StartTime.Date == date))
+                        // For past days, check records with matching date
+                        foreach (var record in usageRecords.Where(r => r.StartTime.Date == date.Date))
                         {
                             totalHours += record.Duration.TotalHours;
                         }
                     }
                     
-                    values.Add(totalHours);
+                    // Store data in dictionary to prevent duplicate entries
+                    dayData[date.Date] = totalHours;
                     
-                    // Format the label based on the date
+                    // Determine appropriate label
+                    string label;
                     if (date.Date == currentDate)
                     {
-                        labels.Add("Today");
+                        label = "Today";
                     }
                     else if (date.Date == currentDate.AddDays(-1))
                     {
-                        labels.Add("Yesterday");
+                        label = "Yesterday";
                     }
                     else
                     {
-                        // Format as day of week for recent dates, or date for older ones
-                        if (currentDate.Subtract(date).TotalDays < 7)
-                        {
-                            labels.Add(date.ToString("ddd"));  // Abbreviated day name (Mon, Tue, etc.)
-                        }
-                        else
-                        {
-                            labels.Add(date.ToString("MMM d"));  // Month and day (Jan 1, etc.)
-                        }
+                        // Use abbreviated day name (Mon, Tue, etc.)
+                        label = date.ToString("ddd");
                     }
                     
-                    System.Diagnostics.Debug.WriteLine($"Day {i} ({date:M/d}): {totalHours:F2} hours -> {labels[i]}");
+                    // Store the label
+                    dayLabels[date.Date] = label;
+                    
+                    System.Diagnostics.Debug.WriteLine($"Day {i} ({date:M/d}): {totalHours:F2} hours with label '{label}'");
+                }
+
+                // Now add the data and labels to the chart in the correct order
+                for (int i = 0; i < daysToShow; i++)
+                {
+                    DateTime date = startDate.AddDays(i);
+                    values.Add(dayData[date.Date]);
+                    labels.Add(dayLabels[date.Date]);
+                    
+                    System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {dayData[date.Date]:F2} hours -> {dayLabels[date.Date]}");
                 }
 
                 // If all values are zero, add a tiny value to make the chart visible

@@ -292,6 +292,9 @@ namespace ScreenTimeTracker
                             System.Diagnostics.Debug.WriteLine($"  - ... and {_usageRecords.Count - 5} more records");
                         }
                         
+                        // Clean up any system processes
+                        CleanupSystemProcesses();
+                        
                         // Make sure the list view is actually showing the new record
                         DispatcherQueue.TryEnqueue(() =>
                         {
@@ -498,13 +501,54 @@ namespace ScreenTimeTracker
                         break;
                 }
                 
+                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records from database/service");
+                
+                // Check if we have data - if not and it's not today, show a message to the user
+                if (records.Count == 0 && date != DateTime.Today)
+                {
+                    System.Diagnostics.Debug.WriteLine("No data found for the selected date");
+                    
+                    // Show a message to the user
+                    DispatcherQueue.TryEnqueue(async () => {
+                        try {
+                            ContentDialog infoDialog = new ContentDialog()
+                            {
+                                Title = "No Data Available",
+                                Content = $"No usage data found for {DateDisplay.Text}.",
+                                CloseButtonText = "OK",
+                                XamlRoot = Content.XamlRoot
+                            };
+                            
+                            await infoDialog.ShowAsync();
+                        }
+                        catch (Exception dialogEx) {
+                            System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
+                        }
+                    });
+                }
+                
                 // Sort records by duration (descending)
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
+                
+                // Clear the collection again to ensure we don't have stale data
+                _usageRecords.Clear();
                 
                 // Add sorted records to the observable collection
                 foreach (var record in sortedRecords)
                 {
                     _usageRecords.Add(record);
+                }
+                
+                // Clean up any system processes
+                CleanupSystemProcesses();
+                
+                // Force a refresh of the ListView
+                if (UsageListView != null)
+                {
+                    DispatcherQueue.TryEnqueue(() => {
+                        UsageListView.ItemsSource = null;
+                        UsageListView.ItemsSource = _usageRecords;
+                    });
                 }
                 
                 // Update the summary tab
@@ -513,12 +557,30 @@ namespace ScreenTimeTracker
                 // Update chart based on current view mode
                 UpdateChartViewMode();
                 
-                System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records");
+                System.Diagnostics.Debug.WriteLine($"Successfully loaded and displayed {records.Count} records");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                
+                // Show an error message to the user
+                DispatcherQueue.TryEnqueue(async () => {
+                    try {
+                        ContentDialog errorDialog = new ContentDialog()
+                        {
+                            Title = "Error Loading Data",
+                            Content = $"Failed to load screen time data: {ex.Message}",
+                            CloseButtonText = "OK",
+                            XamlRoot = Content.XamlRoot
+                        };
+                        
+                        await errorDialog.ShowAsync();
+                    }
+                    catch (Exception dialogEx) {
+                        System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
+                    }
+                });
             }
         }
         
@@ -532,23 +594,71 @@ namespace ScreenTimeTracker
                 // Get the raw usage data from database
                 if (_databaseService != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Getting usage data for date range {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
                     var usageData = _databaseService.GetUsageReportForDateRange(startDate, endDate);
+                    System.Diagnostics.Debug.WriteLine($"Retrieved {usageData.Count} raw records from database");
                     
-                    // Convert the tuples to AppUsageRecord objects
-                    foreach (var (processName, duration) in usageData)
+                    // First check if we have any non-system processes in the data
+                    var nonSystemProcesses = usageData
+                        .Where(item => {
+                            string normalizedName = item.ProcessName.Trim().ToLowerInvariant();
+                            bool isHighPrioritySystem = new[] { 
+                                "explorer", "shellexperiencehost", "searchhost", 
+                                "dwm", "runtimebroker", "svchost" 
+                            }.Any(p => normalizedName.Contains(p));
+                            
+                            // Keep it if it's not a high-priority system process and has meaningful duration
+                            return !isHighPrioritySystem && item.TotalDuration.TotalSeconds >= 5;
+                        })
+                        .ToList();
+                        
+                    System.Diagnostics.Debug.WriteLine($"Found {nonSystemProcesses.Count} non-system processes with meaningful duration");
+                    
+                    // If we don't have any meaningful non-system processes, be more lenient
+                    if (nonSystemProcesses.Count == 0)
                     {
-                        if (!IsWindowsSystemProcess(processName))
+                        System.Diagnostics.Debug.WriteLine("No significant non-system processes found, using lenient filtering");
+                        
+                        // Convert all processes with some meaningful duration
+                        foreach (var (processName, duration) in usageData)
+                        {
+                            // Only filter out very short duration processes
+                            if (duration.TotalSeconds >= 2)
+                            {
+                                var record = AppUsageRecord.CreateAggregated(processName, startDate);
+                                record._accumulatedDuration = duration;
+                                result.Add(record);
+                                System.Diagnostics.Debug.WriteLine($"Added (lenient mode): {processName} - {duration.TotalMinutes:F1} minutes");
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Filtered out short duration: {processName} - {duration.TotalSeconds:F1} seconds");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Normal case - convert non-system processes to records
+                        foreach (var (processName, duration) in nonSystemProcesses)
                         {
                             var record = AppUsageRecord.CreateAggregated(processName, startDate);
                             record._accumulatedDuration = duration;
                             result.Add(record);
+                            System.Diagnostics.Debug.WriteLine($"Added record: {processName} - {duration.TotalMinutes:F1} minutes");
                         }
                     }
                 }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("Database service is not available - cannot get records for date range");
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"GetAggregatedRecordsForDateRange: Found {result.Count} valid records after filtering");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error getting aggregated records: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
             }
             
             return result;
@@ -754,28 +864,45 @@ namespace ScreenTimeTracker
         {
             if (string.IsNullOrEmpty(processName)) return false;
 
-            // Common Windows system process names we want to ignore
-            string[] systemProcesses = {
+            // Normalize the process name (trim and convert to lowercase)
+            string normalizedName = processName.Trim().ToLowerInvariant();
+            
+            // List of high-priority system processes that should ALWAYS be filtered out
+            // regardless of duration or view mode
+            string[] highPriorityFilterProcesses = {
                 "explorer",
-                "SearchHost",
-                "ShellExperienceHost",
-                "StartMenuExperienceHost",
-                "ApplicationFrameHost",
-                "SystemSettings",
-                "TextInputHost",
-                "WindowsTerminal",
+                "shellexperiencehost", 
+                "searchhost",
+                "startmenuexperiencehost",
+                "applicationframehost",
+                "systemsettings",
+                "dwm",
+                "winlogon",
+                "csrss",
+                "services",
+                "svchost",
+                "runtimebroker",
+            };
+            
+            // Check high-priority list first (these are always filtered)
+            if (highPriorityFilterProcesses.Any(p => normalizedName.Contains(p)))
+            {
+                System.Diagnostics.Debug.WriteLine($"Filtering high-priority system process: {processName}");
+                return true;
+            }
+
+            // Broader list of system processes that might be filtered depending on context
+            string[] systemProcesses = {
+                "textinputhost",
+                "windowsterminal",
                 "cmd",
                 "powershell",
                 "pwsh",
                 "conhost",
-                "WinStore.App",
-                "LockApp",
-                "LogonUI",
+                "winstore.app",
+                "lockapp",
+                "logonui",
                 "fontdrvhost",
-                "dwm",
-                "csrss",
-                "services",
-                "svchost",
                 "taskhostw",
                 "ctfmon",
                 "rundll32",
@@ -784,22 +911,21 @@ namespace ScreenTimeTracker
                 "taskmgr",
                 "backgroundtaskhost",
                 "smartscreen",
-                "SecurityHealthService",
-                "Registry",
-                "MicrosoftEdgeUpdate",
-                "WmiPrvSE",
+                "securityhealthservice",
+                "registry",
+                "microsoftedgeupdate",
+                "wmiprvse",
                 "spoolsv",
-                "TabTip",
-                "TabTip32",
-                "SearchUI",
-                "SearchApp",
-                "RuntimeBroker",
-                "SettingsSyncHost",
-                "WUDFHost"
+                "tabtip",
+                "tabtip32",
+                "searchui",
+                "searchapp",
+                "settingssynchost",
+                "wudfhost"
             };
 
-            // Check if the processName is in our list
-            return systemProcesses.Contains(processName.ToLower());
+            // Return true if in the general system process list
+            return systemProcesses.Contains(normalizedName);
         }
 
         private void AutoSaveTimer_Tick(object? sender, object e)
@@ -1230,23 +1356,18 @@ namespace ScreenTimeTracker
         private void DatePickerPopup_SingleDateSelected(object? sender, DateTime selectedDate)
         {
             _selectedDate = selectedDate;
-            _isDateRangeSelected = false;
             _selectedEndDate = null;
+            _isDateRangeSelected = false;
             
             // Update button text
             UpdateDatePickerButtonText();
             
-            // Set the time period to Daily for single date selection
-            _currentTimePeriod = TimePeriod.Daily;
-            
-            // Load records for the selected date
-            LoadRecordsForDate(_selectedDate);
-            
-            // Force Hourly view for Today and Yesterday
+            // Special handling for Today vs. other days
             var today = DateTime.Today;
-            var yesterday = today.AddDays(-1);
-            if (selectedDate == today || selectedDate == yesterday)
+            if (_selectedDate == today)
             {
+                // For "Today", use the current tracking settings
+                _currentTimePeriod = TimePeriod.Daily;
                 _currentChartViewMode = ChartViewMode.Hourly;
                 
                 // Update view mode label and hide toggle panel
@@ -1263,13 +1384,56 @@ namespace ScreenTimeTracker
                     }
                 });
                 
-                // Update the chart
-                UpdateUsageChart();
+                // Load records for today with a delay to allow UI to update first
+                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
+                    // Show loading indicator
+                    if (LoadingIndicator != null)
+                    {
+                        LoadingIndicator.Visibility = Visibility.Visible;
+                    }
+                    
+                    // Use a delay to allow UI to show loading indicator
+                    DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
+                        // Small delay to give UI time to update
+                        await Task.Delay(100);
+                        
+                        // Load the data
+                        LoadRecordsForDate(_selectedDate);
+                        
+                        // Hide loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
+                    });
+                });
             }
             else
             {
-                // For other single dates, use the normal update logic
-                UpdateChartViewMode();
+                // For other single dates, use the normal update logic with a delay
+                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
+                    // Show loading indicator
+                    if (LoadingIndicator != null)
+                    {
+                        LoadingIndicator.Visibility = Visibility.Visible;
+                    }
+                    
+                    // Use a delay to allow UI to show loading indicator
+                    DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
+                        // Small delay to give UI time to update
+                        await Task.Delay(100);
+                        
+                        // Load the data
+                        LoadRecordsForDate(_selectedDate);
+                        UpdateChartViewMode();
+                        
+                        // Hide loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
+                    });
+                });
             }
         }
         
@@ -1304,8 +1468,29 @@ namespace ScreenTimeTracker
                 });
             }
             
-            // Load records for the date range
-            LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+            // Load records for the date range - use DispatcherQueue to allow UI to update first
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
+                // Show loading indicator
+                if (LoadingIndicator != null)
+                {
+                    LoadingIndicator.Visibility = Visibility.Visible;
+                }
+                
+                // Use a delay to allow UI to show loading indicator
+                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
+                    // Small delay to give UI time to update
+                    await Task.Delay(100);
+                    
+                    // Load the data
+                    LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                    
+                    // Hide loading indicator
+                    if (LoadingIndicator != null)
+                    {
+                        LoadingIndicator.Visibility = Visibility.Collapsed;
+                    }
+                });
+            });
         }
         
         private void UpdateDatePickerButtonText()
@@ -1383,6 +1568,32 @@ namespace ScreenTimeTracker
                 // Get aggregated records for the date range
                 records = GetAggregatedRecordsForDateRange(startDate, endDate);
                 
+                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records from database/service");
+                
+                // Check if we have data - if not, show a message to the user
+                if (records.Count == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("No data found for the selected date range");
+                    
+                    // Show a message to the user
+                    DispatcherQueue.TryEnqueue(async () => {
+                        try {
+                            ContentDialog infoDialog = new ContentDialog()
+                            {
+                                Title = "No Data Available",
+                                Content = $"No usage data found for the selected date range ({startDate:MMM d} - {endDate:MMM d}).",
+                                CloseButtonText = "OK",
+                                XamlRoot = Content.XamlRoot
+                            };
+                            
+                            await infoDialog.ShowAsync();
+                        }
+                        catch (Exception dialogEx) {
+                            System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
+                        }
+                    });
+                }
+                
                 // Update chart title
                 SummaryTitle.Text = "Screen Time Summary";
                 
@@ -1392,14 +1603,26 @@ namespace ScreenTimeTracker
                 // Sort records by duration (descending)
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
                 
+                // Clear the collection again to ensure we don't have stale data
+                _usageRecords.Clear();
+                
                 // Add sorted records to the observable collection
                 foreach (var record in sortedRecords)
                 {
                     _usageRecords.Add(record);
                 }
                 
-                // Update the summary tab
-                UpdateSummaryTab();
+                // Clean up any system processes - be less aggressive with date ranges
+                CleanupSystemProcesses();
+                
+                // Force a refresh of the ListView
+                if (UsageListView != null)
+                {
+                    DispatcherQueue.TryEnqueue(() => {
+                        UsageListView.ItemsSource = null;
+                        UsageListView.ItemsSource = _usageRecords;
+                    });
+                }
                 
                 // Check if this is the Last 7 days selection
                 var today = DateTime.Today;
@@ -1426,6 +1649,9 @@ namespace ScreenTimeTracker
                     
                     // Update the chart
                     UpdateUsageChart();
+                    
+                    // Update the summary tab
+                    UpdateSummaryTab();
                 }
                 else
                 {
@@ -1433,27 +1659,103 @@ namespace ScreenTimeTracker
                     // Update chart based on current view mode
                     _currentChartViewMode = ChartViewMode.Daily; // Default to daily for ranges
                     UpdateChartViewMode();
+                    
+                    // Update the summary tab
+                    UpdateSummaryTab();
                 }
                 
-                System.Diagnostics.Debug.WriteLine($"Loaded {records.Count} records for date range");
+                System.Diagnostics.Debug.WriteLine($"Successfully loaded and displayed {records.Count} records for date range");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                
+                // Show an error message to the user
+                DispatcherQueue.TryEnqueue(async () => {
+                    try {
+                        ContentDialog errorDialog = new ContentDialog()
+                        {
+                            Title = "Error Loading Data",
+                            Content = $"Failed to load screen time data: {ex.Message}",
+                            CloseButtonText = "OK",
+                            XamlRoot = Content.XamlRoot
+                        };
+                        
+                        await errorDialog.ShowAsync();
+                    }
+                    catch (Exception dialogEx) {
+                        System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
+                    }
+                });
             }
         }
 
         private void CleanupSystemProcesses()
         {
-            // Create a list of records to remove (can't modify collection while enumerating)
-            var recordsToRemove = _usageRecords
-                .Where(r => IsWindowsSystemProcess(r.ProcessName))
-                .ToList();
-
-            // Remove each system process from the collection
-            foreach (var record in recordsToRemove)
+            try
             {
-                _usageRecords.Remove(record);
+                // Debug before cleanup
+                System.Diagnostics.Debug.WriteLine($"Before cleanup: UsageRecords count: {_usageRecords.Count}");
+                
+                // Special case for date ranges
+                bool isDateRange = _selectedEndDate.HasValue;
+                int initialCount = _usageRecords.Count;
+                
+                // Modified approach: two-pass filtering
+                
+                // PASS 1: First remove high-priority system processes regardless of duration or view
+                var highPriorityProcesses = _usageRecords
+                    .Where(r => {
+                        string normalizedName = r.ProcessName.Trim().ToLowerInvariant();
+                        return new[] { "explorer", "shellexperiencehost", "searchhost", "dwm", "runtimebroker", "svchost" }
+                            .Any(p => normalizedName.Contains(p));
+                    })
+                    .ToList();
+                    
+                foreach (var record in highPriorityProcesses)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Removing high-priority system process: {record.ProcessName} ({record.Duration.TotalSeconds:F1}s)");
+                    _usageRecords.Remove(record);
+                }
+                
+                // PASS 2: For other system processes, use the duration-based approach
+                var otherSystemProcesses = _usageRecords
+                    .Where(r => IsWindowsSystemProcess(r.ProcessName) && 
+                               // For date ranges, still be less aggressive with filtering
+                               (!isDateRange || r.Duration.TotalSeconds < 10))
+                    .ToList();
+
+                foreach (var record in otherSystemProcesses)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Removing secondary system process: {record.ProcessName} ({record.Duration.TotalSeconds:F1}s)");
+                    _usageRecords.Remove(record);
+                }
+                
+                int removedCount = initialCount - _usageRecords.Count;
+                System.Diagnostics.Debug.WriteLine($"Cleanup complete: Removed {removedCount} system processes. Records remaining: {_usageRecords.Count}");
+                
+                // Update UI to reflect changes only if we actually removed something
+                if (removedCount > 0)
+                {
+                    // Force a refresh of the ListView
+                    if (UsageListView != null && UsageListView.ItemsSource == _usageRecords)
+                    {
+                        // Only refresh if our collection is the source
+                        DispatcherQueue.TryEnqueue(() => {
+                            UsageListView.ItemsSource = null;
+                            UsageListView.ItemsSource = _usageRecords;
+                        });
+                    }
+                    
+                    // Update the summary and chart
+                    UpdateSummaryTab();
+                    UpdateUsageChart();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error cleaning system processes: {ex.Message}");
             }
         }
     }

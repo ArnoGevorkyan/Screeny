@@ -699,9 +699,10 @@ namespace ScreenTimeTracker.Services
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = "PRAGMA integrity_check;";
-                    string result = (string)command.ExecuteScalar();
-                    integrityPassed = result.Equals("ok", StringComparison.OrdinalIgnoreCase);
-                    Debug.WriteLine($"Database integrity check: {result}");
+                    var resultObj = command.ExecuteScalar();
+                    string? result = resultObj as string;
+                    integrityPassed = result != null && result.Equals("ok", StringComparison.OrdinalIgnoreCase);
+                    Debug.WriteLine($"Database integrity check: {result ?? "null"}");
                 }
                 
                 // If check failed, try to recover
