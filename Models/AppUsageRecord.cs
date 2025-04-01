@@ -1365,6 +1365,20 @@ namespace ScreenTimeTracker.Models
             }
         }
 
+        /// <summary>
+        /// Explicitly increments the duration of this record by a given interval.
+        /// Used for real-time updates in historical views.
+        /// </summary>
+        /// <param name="interval">The time interval to add.</param>
+        public void IncrementDuration(TimeSpan interval)
+        {
+            _accumulatedDuration += interval;
+            // Also update last focus time to prevent double counting if UpdateDuration is called later
+            _lastFocusTime = DateTime.Now;
+            NotifyPropertyChanged(nameof(Duration));
+            NotifyPropertyChanged(nameof(FormattedDuration));
+        }
+
         public static AppUsageRecord CreateAggregated(string processName, DateTime date)
         {
             return new AppUsageRecord

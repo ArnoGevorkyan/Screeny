@@ -148,35 +148,39 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine("Timer tick - updating durations");
                 _timerTickCounter++;
-                
                 bool didUpdate = false;
-                
-                // Get the focused record first
-                var focusedRecord = _usageRecords.FirstOrDefault(r => r.IsFocused);
-                if (focusedRecord != null)
+
+                // Get the LIVE focused application from the tracking service
+                var liveFocusedApp = _trackingService.CurrentRecord;
+                AppUsageRecord? recordToUpdate = null;
+
+                if (liveFocusedApp != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Updating focused record: {focusedRecord.ProcessName}");
-                    
-                    // Get duration before update
-                    var prevDuration = focusedRecord.Duration;
-                    
-                    // Update the duration
-                    focusedRecord.UpdateDuration();
-                    
-                    // Check if duration changed meaningfully (by at least 0.1 second)
-                    if ((focusedRecord.Duration - prevDuration).TotalSeconds >= 0.1)
+                    // Find if this app exists in the currently displayed list (_usageRecords)
+                    // Match based on ProcessName for simplicity in aggregated views
+                    recordToUpdate = _usageRecords
+                        .FirstOrDefault(r => r.ProcessName.Equals(liveFocusedApp.ProcessName, StringComparison.OrdinalIgnoreCase));
+
+                    if (recordToUpdate != null)
                     {
+                        System.Diagnostics.Debug.WriteLine($"Incrementing duration for displayed record: {recordToUpdate.ProcessName}");
+                        
+                        // Use the new IncrementDuration method
+                        recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
                         didUpdate = true;
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Live focused app {liveFocusedApp.ProcessName} not found in current view");
                     }
                 }
                 
-                // Always update the UI on regular intervals to ensure chart is refreshed,
-                // even if no focused app duration changed
+                // Periodically force UI refresh even if no specific app was updated
+                // to ensure chart updates correctly.
                 if (didUpdate || _timerTickCounter >= 5) // Force update every ~5 seconds
                 {
                     System.Diagnostics.Debug.WriteLine($"Updating UI (didUpdate={didUpdate}, tickCounter={_timerTickCounter})");
-                    
-                    // Reset counter if we're updating
+
                     if (_timerTickCounter >= 5)
                     {
                         _timerTickCounter = 0;
@@ -185,12 +189,6 @@ namespace ScreenTimeTracker
                     // Update summary and chart
                     UpdateSummaryTab();
                     UpdateUsageChart();
-                    
-                    // If we haven't had any updates for a while, force a chart refresh
-                    if (!didUpdate && _timerTickCounter == 0)
-                    {
-                        ForceChartRefresh();
-                    }
                 }
             }
             catch (Exception ex)

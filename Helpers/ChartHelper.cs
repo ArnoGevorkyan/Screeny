@@ -250,59 +250,49 @@ namespace ScreenTimeTracker.Helpers
             else // Daily view
             {
                 System.Diagnostics.Debug.WriteLine("Building DAILY chart");
-                
-                int daysToShow = 7;
-                if (timePeriod == TimePeriod.Daily)
-                    daysToShow = 1;
-                else if (timePeriod == TimePeriod.Weekly)
-                    daysToShow = 7;
-                
-                System.Diagnostics.Debug.WriteLine($"Days to show for daily chart: {daysToShow}");
+
+                int daysToShow;
+                DateTime rangeStartDate; // Use a specific variable for the range start
+
+                if (selectedEndDate.HasValue && selectedDate.Date <= selectedEndDate.Value.Date)
+                {
+                    // Handle custom date range or "Last 7 Days" selection
+                    rangeStartDate = selectedDate.Date;
+                    daysToShow = (selectedEndDate.Value.Date - selectedDate.Date).Days + 1;
+                    System.Diagnostics.Debug.WriteLine($"Date Range selected: {rangeStartDate:d} to {selectedEndDate.Value.Date:d} ({daysToShow} days)");
+                }
+                else // Single date or standard weekly view based on selectedDate
+                {
+                    // Determine days based on time period (defaulting to daily if unsure)
+                    daysToShow = (timePeriod == TimePeriod.Weekly) ? 7 : 1;
+                    // Calculate start date based on the END date (selectedDate) for standard views
+                    rangeStartDate = selectedDate.Date.AddDays(-(daysToShow - 1));
+                    System.Diagnostics.Debug.WriteLine($"Single Date/Weekly selected: {selectedDate:d}, TimePeriod: {timePeriod}, StartDate: {rangeStartDate:d} ({daysToShow} days)");
+                }
 
                 var values = new List<double>();
                 var labels = new List<string>();
-                
-                DateTime currentDate = DateTime.Now.Date;
-                DateTime startDate = selectedDate.Date.AddDays(-(daysToShow - 1));
-
-                // Handle custom date range if specified
-                if (selectedEndDate.HasValue && selectedDate < selectedEndDate.Value)
-                {
-                    startDate = selectedDate;
-                    daysToShow = (selectedEndDate.Value - selectedDate).Days + 1;
-                }
+                DateTime currentDate = DateTime.Now.Date; // Use Today's date for labeling
 
                 // Create a dictionary to track the days and their data to prevent duplication
                 var dayData = new Dictionary<DateTime, double>();
                 var dayLabels = new Dictionary<DateTime, string>();
 
-                // Get data for each day in the range
+                // Get data for each day in the calculated range
                 for (int i = 0; i < daysToShow; i++)
                 {
-                    DateTime date = startDate.AddDays(i);
+                    DateTime date = rangeStartDate.AddDays(i); // Use CORRECT rangeStartDate
                     double totalHours = 0;
-                    
+
                     // Calculate total hours for this date from records
-                    if (date.Date == DateTime.Now.Date)
+                    // Note: This assumes usageRecords contains raw data for the period.
+                    // If usageRecords is pre-aggregated *by app* for the whole range, this loop won't produce correct daily totals.
+                    // A potential future improvement is to fetch daily totals directly from DatabaseService here.
+                    foreach (var record in usageRecords.Where(r => r.Date.Date == date.Date)) // Check against record's Date property
                     {
-                        // For today, use all records with today's date
-                        foreach (var record in usageRecords.Where(r => r.StartTime.Date == date.Date))
-                        {
-                            totalHours += record.Duration.TotalHours;
-                        }
+                        totalHours += record.Duration.TotalHours;
                     }
-                    else
-                    {
-                        // For past days, check records with matching date
-                        foreach (var record in usageRecords.Where(r => r.StartTime.Date == date.Date))
-                        {
-                            totalHours += record.Duration.TotalHours;
-                        }
-                    }
-                    
-                    // Store data in dictionary to prevent duplicate entries
-                    dayData[date.Date] = totalHours;
-                    
+
                     // Determine appropriate label
                     string label;
                     if (date.Date == currentDate)
@@ -318,21 +308,32 @@ namespace ScreenTimeTracker.Helpers
                         // Use abbreviated day name (Mon, Tue, etc.)
                         label = date.ToString("ddd");
                     }
-                    
-                    // Store the label
+
+                    // Store data and label in dictionaries
+                    dayData[date.Date] = totalHours; // Store total hours for the day
                     dayLabels[date.Date] = label;
-                    
+
                     System.Diagnostics.Debug.WriteLine($"Day {i} ({date:M/d}): {totalHours:F2} hours with label '{label}'");
                 }
 
                 // Now add the data and labels to the chart in the correct order
                 for (int i = 0; i < daysToShow; i++)
                 {
-                    DateTime date = startDate.AddDays(i);
-                    values.Add(dayData[date.Date]);
-                    labels.Add(dayLabels[date.Date]);
-                    
-                    System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {dayData[date.Date]:F2} hours -> {dayLabels[date.Date]}");
+                    DateTime date = rangeStartDate.AddDays(i); // Use CORRECT rangeStartDate here too
+                    // Ensure the date exists in the dictionary (it should)
+                    if (dayData.TryGetValue(date.Date, out double hours) && dayLabels.TryGetValue(date.Date, out string? lbl))
+                    {
+                        values.Add(hours);
+                        labels.Add(lbl ?? date.ToString("ddd")); // Fallback label
+                        System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {hours:F2} hours -> {lbl}");
+                    }
+                    else
+                    {
+                        // This case should ideally not happen if the previous loop worked correctly
+                        values.Add(0); // Add zero if data is missing
+                        labels.Add(date.ToString("ddd")); // Add default label
+                        System.Diagnostics.Debug.WriteLine($"WARNING: Missing data or label for date {date:M/d}");
+                    }
                 }
 
                 // If all values are zero, add a tiny value to make the chart visible
