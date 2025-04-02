@@ -334,8 +334,8 @@ namespace ScreenTimeTracker.Helpers
                     }
                     else
                     {
-                        // Use abbreviated day name (Mon, Tue, etc.)
-                        label = date.ToString("ddd");
+                        // Use abbreviated month and day (e.g., "Apr 1")
+                        label = date.ToString("MMM d"); 
                     }
 
                     // Store data and label in dictionaries
@@ -353,14 +353,14 @@ namespace ScreenTimeTracker.Helpers
                     if (dayData.TryGetValue(date.Date, out double hours) && dayLabels.TryGetValue(date.Date, out string? lbl))
                     {
                         values.Add(hours);
-                        labels.Add(lbl ?? date.ToString("ddd")); // Fallback label
+                        labels.Add(lbl ?? date.ToString("MMM d")); // Fallback label
                         System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {hours:F2} hours -> {lbl}");
                     }
                     else
                     {
                         // This case should ideally not happen if the previous loop worked correctly
                         values.Add(0); // Add zero if data is missing
-                        labels.Add(date.ToString("ddd")); // Add default label
+                        labels.Add(date.ToString("MMM d")); // Add default label
                         System.Diagnostics.Debug.WriteLine($"WARNING: Missing data or label for date {date:M/d}");
                     }
                 }

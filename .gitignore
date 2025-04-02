@@ -1,6 +1,7 @@
 # Visual Studio files
 .vs/
 .vscode/
+buildlogs.txt
 
 # Build results
 [Dd]ebug/
