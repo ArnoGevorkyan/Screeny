@@ -25,6 +25,7 @@ namespace ScreenTimeTracker.Helpers
         /// <param name="timePeriod">The time period (Daily, Weekly, etc.)</param>
         /// <param name="selectedDate">The selected date for filtering</param>
         /// <param name="selectedEndDate">Optional end date for range selection</param>
+        /// <param name="liveFocusedRecord">The currently active/focused record from the tracking service (optional)</param>
         /// <returns>The total time calculated from the records</returns>
         public static TimeSpan UpdateUsageChart(
             LiveChartsCore.SkiaSharpView.WinUI.CartesianChart chart, 
@@ -32,7 +33,8 @@ namespace ScreenTimeTracker.Helpers
             ChartViewMode viewMode,
             TimePeriod timePeriod,
             DateTime selectedDate,
-            DateTime? selectedEndDate = null)
+            DateTime? selectedEndDate = null,
+            AppUsageRecord? liveFocusedRecord = null)
         {
             System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart CALLED ===");
 
@@ -288,9 +290,36 @@ namespace ScreenTimeTracker.Helpers
                     // Note: This assumes usageRecords contains raw data for the period.
                     // If usageRecords is pre-aggregated *by app* for the whole range, this loop won't produce correct daily totals.
                     // A potential future improvement is to fetch daily totals directly from DatabaseService here.
-                    foreach (var record in usageRecords.Where(r => r.Date.Date == date.Date)) // Check against record's Date property
+                    
+                    // Special handling for 'Today' when in a date range view
+                    if (date.Date == currentDate && liveFocusedRecord != null)
                     {
-                        totalHours += record.Duration.TotalHours;
+                        // Find the record in the current list that corresponds to the live focused app
+                        var recordInList = usageRecords.FirstOrDefault(r => 
+                            r.ProcessName.Equals(liveFocusedRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
+                            
+                        if (recordInList != null)
+                        {
+                            // Use the current duration of the live-updated record in the list
+                            totalHours = recordInList.Duration.TotalHours;
+                            System.Diagnostics.Debug.WriteLine($"Using live duration for Today ({recordInList.ProcessName}): {totalHours:F4} hours");
+                        }
+                        else
+                        {
+                            // Fallback: Calculate from records matching today's date (might be 0 for aggregated views)
+                            foreach (var record in usageRecords.Where(r => r.Date.Date == date.Date))
+                            {
+                                totalHours += record.Duration.TotalHours;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Original calculation for other days
+                        foreach (var record in usageRecords.Where(r => r.Date.Date == date.Date)) // Check against record's Date property
+                        {
+                            totalHours += record.Duration.TotalHours;
+                        }
                     }
 
                     // Determine appropriate label

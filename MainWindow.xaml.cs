@@ -165,9 +165,22 @@ namespace ScreenTimeTracker
                     {
                         System.Diagnostics.Debug.WriteLine($"Incrementing duration for displayed record: {recordToUpdate.ProcessName}");
                         
-                        // Use the new IncrementDuration method
-                        recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
-                        didUpdate = true;
+                        // --- FIX START: Only increment if viewing today or a range including today ---
+                        bool isViewingToday = _selectedDate.Date == DateTime.Today && !_isDateRangeSelected;
+                        bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
+                                                          DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
+                                                          
+                        if (isViewingToday || isViewingRangeIncludingToday)
+                        {
+                            // Use the new IncrementDuration method
+                            recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
+                            didUpdate = true;
+                        }
+                        else
+                        {
+                             System.Diagnostics.Debug.WriteLine("Not incrementing duration - viewing a past date/range.");
+                        }
+                        // --- FIX END ---
                     }
                     else
                     {
@@ -188,7 +201,7 @@ namespace ScreenTimeTracker
                     
                     // Update summary and chart
                     UpdateSummaryTab();
-                    UpdateUsageChart();
+                    UpdateUsageChart(liveFocusedApp);
                 }
             }
             catch (Exception ex)
@@ -478,18 +491,38 @@ namespace ScreenTimeTracker
                         
                     case TimePeriod.Daily:
                     default:
-                        // Get records for the selected date
+                        // --- Load records for single day view --- 
+                        List<AppUsageRecord> dbRecords = new List<AppUsageRecord>();
                         if (_databaseService != null)
                         {
-                            records = _databaseService.GetRecordsForDate(date);
+                            dbRecords = _databaseService.GetRecordsForDate(date);
                         }
                         else
                         {
-                            // Fallback to tracking service records if database is not available
-                            records = _trackingService.GetRecords()
+                            // Fallback if DB service fails - unlikely but safe
+                            dbRecords = _trackingService.GetRecords()
                                 .Where(r => r.IsFromDate(date))
                                 .ToList();
                         }
+                        
+                        // Aggregate records loaded FROM DATABASE
+                        var aggregatedDbData = dbRecords
+                            .GroupBy(r => r.ProcessName)
+                            .Select(g => {
+                                var totalDuration = TimeSpan.FromSeconds(g.Sum(rec => rec.Duration.TotalSeconds));
+                                var aggregatedRecord = AppUsageRecord.CreateAggregated(g.Key, date);
+                                aggregatedRecord._accumulatedDuration = totalDuration;
+                                aggregatedRecord.LoadAppIconIfNeeded(); 
+                                return aggregatedRecord;
+                            })
+                            .Where(ar => ar.Duration.TotalSeconds >= 1) 
+                            .ToList();
+
+                        // --- REMOVED MERGE BLOCK FOR TODAY ---
+                        // Let the normal tracking service updates handle live data.
+                        // The initial load will now show data persisted from the last session.
+                        records = aggregatedDbData;
+                        // --- END REMOVAL ---
                         
                         // Update chart title
                         SummaryTitle.Text = "Daily Screen Time Summary";
@@ -502,7 +535,7 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records from database/service");
                 
                 // Check if we have data - if not and it's not today, show a message to the user
-                if (records.Count == 0 && date != DateTime.Today)
+                if (records.Count == 0 && date.Date != DateTime.Today)
                 {
                     System.Diagnostics.Debug.WriteLine("No data found for the selected date");
                     
@@ -527,9 +560,6 @@ namespace ScreenTimeTracker
                 
                 // Sort records by duration (descending)
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
-                
-                // Clear the collection again to ensure we don't have stale data
-                _usageRecords.Clear();
                 
                 // Add sorted records to the observable collection
                 foreach (var record in sortedRecords)
@@ -662,16 +692,17 @@ namespace ScreenTimeTracker
             return result;
         }
         
-        private void UpdateUsageChart()
+        private void UpdateUsageChart(AppUsageRecord? liveFocusedRecord = null)
         {
-            // Call the ChartHelper method to update the chart
+            // Call the ChartHelper method to update the chart, passing the live record
             TimeSpan totalTime = ChartHelper.UpdateUsageChart(
                 UsageChartLive, 
                 _usageRecords, 
                 _currentChartViewMode, 
                 _currentTimePeriod, 
                 _selectedDate, 
-                _selectedEndDate);
+                _selectedEndDate,
+                liveFocusedRecord);
                 
             // Update the chart time display
             ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
@@ -1382,32 +1413,29 @@ namespace ScreenTimeTracker
                     }
                 });
                 
-                // Load records for today with a delay to allow UI to update first
-                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
+                // Load records for today immediately and with normal priority
+                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () => {
                     // Show loading indicator
                     if (LoadingIndicator != null)
                     {
                         LoadingIndicator.Visibility = Visibility.Visible;
                     }
+
+                    // Load the data immediately
+                    LoadRecordsForDate(_selectedDate);
                     
-                    // Use a delay to allow UI to show loading indicator
-                    DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
-                        // Small delay to give UI time to update
-                        await Task.Delay(100);
-                        
-                        // Load the data
-                        LoadRecordsForDate(_selectedDate);
-                        
-                        // Hide loading indicator
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                        }
-                    });
+                    // Hide loading indicator
+                    if (LoadingIndicator != null)
+                    {
+                        LoadingIndicator.Visibility = Visibility.Collapsed;
+                    }
                 });
             }
             else
             {
+                // Ensure we switch to Daily period when selecting a single past date
+                _currentTimePeriod = TimePeriod.Daily;
+                
                 // For other single dates, use the normal update logic with a delay
                 DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
                     // Show loading indicator
@@ -1564,9 +1592,45 @@ namespace ScreenTimeTracker
                 }
                 
                 // Get aggregated records for the date range
-                records = GetAggregatedRecordsForDateRange(startDate, endDate);
+                var aggregatedRecords = GetAggregatedRecordsForDateRange(startDate, endDate);
                 
-                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records from database/service");
+                // --- Merge with LIVE data if range includes TODAY --- 
+                if (endDate.Date >= DateTime.Today) 
+                {
+                    var currentDateForMerge = DateTime.Today;
+                    var liveRecords = _trackingService.GetRecords()
+                                        .Where(r => r.IsFromDate(currentDateForMerge))
+                                        .ToList();
+                                        
+                    var mergedData = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+                    // Add aggregated records first (these contain historical data)
+                    foreach (var aggRecord in aggregatedRecords)
+                    {
+                        mergedData[aggRecord.ProcessName] = aggRecord;
+                    }
+
+                    // Overwrite with or add live records (more accurate for today)
+                    foreach (var liveRecord in liveRecords)
+                    {
+                        // If the live record is already in the merged data (from aggregation),
+                        // we might want to keep the aggregated duration + live increment,
+                        // but for simplicity, we'll just use the live record directly as it's most current.
+                        // This assumes the live record reflects total usage for today accurately.
+                        liveRecord.LoadAppIconIfNeeded(); // Ensure icon is loaded
+                        mergedData[liveRecord.ProcessName] = liveRecord; 
+                    }
+                    
+                    records = mergedData.Values.ToList();
+                }
+                else
+                {
+                    // For purely historical ranges, just use the aggregated data
+                    records = aggregatedRecords;
+                }
+                // --- Merge END ---
+                
+                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records after merge/aggregation");
                 
                 // Check if we have data - if not, show a message to the user
                 if (records.Count == 0)
@@ -1600,9 +1664,6 @@ namespace ScreenTimeTracker
                 
                 // Sort records by duration (descending)
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
-                
-                // Clear the collection again to ensure we don't have stale data
-                _usageRecords.Clear();
                 
                 // Add sorted records to the observable collection
                 foreach (var record in sortedRecords)
@@ -1656,7 +1717,7 @@ namespace ScreenTimeTracker
                     // For other date ranges, use default behavior
                     // Update chart based on current view mode
                     _currentChartViewMode = ChartViewMode.Daily; // Default to daily for ranges
-                    UpdateChartViewMode();
+                    UpdateChartViewMode(); // This will call UpdateUsageChart internally
                     
                     // Update the summary tab
                     UpdateSummaryTab();
