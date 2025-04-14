@@ -105,18 +105,35 @@ namespace ScreenTimeTracker.Helpers
         /// </summary>
         private void SetWindowIcon()
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app-icon.ico");
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "screeny icon.ico"); 
+            System.Diagnostics.Debug.WriteLine($"Attempting to load window icon from: {iconPath}"); 
             if (File.Exists(iconPath))
             {
                 try
                 {
-                    // For ICON_SMALL (16x16), explicitly request a small size to improve scaling quality
-                    IntPtr smallIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
-                    SendMessage(_windowHandle, WM_SETICON, ICON_SMALL, smallIcon);
+                    // Let Windows choose the best size from the .ico file by specifying 0x0
+                    IntPtr smallIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
+                    if (smallIcon != IntPtr.Zero) 
+                    {
+                        SendMessage(_windowHandle, WM_SETICON, ICON_SMALL, smallIcon);
+                        System.Diagnostics.Debug.WriteLine("Set ICON_SMALL successfully (system chose size).");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"LoadImage failed for ICON_SMALL. Error: {Marshal.GetLastWin32Error()}");
+                    }
                     
-                    // For ICON_BIG, let Windows decide the best size based on DPI settings
-                    IntPtr bigIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
-                    SendMessage(_windowHandle, WM_SETICON, ICON_BIG, bigIcon);
+                    // Let Windows choose the best size for the large icon too
+                    IntPtr bigIcon = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
+                    if (bigIcon != IntPtr.Zero)
+                    {
+                        SendMessage(_windowHandle, WM_SETICON, ICON_BIG, bigIcon);
+                        System.Diagnostics.Debug.WriteLine("Set ICON_BIG successfully (system chose size).");
+                    }
+                     else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"LoadImage failed for ICON_BIG. Error: {Marshal.GetLastWin32Error()}");
+                    }
                 }
                 catch (Exception ex)
                 {
