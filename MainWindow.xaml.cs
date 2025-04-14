@@ -1554,6 +1554,20 @@ namespace ScreenTimeTracker
             {
                 ThrowIfDisposed(); // Check if already disposed early
 
+                // Set up window title and icon using the helper
+                _windowHelper.SetUpWindow(); 
+            
+                // Set the custom XAML TitleBar element using the Window's SetTitleBar method
+                if (AppTitleBar != null) // Check if the XAML element exists
+                {
+                    this.SetTitleBar(AppTitleBar); // Correct: Call SetTitleBar on the Window itself
+                    Debug.WriteLine("Set AppTitleBar as the custom title bar using Window.SetTitleBar.");
+                }
+                else
+                {
+                    Debug.WriteLine("WARNING: Could not set custom title bar (AppTitleBar XAML element is null).");
+                }
+
                 // Double-check our selected date is valid (not in the future)
                 if (_selectedDate > DateTime.Today)
                 {
