@@ -311,26 +311,17 @@ namespace ScreenTimeTracker.Helpers
                 var labels = new List<string>();
                 DateTime currentDate = DateTime.Now.Date; // Use Today's date for labeling
 
-                // Create a dictionary to track the days and their data to prevent duplication
+                // First, prepare a dictionary with all dates in the range initialized to zero
+                // This ensures every day has a value and is shown in the chart
                 var dayData = new Dictionary<DateTime, double>();
                 var dayLabels = new Dictionary<DateTime, string>();
 
-                // Get data for each day in the calculated range
+                // Initialize all days in the range with zero values and proper labels
                 for (int i = 0; i < daysToShow; i++)
                 {
-                    DateTime date = rangeStartDate.AddDays(i); // Use CORRECT rangeStartDate
-                    double totalHours = 0;
-
-                    // Calculate total hours for this date from records
-                    // This now relies purely on the `usageRecords` collection passed in.
-                    // The collection should contain the correctly aggregated data (including live data if applicable)
-                    // from the calling method (LoadRecordsForDateRange or LoadRecordsForDate).
-                    foreach (var record in usageRecords.Where(r => r.Date.Date == date.Date))
-                    {
-                        totalHours += record.Duration.TotalHours;
-                    }
-
-                    // Determine appropriate label
+                    DateTime date = rangeStartDate.AddDays(i);
+                    
+                    // Set label for this date
                     string label;
                     if (date.Date == currentDate)
                     {
@@ -343,34 +334,76 @@ namespace ScreenTimeTracker.Helpers
                     else
                     {
                         // Use abbreviated month and day (e.g., "Apr 1")
-                        label = date.ToString("MMM d"); 
+                        label = date.ToString("MMM d");
                     }
-
-                    // Store data and label in dictionaries
-                    dayData[date.Date] = totalHours; // Store total hours for the day
+                    
+                    // Initialize with zero usage
+                    dayData[date.Date] = 0;
                     dayLabels[date.Date] = label;
-
-                    System.Diagnostics.Debug.WriteLine($"Day {i} ({date:M/d}): {totalHours:F2} hours with label '{label}'");
+                    
+                    System.Diagnostics.Debug.WriteLine($"Initialized day {i} ({date:M/d}) with zero usage");
                 }
 
-                // Now add the data and labels to the chart in the correct order
+                // Now process all records and add their durations to the appropriate days
+                foreach (var record in usageRecords)
+                {
+                    try
+                    {
+                        // Get the correct date for this record - use StartTime's date not the Date property
+                        // This is more reliable for determining which day this record belongs to
+                        DateTime recordDate = record.StartTime.Date;
+                        
+                        // Check if this record's date is within our range
+                        if (recordDate >= rangeStartDate.Date && recordDate <= (rangeStartDate.AddDays(daysToShow - 1)).Date)
+                        {
+                            // Add this record's duration to the appropriate day
+                            if (dayData.ContainsKey(recordDate))
+                            {
+                                double hours = record.Duration.TotalHours;
+                                dayData[recordDate] += hours;
+                                System.Diagnostics.Debug.WriteLine($"Added {hours:F2} hours for {record.ProcessName} on {recordDate:yyyy-MM-dd} (StartTime: {record.StartTime:HH:mm:ss}), Total: {dayData[recordDate]:F2}h");
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Warning: Day {recordDate:yyyy-MM-dd} not found in chart days dictionary");
+                            }
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Record for {record.ProcessName} on {recordDate:yyyy-MM-dd} (StartTime: {record.StartTime:HH:mm:ss}) is outside the chart range");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error processing record for chart: {ex.Message}");
+                    }
+                }
+
+                // Now add the data and labels to the chart in chronological order
                 for (int i = 0; i < daysToShow; i++)
                 {
-                    DateTime date = rangeStartDate.AddDays(i); // Use CORRECT rangeStartDate here too
-                    // Ensure the date exists in the dictionary (it should)
+                    DateTime date = rangeStartDate.AddDays(i);
+                    
+                    // Get the data and label for this day
                     if (dayData.TryGetValue(date.Date, out double hours) && dayLabels.TryGetValue(date.Date, out string? lbl))
                     {
                         values.Add(hours);
-                        labels.Add(lbl ?? date.ToString("MMM d")); // Fallback label
+                        labels.Add(lbl);
                         System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {hours:F2} hours -> {lbl}");
                     }
                     else
                     {
-                        // This case should ideally not happen if the previous loop worked correctly
-                        values.Add(0); // Add zero if data is missing
-                        labels.Add(date.ToString("MMM d")); // Add default label
+                        // This should never happen with our initialization, but just in case
+                        values.Add(0);
+                        labels.Add(date.ToString("MMM d"));
                         System.Diagnostics.Debug.WriteLine($"WARNING: Missing data or label for date {date:M/d}");
                     }
+                }
+
+                // Debug all values to check
+                for (int i = 0; i < values.Count; i++)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Chart value at index {i} ({labels[i]}): {values[i]:F4} hours");
                 }
 
                 // If all values are zero, add a tiny value to make the chart visible
@@ -380,7 +413,16 @@ namespace ScreenTimeTracker.Helpers
                 if (allZero || maxValue < 0.001)
                 {
                     System.Diagnostics.Debug.WriteLine("All values are zero, adding tiny value to make chart visible");
-                    values[values.Count - 1] = 0.001;  // Add tiny value to the most recent day
+                    // Only add the tiny value to today or the last day if today isn't in range
+                    int todayIndex = labels.IndexOf("Today");
+                    if (todayIndex >= 0)
+                    {
+                        values[todayIndex] = 0.001;
+                    }
+                    else
+                    {
+                        values[values.Count - 1] = 0.001;
+                    }
                     maxValue = 0.001;
                 }
 

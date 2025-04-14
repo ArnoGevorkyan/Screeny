@@ -951,7 +951,7 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine("No data found for the selected date");
                     
                     // Show a message to the user
-                    DispatcherQueue.TryEnqueue(async () => {
+                    DispatcherQueue?.TryEnqueue(async () => {
                         try {
                             if (this.Content != null)
                             {
@@ -991,7 +991,7 @@ namespace ScreenTimeTracker
                 // Force a refresh of the ListView
                 if (UsageListView != null)
                 {
-                    DispatcherQueue.TryEnqueue(() => {
+                    DispatcherQueue?.TryEnqueue(() => {
                         UsageListView.ItemsSource = null;
                         UsageListView.ItemsSource = _usageRecords;
                     });
@@ -1011,7 +1011,7 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                 
                 // Show an error message to the user
-                DispatcherQueue.TryEnqueue(async () => {
+                DispatcherQueue?.TryEnqueue(async () => {
                     try {
                         if (this.Content != null)
                         {
@@ -1051,6 +1051,25 @@ namespace ScreenTimeTracker
                     var usageData = _databaseService.GetUsageReportForDateRange(startDate, endDate);
                     System.Diagnostics.Debug.WriteLine($"Retrieved {usageData.Count} raw records from database");
                     
+                    // Create a lookup by date to determine actual start times
+                    Dictionary<string, DateTime> processEarliestStartTimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+                    
+                    // Get all individual records to find earliest start times per process
+                    for (DateTime date = startDate; date <= endDate; date = date.AddDays(1))
+                    {
+                        var dateRecords = _databaseService.GetRecordsForDate(date);
+                        foreach (var record in dateRecords)
+                        {
+                            // Track the earliest start time for each process
+                            if (!processEarliestStartTimes.ContainsKey(record.ProcessName) || 
+                                record.StartTime < processEarliestStartTimes[record.ProcessName])
+                            {
+                                processEarliestStartTimes[record.ProcessName] = record.StartTime;
+                                System.Diagnostics.Debug.WriteLine($"Found earliest start time for {record.ProcessName}: {record.StartTime:HH:mm:ss}");
+                            }
+                        }
+                    }
+                    
                     // First check if we have any non-system processes in the data
                     var nonSystemProcesses = usageData
                         .Where(item => {
@@ -1078,8 +1097,31 @@ namespace ScreenTimeTracker
                             // Only filter out very short duration processes
                             if (duration.TotalSeconds >= 2)
                             {
-                                var record = AppUsageRecord.CreateAggregated(processName, startDate);
-                                record._accumulatedDuration = duration;
+                                // Create record with actual start time if we have it
+                                var record = new AppUsageRecord
+                                {
+                                    ProcessName = processName,
+                                    ApplicationName = processName,
+                                    Date = startDate,
+                                    _accumulatedDuration = duration
+                                };
+                                
+                                // Set the actual start time if we have it, otherwise use noon
+                                if (processEarliestStartTimes.TryGetValue(processName, out DateTime actualStartTime))
+                                {
+                                    record.StartTime = actualStartTime;
+                                    System.Diagnostics.Debug.WriteLine($"Using actual start time {actualStartTime:HH:mm:ss} for {processName}");
+                                }
+                                else
+                                {
+                                    // Default to noon for visibility on charts
+                                    record.StartTime = new DateTime(startDate.Year, startDate.Month, startDate.Day, 12, 0, 0);
+                                    System.Diagnostics.Debug.WriteLine($"Using default noon start time for {processName}");
+                                }
+                                
+                                // Load icon for UI display
+                                record.LoadAppIconIfNeeded();
+                                
                                 result.Add(record);
                                 System.Diagnostics.Debug.WriteLine($"Added (lenient mode): {processName} - {duration.TotalMinutes:F1} minutes");
                             }
@@ -1094,8 +1136,31 @@ namespace ScreenTimeTracker
                         // Normal case - convert non-system processes to records
                         foreach (var (processName, duration) in nonSystemProcesses)
                         {
-                            var record = AppUsageRecord.CreateAggregated(processName, startDate);
-                            record._accumulatedDuration = duration;
+                            // Create a new record for this process
+                            var record = new AppUsageRecord
+                            {
+                                ProcessName = processName,
+                                ApplicationName = processName,
+                                Date = startDate,
+                                _accumulatedDuration = duration
+                            };
+                            
+                            // Set the actual start time if we have it, otherwise use noon
+                            if (processEarliestStartTimes.TryGetValue(processName, out DateTime actualStartTime))
+                            {
+                                record.StartTime = actualStartTime;
+                                System.Diagnostics.Debug.WriteLine($"Using actual start time {actualStartTime:HH:mm:ss} for {processName}");
+                            }
+                            else
+                            {
+                                // Default to noon for visibility on charts
+                                record.StartTime = new DateTime(startDate.Year, startDate.Month, startDate.Day, 12, 0, 0);
+                                System.Diagnostics.Debug.WriteLine($"Using default noon start time for {processName}");
+                            }
+                            
+                            // Load icon for UI display
+                            record.LoadAppIconIfNeeded();
+                            
                             result.Add(record);
                             System.Diagnostics.Debug.WriteLine($"Added record: {processName} - {duration.TotalMinutes:F1} minutes");
                         }
@@ -1634,7 +1699,7 @@ namespace ScreenTimeTracker
                 _currentChartViewMode = ChartViewMode.Hourly;
                 
                 // Update view mode label and hide toggle panel (since we start with Today view)
-                DispatcherQueue.TryEnqueue(() => {
+                DispatcherQueue?.TryEnqueue(() => {
                     if (ViewModeLabel != null)
                     {
                         ViewModeLabel.Text = "Hourly View";
@@ -2146,16 +2211,45 @@ namespace ScreenTimeTracker
         
         private void LoadRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
-            System.Diagnostics.Debug.WriteLine($"Loading records for date range: {startDate} to {endDate}");
+            System.Diagnostics.Debug.WriteLine($"Loading records for date range: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+            
+            // Make sure we're using valid dates (not in the future)
+            DateTime today = DateTime.Today;
+            if (startDate > today)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: Future start date requested ({startDate:yyyy-MM-dd}), using today instead");
+                startDate = today;
+            }
+            if (endDate > today)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: Future end date requested ({endDate:yyyy-MM-dd}), using today instead");
+                endDate = today;
+            }
             
             _selectedDate = startDate;
             _selectedEndDate = endDate;
+            _isDateRangeSelected = true;
             List<AppUsageRecord> records = new List<AppUsageRecord>();
             
             try
             {
-                // Clear existing records
-                _usageRecords.Clear();
+                // Check thread safety
+                if (_disposed)
+                {
+                    System.Diagnostics.Debug.WriteLine("Window is disposed, cannot load records");
+                    return;
+                }
+                
+                // Clear existing records safely
+                if (_usageRecords != null)
+                {
+                    _usageRecords.Clear();
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("ERROR: _usageRecords collection is null");
+                    return;
+                }
                 
                 // Update date display with selected date range
                 if (DateDisplay != null)
@@ -2164,65 +2258,108 @@ namespace ScreenTimeTracker
                     DateDisplay.Text = $"{startDate:MMM d} - {endDate:MMM d}";
                 }
                 
-                // Get aggregated records for the date range
+                // Load raw records directly from the database for each day in the range
+                var allDayRecords = new List<AppUsageRecord>();
+                
+                // Get records for each day in the range
+                for (DateTime date = startDate; date <= endDate; date = date.AddDays(1))
+                {
+                    var dayRecords = _databaseService?.GetRecordsForDate(date);
+                    if (dayRecords != null && dayRecords.Count > 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Loaded {dayRecords.Count} records for {date:yyyy-MM-dd}");
+                        allDayRecords.AddRange(dayRecords);
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"No records found for {date:yyyy-MM-dd}");
+                    }
+                }
+                
+                // Now get the aggregated records (totals by app across the whole period)
                 var aggregatedRecords = GetAggregatedRecordsForDateRange(startDate, endDate);
+                
+                // Add the aggregated records to our collection for display in the list
+                records = aggregatedRecords;
+                
+                // Add the raw records to our _usageRecords behind the scenes for chart rendering
+                // This ensures the chart shows data properly distributed by day
+                foreach (var record in allDayRecords)
+                {
+                    // Only add raw records for charts, not for list display
+                    _usageRecords.Add(record);
+                }
                 
                 // --- Merge with LIVE data if range includes TODAY --- 
                 if (endDate.Date >= DateTime.Today) 
                 {
-                    var currentDateForMerge = DateTime.Today;
-                    var liveRecords = _trackingService.GetRecords()
-                                        .Where(r => r.IsFromDate(currentDateForMerge))
-                                        .ToList();
-                                        
-                    var mergedData = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
-
-                    // Add aggregated records first (these contain historical data)
-                    foreach (var aggRecord in aggregatedRecords)
+                    try
                     {
-                        mergedData[aggRecord.ProcessName] = aggRecord;
-                    }
-
-                    // Overwrite or ADD live records, ensuring total duration is correct
-                    foreach (var liveRecord in liveRecords)
-                    {
-                        liveRecord.LoadAppIconIfNeeded(); // Ensure icon is loaded
+                        var currentDateForMerge = DateTime.Today;
+                        var liveRecords = _trackingService?.GetRecords()
+                                    ?.Where(r => r.IsFromDate(currentDateForMerge))
+                                    ?.ToList() ?? new List<AppUsageRecord>();
+                                    
+                        System.Diagnostics.Debug.WriteLine($"Found {liveRecords.Count} live records for today");
                         
-                        if (mergedData.TryGetValue(liveRecord.ProcessName, out var existingRecord))
+                        // Create a merged set of records to display in the list
+                        var mergedData = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+                        // Add aggregated records first (these contain historical data)
+                        foreach (var aggRecord in aggregatedRecords)
                         {
-                            // Existing record found from aggregation.
-                            // Update its focus state and potentially duration if it represents today.
-                            // Ensure the existingRecord's duration reflects the TOTAL for the range.
-                            // If the live record represents *today's* contribution, 
-                            // we need to ensure the total duration shown is correct.
-                            // For simplicity, the current aggregated duration from the DB
-                            // should already include today's saved time. The liveRecord 
-                            // has the *current session's* time. 
-                            // We'll use the aggregated record as the base and update its focus state.
-                            // The `IncrementDuration` in the timer tick handles adding live time.
-                            System.Diagnostics.Debug.WriteLine($"Updating focus state for {existingRecord.ProcessName} from live data.");
-                            existingRecord.IsFocused = liveRecord.IsFocused;
-                            // We don't overwrite the duration here, as the aggregation should be correct
+                            mergedData[aggRecord.ProcessName] = aggRecord;
                         }
-                        else
+
+                        // Overwrite or ADD live records, ensuring total duration is correct
+                        foreach (var liveRecord in liveRecords)
                         {
-                            // Live record not found in aggregation, add it directly.
-                            // This happens if the app was only used today and not saved yet.
-                            System.Diagnostics.Debug.WriteLine($"Adding new live record {liveRecord.ProcessName} to merged data.");
-                            mergedData[liveRecord.ProcessName] = liveRecord;
+                            if (liveRecord == null) continue;
+                            
+                            liveRecord.LoadAppIconIfNeeded(); // Ensure icon is loaded
+                            
+                            // Also add the live record to _usageRecords for chart rendering
+                            _usageRecords.Add(liveRecord);
+                            
+                            if (mergedData.TryGetValue(liveRecord.ProcessName, out var existingRecord))
+                            {
+                                // Existing record found from aggregation.
+                                if (existingRecord != null)
+                                {
+                                    // Use the live record's window handle and focus state
+                                    existingRecord.WindowHandle = liveRecord.WindowHandle;
+                                    existingRecord.IsFocused = liveRecord.IsFocused;
+                                    
+                                    // Use live record's window title if the existing one is empty
+                                    if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(liveRecord.WindowTitle))
+                                    {
+                                        existingRecord.WindowTitle = liveRecord.WindowTitle;
+                                    }
+                                    
+                                    System.Diagnostics.Debug.WriteLine($"Updated {liveRecord.ProcessName} with live data. Duration: {existingRecord.Duration.TotalSeconds:F1}s");
+                                }
+                            }
+                            else
+                            {
+                                // This is a new process we haven't seen before - add it
+                                mergedData[liveRecord.ProcessName] = liveRecord;
+                                System.Diagnostics.Debug.WriteLine($"Added new live record: {liveRecord.ProcessName} - {liveRecord.Duration.TotalSeconds:F1}s");
+                            }
                         }
+                        
+                        // Replace the display records with the merged data
+                        records = mergedData.Values.ToList();
+                        System.Diagnostics.Debug.WriteLine($"LoadRecordsForDateRange (Today included): Final unique records: {records.Count}");
                     }
-                    
-                    records = mergedData.Values.ToList();
+                    catch (Exception mergeEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error merging live data: {mergeEx.Message}");
+                        // Fallback to just using the aggregated records if merging fails
+                        records = aggregatedRecords;
+                    }
                 }
-                else
-                {
-                    // For purely historical ranges, just use the aggregated data
-                    records = aggregatedRecords;
-                }
-                // --- Merge END ---
                 
-                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records after merge/aggregation");
+                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records for display, {_usageRecords.Count} records for charts");
                 
                 // Check if we have data - if not, show a message to the user
                 if (records.Count == 0)
@@ -2230,9 +2367,9 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine("No data found for the selected date range");
                     
                     // Show a message to the user
-                    DispatcherQueue.TryEnqueue(async () => {
+                    DispatcherQueue?.TryEnqueue(async () => {
                         try {
-                            if (this.Content != null)
+                            if (!_disposed && this.Content != null)
                             {
                                 ContentDialog infoDialog = new ContentDialog()
                                 {
@@ -2246,7 +2383,7 @@ namespace ScreenTimeTracker
                             }
                             else
                             {
-                                System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                                System.Diagnostics.Debug.WriteLine("Content was null or window disposed, cannot show error dialog.");
                             }
                         }
                         catch (Exception dialogEx) {
@@ -2256,15 +2393,21 @@ namespace ScreenTimeTracker
                 }
                 
                 // Update chart title
-                SummaryTitle.Text = "Screen Time Summary";
+                if (SummaryTitle != null)
+                {
+                    SummaryTitle.Text = "Screen Time Summary";
+                }
                 
                 // Show daily average for date range view
-                AveragePanel.Visibility = Visibility.Visible;
+                if (AveragePanel != null)
+                {
+                    AveragePanel.Visibility = Visibility.Visible;
+                }
                 
                 // Sort records by duration (descending)
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
                 
-                // Add sorted records to the observable collection
+                // Add sorted records to the observable collection for list display
                 foreach (var record in sortedRecords)
                 {
                     _usageRecords.Add(record);
@@ -2274,52 +2417,67 @@ namespace ScreenTimeTracker
                 CleanupSystemProcesses();
                 
                 // Force a refresh of the ListView
-                if (UsageListView != null)
+                if (!_disposed && UsageListView != null)
                 {
-                    DispatcherQueue.TryEnqueue(() => {
-                        UsageListView.ItemsSource = null;
-                        UsageListView.ItemsSource = _usageRecords;
+                    DispatcherQueue?.TryEnqueue(() => {
+                        if (!_disposed && UsageListView != null)
+                        {
+                            UsageListView.ItemsSource = null;
+                            UsageListView.ItemsSource = _usageRecords;
+                        }
                     });
                 }
                 
                 // Check if this is the Last 7 days selection
-                var today = DateTime.Today;
-                bool isLast7Days = startDate == today.AddDays(-6) && endDate == today;
+                var lastWeekStart = today.AddDays(-6);
+                bool isLast7Days = startDate == lastWeekStart && endDate == today;
                 
                 if (isLast7Days)
                 {
                     // Force daily chart for Last 7 days
+                    _currentTimePeriod = TimePeriod.Weekly;
                     _currentChartViewMode = ChartViewMode.Daily;
                     
                     // Update view mode label and hide toggle panel
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (ViewModeLabel != null)
+                    DispatcherQueue?.TryEnqueue(() => {
+                        if (!_disposed)
                         {
-                            ViewModeLabel.Text = "Daily View";
-                        }
-                        
-                        // Hide the view mode panel (user can't change the view)
-                        if (ViewModePanel != null)
-                        {
-                            ViewModePanel.Visibility = Visibility.Collapsed;
+                            if (ViewModeLabel != null)
+                            {
+                                ViewModeLabel.Text = "Daily View";
+                            }
+                            
+                            // Hide the view mode panel (user can't change the view)
+                            if (ViewModePanel != null)
+                            {
+                                ViewModePanel.Visibility = Visibility.Collapsed;
+                            }
+                            
+                            // Update the chart
+                            UpdateUsageChart();
+                            
+                            // Update the summary tab
+                            UpdateSummaryTab();
                         }
                     });
-                    
-                    // Update the chart
-                    UpdateUsageChart();
-                    
-                    // Update the summary tab
-                    UpdateSummaryTab();
                 }
                 else
                 {
                     // For other date ranges, use default behavior
                     // Update chart based on current view mode
+                    _currentTimePeriod = TimePeriod.Weekly;
                     _currentChartViewMode = ChartViewMode.Daily; // Default to daily for ranges
-                    UpdateChartViewMode(); // This will call UpdateUsageChart internally
                     
-                    // Update the summary tab
-                    UpdateSummaryTab();
+                    // Update view mode and chart
+                    DispatcherQueue?.TryEnqueue(() => {
+                        if (!_disposed)
+                        {
+                            UpdateChartViewMode(); // This will call UpdateUsageChart internally
+                            
+                            // Update the summary tab
+                            UpdateSummaryTab();
+                        }
+                    });
                 }
                 
                 System.Diagnostics.Debug.WriteLine($"Successfully loaded and displayed {records.Count} records for date range");
@@ -2330,9 +2488,9 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                 
                 // Show an error message to the user
-                DispatcherQueue.TryEnqueue(async () => {
+                DispatcherQueue?.TryEnqueue(async () => {
                     try {
-                        if (this.Content != null)
+                        if (!_disposed && this.Content != null)
                         {
                             ContentDialog errorDialog = new ContentDialog()
                             {
@@ -2346,7 +2504,7 @@ namespace ScreenTimeTracker
                         }
                         else
                         {
-                            System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                            System.Diagnostics.Debug.WriteLine("Content was null or window disposed, cannot show error dialog.");
                         }
                     }
                     catch (Exception dialogEx) {
@@ -2407,7 +2565,7 @@ namespace ScreenTimeTracker
                     if (UsageListView != null && UsageListView.ItemsSource == _usageRecords)
                     {
                         // Only refresh if our collection is the source
-                        DispatcherQueue.TryEnqueue(() => {
+                        DispatcherQueue?.TryEnqueue(() => {
                             UsageListView.ItemsSource = null;
                             UsageListView.ItemsSource = _usageRecords;
                         });

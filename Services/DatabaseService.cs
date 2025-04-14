@@ -615,6 +615,7 @@ namespace ScreenTimeTracker.Services
             try
             {
                 var dateString = date.ToString("yyyy-MM-dd");
+                Debug.WriteLine($"Getting records for date: {dateString}");
                 
                 // Open connection
                 _connection.Open();
@@ -625,34 +626,47 @@ namespace ScreenTimeTracker.Services
                         SELECT id, process_name, app_name, start_time, end_time, duration
                         FROM app_usage
                         WHERE date = $date
-                        ORDER BY start_time DESC;";
+                        ORDER BY duration DESC;"; // Order by duration to show most used apps first
                     command.Parameters.AddWithValue("$date", dateString);
                     
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
                         {
-                            var record = new AppUsageRecord
+                            try
                             {
-                                Id = reader.GetInt32(0),
-                                ProcessName = reader.GetString(1),
-                                ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : reader.GetString(1),
-                                Date = date,
-                                StartTime = DateTime.Parse(reader.GetString(3))
-                            };
-                            
-                            if (!reader.IsDBNull(4))
-                            {
-                                record.EndTime = DateTime.Parse(reader.GetString(4));
+                                var dbStartTime = DateTime.Parse(reader.GetString(3));
+                                // Important: Preserve the actual start time from the database 
+                                // instead of just using the date parameter
+                                
+                                var record = new AppUsageRecord
+                                {
+                                    Id = reader.GetInt32(0),
+                                    ProcessName = reader.GetString(1),
+                                    ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : reader.GetString(1),
+                                    Date = date, // Use date for the Date field
+                                    StartTime = dbStartTime // Use actual start time from database
+                                };
+                                
+                                if (!reader.IsDBNull(4))
+                                {
+                                    record.EndTime = DateTime.Parse(reader.GetString(4));
+                                }
+                                
+                                if (!reader.IsDBNull(5))
+                                {
+                                    // Convert milliseconds to TimeSpan
+                                    record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(5));
+                                }
+                                
+                                records.Add(record);
+                                Debug.WriteLine($"Loaded record: {record.ProcessName}, StartTime: {record.StartTime}, Duration: {record.Duration.TotalSeconds}s");
                             }
-                            
-                            if (!reader.IsDBNull(5))
+                            catch (Exception parseEx)
                             {
-                                // Convert milliseconds to TimeSpan
-                                record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(5));
+                                Debug.WriteLine($"Error parsing record: {parseEx.Message}");
+                                // Continue to next record
                             }
-                            
-                            records.Add(record);
                         }
                     }
                 }
@@ -670,6 +684,7 @@ namespace ScreenTimeTracker.Services
                 }
             }
             
+            Debug.WriteLine($"Loaded {records.Count} records for date {date:yyyy-MM-dd}");
             return records;
         }
 

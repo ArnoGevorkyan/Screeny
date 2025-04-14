@@ -1381,23 +1381,24 @@ namespace ScreenTimeTracker.Models
 
         public static AppUsageRecord CreateAggregated(string processName, DateTime date)
         {
-            // Validate the date to prevent future dates
-            DateTime validDate = date;
-            if (validDate > DateTime.Today)
-            {
-                System.Diagnostics.Debug.WriteLine($"WARNING: CreateAggregated received future date ({date:yyyy-MM-dd}), using today instead.");
-                validDate = DateTime.Today;
-            }
-            
-            return new AppUsageRecord
+            // Create a new record for the given process name and date
+            var record = new AppUsageRecord
             {
                 ProcessName = processName,
-                StartTime = validDate.Date,
-                EndTime = null,
-                _accumulatedDuration = TimeSpan.Zero,
-                _lastFocusTime = validDate.Date,
-                IsFocused = false
+                ApplicationName = processName, // Default to process name
+                Date = date,
+                // Use noon instead of midnight to ensure it's visible on charts
+                // This only matters for aggregated views where exact time isn't shown
+                StartTime = new DateTime(date.Year, date.Month, date.Day, 12, 0, 0),
+                _accumulatedDuration = TimeSpan.Zero
             };
+            
+            // Initialize icon loading in the background
+            record.LoadAppIconIfNeeded();
+            
+            System.Diagnostics.Debug.WriteLine($"Created aggregated record for {processName} with date {date:yyyy-MM-dd} and start time {record.StartTime}");
+            
+            return record;
         }
 
         public void LoadAppIconIfNeeded()
