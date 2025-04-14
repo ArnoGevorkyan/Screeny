@@ -131,6 +131,53 @@ namespace ScreenTimeTracker.Helpers
                     System.Diagnostics.Debug.WriteLine($"Added tiny value to hour {currentHour}");
                 }
 
+                // MODIFICATION: Filter to only include hours with usage
+                var nonZeroHours = hourlyUsage
+                    .Where(h => h.Value > 0.0001)
+                    .Select(h => h.Key)
+                    .OrderBy(h => h)
+                    .ToList();
+                
+                // If we have no non-zero hours, include the current hour
+                if (nonZeroHours.Count == 0)
+                {
+                    nonZeroHours.Add(DateTime.Now.Hour);
+                }
+                
+                // Add padding hours before and after to provide context
+                int earliestHour = nonZeroHours.First();
+                int latestHour = nonZeroHours.Last();
+                
+                // Ensure we have at least 6 hours visible or expand to include all non-zero hours plus padding
+                int filteredStartHour, filteredEndHour;
+                
+                if (nonZeroHours.Count <= 3)
+                {
+                    // For very few data points, show a reasonable window centered on the data
+                    int middleHour = (earliestHour + latestHour) / 2;
+                    filteredStartHour = Math.Max(0, middleHour - 3);
+                    filteredEndHour = Math.Min(23, middleHour + 3);
+                }
+                else
+                {
+                    // Add padding before and after
+                    filteredStartHour = Math.Max(0, earliestHour - 1);  
+                    filteredEndHour = Math.Min(23, latestHour + 1);
+                }
+                
+                // Ensure minimum range of hours for context
+                if (filteredEndHour - filteredStartHour < 5)
+                {
+                    // Expand the range to show at least 6 hours
+                    while (filteredEndHour - filteredStartHour < 5 && (filteredStartHour > 0 || filteredEndHour < 23))
+                    {
+                        if (filteredStartHour > 0) filteredStartHour--;
+                        if (filteredEndHour < 23 && filteredEndHour - filteredStartHour < 5) filteredEndHour++;
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"Filtered to hours {filteredStartHour}-{filteredEndHour} based on usage");
+
                 // Set up series and labels for the chart
                 var values = new List<double>();
                 var labels = new List<string>();
@@ -138,8 +185,8 @@ namespace ScreenTimeTracker.Helpers
                 // Create a more concise label format for narrow windows
                 bool useShortLabels = chart.ActualWidth < 500;
                 
-                // Add values and labels for each hour (with spacing logic)
-                for (int i = 0; i < 24; i++)
+                // Add values and labels for each hour in our filtered range
+                for (int i = filteredStartHour; i <= filteredEndHour; i++)
                 {
                     values.Add(hourlyUsage[i]);
                     
@@ -147,8 +194,8 @@ namespace ScreenTimeTracker.Helpers
                     // For narrow screens, we only show labels every 2 or 3 hours
                     if (useShortLabels)
                     {
-                        // Very narrow: show label only for 12am, 6am, 12pm, 6pm
-                        if (i % 6 == 0)
+                        // Very narrow: show label only for specific hours
+                        if ((i % 3 == 0) || i == filteredStartHour || i == filteredEndHour)
                         {
                             labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "p" : "a")}");
                         }
@@ -159,20 +206,8 @@ namespace ScreenTimeTracker.Helpers
                     }
                     else if (chart.ActualWidth < 700)
                     {
-                        // Narrow: show label every 3 hours (12am, 3am, 6am, etc.)
-                        if (i % 3 == 0)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
-                    }
-                    else if (chart.ActualWidth < 900)
-                    {
-                        // Medium: show label every 2 hours
-                        if (i % 2 == 0)
+                        // Narrow: show label every 3 hours or start/end
+                        if (i % 2 == 0 || i == filteredStartHour || i == filteredEndHour)
                         {
                             labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
                         }
@@ -187,7 +222,7 @@ namespace ScreenTimeTracker.Helpers
                         labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
                     }
                     
-                    System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[i]}");
+                    System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[values.Count-1]}");
                 }
 
                 // Determine a good Y-axis maximum based on the actual data

@@ -411,22 +411,37 @@ namespace ScreenTimeTracker
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine("Timer tick - updating durations");
-                _timerTickCounter++;
-                bool didUpdate = false;
+                // Check if disposed or disposing
+                if (_disposed || _usageRecords == null) 
+                {
+                    System.Diagnostics.Debug.WriteLine("UpdateTimer_Tick: Skipping update as window is disposed or collection is null");
+                    return;
+                }
 
+                System.Diagnostics.Debug.WriteLine("Timer tick - updating durations");
+        
+                // Use a local variable for safer thread interaction
+                _timerTickCounter++;
+                int localTickCounter = _timerTickCounter;
+        
                 // Get the LIVE focused application from the tracking service
-                var liveFocusedApp = _trackingService.CurrentRecord;
+                var liveFocusedApp = _trackingService?.CurrentRecord;
                 AppUsageRecord? recordToUpdate = null;
 
                 if (liveFocusedApp != null)
                 {
+                    // Safely access collection - check if disposed first
+                    if (_disposed || _usageRecords == null) return;
+                    
                     // Find if this app exists in the currently displayed list (_usageRecords)
                     // Match based on ProcessName for simplicity in aggregated views
-                    recordToUpdate = _usageRecords
+                    // Use ToList to get a snapshot to avoid collection modified exception
+                    var snapshot = _usageRecords.ToList();
+                    
+                    recordToUpdate = snapshot
                         .FirstOrDefault(r => r.ProcessName.Equals(liveFocusedApp.ProcessName, StringComparison.OrdinalIgnoreCase));
 
-                    if (recordToUpdate != null)
+                    if (recordToUpdate != null && !_disposed)
                     {
                         System.Diagnostics.Debug.WriteLine($"Incrementing duration for displayed record: {recordToUpdate.ProcessName}");
                         
@@ -439,7 +454,6 @@ namespace ScreenTimeTracker
                         {
                             // Increment duration every second for accuracy
                             recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
-                            // REMOVED: didUpdate = true; - We don't force UI update just for duration increment
                         }
                         else
                         {
@@ -448,25 +462,41 @@ namespace ScreenTimeTracker
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine($"Live focused app {liveFocusedApp.ProcessName} not found in current view");
+                        System.Diagnostics.Debug.WriteLine($"Live focused app {liveFocusedApp.ProcessName} not found in current view or window disposed");
                     }
                 }
                 
                 // --- CHANGE: Only update UI based on timer interval, not duration increment --- 
                 // Periodically force UI refresh to ensure chart updates correctly.
-                if (_timerTickCounter >= 15) // Update UI every ~15 seconds (Adjust interval as needed)
+                if (localTickCounter >= 10 && !_disposed) // Reduced from 15 to 10 seconds for more frequent updates
                 {
-                    System.Diagnostics.Debug.WriteLine($"Periodic UI Update Triggered (tickCounter={_timerTickCounter})");
+                    System.Diagnostics.Debug.WriteLine($"Periodic UI Update Triggered (tickCounter={localTickCounter})");
                     _timerTickCounter = 0; // Reset counter
                     
-                    // Update summary and chart
-                    UpdateSummaryTab();
-                    UpdateUsageChart(liveFocusedApp); // Pass live app in case it needs it
+                    // Update UI using dispatcher to ensure we're on the UI thread
+                    DispatcherQueue?.TryEnqueue(() =>
+                    {
+                        try 
+                        {
+                            // Double-check we're not disposed before updating UI
+                            if (!_disposed && _usageRecords != null)
+                            {
+                                // Update summary and chart
+                                UpdateSummaryTab();
+                                UpdateUsageChart(liveFocusedApp); // Pass live app in case it needs it
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error in UI update dispatcher: {ex.Message}");
+                        }
+                    });
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in timer tick: {ex}");
+                System.Diagnostics.Debug.WriteLine($"Error in timer tick: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
             }
         }
 
