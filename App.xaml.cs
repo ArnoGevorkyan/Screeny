@@ -18,6 +18,7 @@ using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
+using ScreenTimeTracker.Services; // Assuming WindowTrackingService is here
 
 namespace ScreenTimeTracker;
 
@@ -36,6 +37,7 @@ public partial class App : Application
     private const uint MB_OK = 0x00000000;
 
     private Window? m_window;
+    private WindowTrackingService? _trackingService; // Field to hold the service instance
 
     // Add static property to hold MainWindow instance
     public static Window? MainWindowInstance { get; private set; }
@@ -77,8 +79,6 @@ public partial class App : Application
             // Store the UI thread's dispatcher for use throughout the app
             DispatcherHelper.Initialize(DispatcherQueue.GetForCurrentThread());
             WriteToLog("Dispatcher initialized");
-
-            // Setup logging as early as possible
         }
         catch (Exception ex)
         {
@@ -110,8 +110,22 @@ public partial class App : Application
             WriteToLog("MainWindow created successfully");
             
             // Store the instance
-            MainWindowInstance = m_window; 
+            MainWindowInstance = m_window;
             
+            // Retrieve the tracking service from the MainWindow instance
+            if (m_window is MainWindow mainWindow)
+            {
+                _trackingService = mainWindow.GetTrackingService();
+                if (_trackingService == null)
+                {
+                    WriteToLog("CRITICAL WARNING: Could not retrieve WindowTrackingService...");
+                }
+            }
+            else
+            {
+                 WriteToLog("CRITICAL WARNING: m_window is not a MainWindow instance.");
+            }
+
             m_window.Activate();
             WriteToLog("MainWindow activated");
         }

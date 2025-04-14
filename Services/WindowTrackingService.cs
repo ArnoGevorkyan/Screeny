@@ -3,6 +3,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Timers;
 using ScreenTimeTracker.Models;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace ScreenTimeTracker.Services
 {
@@ -12,6 +15,7 @@ namespace ScreenTimeTracker.Services
         private AppUsageRecord? _currentRecord;
         private readonly List<AppUsageRecord> _records;
         private bool _disposed;
+        private readonly DatabaseService _databaseService;
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -28,30 +32,39 @@ namespace ScreenTimeTracker.Services
         public bool IsTracking { get; private set; }
         public AppUsageRecord? CurrentRecord => _currentRecord;
 
-        public WindowTrackingService()
+        public WindowTrackingService(DatabaseService databaseService)
         {
+            if (databaseService == null)
+            {
+                throw new ArgumentNullException(nameof(databaseService));
+            }
+            _databaseService = databaseService;
+
             _records = new List<AppUsageRecord>();
-            _timer = new System.Timers.Timer(50);
+            _timer = new System.Timers.Timer(1000);
             _timer.Elapsed += Timer_Elapsed;
             IsTracking = false;
-            System.Diagnostics.Debug.WriteLine("WindowTrackingService initialized with timer interval: 50ms");
+            Debug.WriteLine("WindowTrackingService initialized.");
         }
 
         public void StartTracking()
         {
             ThrowIfDisposed();
-            System.Diagnostics.Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
+            if (IsTracking) return;
+
+            Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
+            _records.Clear();
             _timer.Start();
             IsTracking = true;
-            System.Diagnostics.Debug.WriteLine($"Timer interval: {_timer.Interval}ms");
-            // Force immediate check when starting
             CheckActiveWindow();
         }
 
         public void StopTracking()
         {
             ThrowIfDisposed();
-            System.Diagnostics.Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking ====");
+            if (!IsTracking) return;
+
+            Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking (Normal) ====");
             _timer.Stop();
             IsTracking = false;
             if (_currentRecord != null)
@@ -61,6 +74,56 @@ namespace ScreenTimeTracker.Services
                 _records.Add(_currentRecord);
                 _currentRecord = null;
             }
+            Debug.WriteLine($"StopTracking: Finalized session with {_records.Count} records ready for saving.");
+        }
+
+        public void PauseTrackingForSuspend()
+        {
+            ThrowIfDisposed();
+            if (!IsTracking) return;
+
+            Debug.WriteLine("==== WindowTrackingService.PauseTrackingForSuspend() - Pausing for system suspend ====");
+            _timer.Stop();
+            IsTracking = false;
+
+            if (_currentRecord != null)
+            {
+                Debug.WriteLine($"Suspend: Finalizing record for {_currentRecord.ProcessName}");
+                _currentRecord.SetFocus(false);
+                _currentRecord.EndTime = DateTime.Now;
+
+                try
+                {
+                    Debug.WriteLine($"Suspend: Attempting immediate save for {_currentRecord.ProcessName} (Calculated Duration: {_currentRecord.Duration.TotalSeconds}s)");
+                    _databaseService.SaveRecord(_currentRecord);
+                    Debug.WriteLine($"Suspend: Successfully saved record for {_currentRecord.ProcessName}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"CRITICAL ERROR: Failed to save record during suspend: {ex.Message}");
+                }
+                finally
+                {
+                    _currentRecord = null;
+                }
+            }
+            else
+            {
+                Debug.WriteLine("Suspend: No current record to finalize and save.");
+            }
+            _records.Clear();
+        }
+
+        public void ResumeTrackingAfterSuspend()
+        {
+            ThrowIfDisposed();
+            if (IsTracking) return;
+
+            Debug.WriteLine("==== WindowTrackingService.ResumeTrackingAfterSuspend() - Resuming tracking ====");
+            IsTracking = true;
+            _records.Clear();
+            _timer.Start();
+            CheckActiveWindow();
         }
 
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
@@ -72,6 +135,11 @@ namespace ScreenTimeTracker.Services
 
         private void CheckActiveWindow()
         {
+            if (!IsTracking || _disposed)
+            {
+                return;
+            }
+
             var foregroundWindow = GetForegroundWindow();
             if (foregroundWindow == IntPtr.Zero)
             {
@@ -79,31 +147,26 @@ namespace ScreenTimeTracker.Services
                 return;
             }
             
-            // Retrieve the process ID
             uint processId;
             GetWindowThreadProcessId(foregroundWindow, out processId);
             
-            // Skip tracking if the window belongs to our tracker process.
             if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
             {
                 System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Skipping our own process");
                 return;
             }
 
-            // Get the active window title and process name.
             var windowTitle = GetActiveWindowTitle(foregroundWindow);
             var processName = GetProcessName(foregroundWindow);
 
             System.Diagnostics.Debug.WriteLine($"CheckActiveWindow - Detected window: {processName} ({processId}) - '{windowTitle}'");
 
-            // Ignore windows whose title contains our app's name.
             if (windowTitle.IndexOf("Screeny", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Ignoring our own window based on title");
                 return;
             }
 
-            // If we have a current record and it's different from the new window, unfocus it
             if (_currentRecord != null && 
                 (_currentRecord.WindowHandle != foregroundWindow || 
                  _currentRecord.ProcessId != (int)processId || 
@@ -114,7 +177,6 @@ namespace ScreenTimeTracker.Services
                 _currentRecord = null;
             }
 
-            // Look for an existing record for this window
             var existingRecord = _records.FirstOrDefault(r => 
                 r.ProcessId == (int)processId && 
                 r.WindowTitle == windowTitle &&
@@ -135,7 +197,6 @@ namespace ScreenTimeTracker.Services
             else
             {
                 System.Diagnostics.Debug.WriteLine($"Creating new record for: {processName} - {windowTitle}");
-                // Create a new record for the new active window.
                 _currentRecord = new AppUsageRecord
                 {
                     ProcessName = processName,
@@ -144,7 +205,7 @@ namespace ScreenTimeTracker.Services
                     ProcessId = (int)processId,
                     WindowHandle = foregroundWindow,
                     Date = EnsureValidDate(DateTime.Now.Date),
-                    ApplicationName = processName // Default to process name, can be refined later
+                    ApplicationName = processName
                 };
                 
                 _currentRecord.SetFocus(true);
@@ -209,17 +270,20 @@ namespace ScreenTimeTracker.Services
         {
             if (!_disposed)
             {
-                StopTracking();
+                Debug.WriteLine("Disposing WindowTrackingService...");
+                _timer.Stop();
                 _timer.Elapsed -= Timer_Elapsed;
                 _timer.Dispose();
+                IsTracking = false;
                 _records.Clear();
+                _currentRecord = null;
                 _disposed = true;
+                Debug.WriteLine("WindowTrackingService disposed.");
             }
         }
 
         private DateTime EnsureValidDate(DateTime date)
         {
-            // If the date is in the future, use today's date
             if (date > DateTime.Today)
             {
                 System.Diagnostics.Debug.WriteLine($"WARNING: Future date detected ({date:yyyy-MM-dd}), using current date instead.");

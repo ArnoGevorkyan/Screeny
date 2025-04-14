@@ -17,6 +17,7 @@ namespace ScreenTimeTracker.Services
         private readonly SqliteConnection _connection;
         private bool _initializedSuccessfully = false;
         private bool _disposed = false;
+        private bool _useInMemoryFallback = false;
 
         /// <summary>
         /// Initializes a new instance of the DatabaseService class.
@@ -25,96 +26,135 @@ namespace ScreenTimeTracker.Services
         {
             try
             {
-                // Create directory for database
-                var dataDirectory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "ScreenTimeTracker");
-
-                if (!Directory.Exists(dataDirectory))
+                var dataDirectory = Path.GetDirectoryName(_dbPath);
+                if (!string.IsNullOrEmpty(dataDirectory) && !Directory.Exists(dataDirectory))
                 {
                     Directory.CreateDirectory(dataDirectory);
                     Debug.WriteLine($"Created database directory: {dataDirectory}");
                 }
 
-                // Path is already initialized in the field declaration
                 Debug.WriteLine($"Database path: {_dbPath}");
-                Debug.WriteLine($"Database directory exists: {Directory.Exists(Path.GetDirectoryName(_dbPath) ?? "")}");
-                Debug.WriteLine($"Database file exists before connection: {File.Exists(_dbPath)}");
 
-                // Create connection string
-                var connectionString = new SqliteConnectionStringBuilder
+                // Check integrity BEFORE opening connection
+                if (File.Exists(_dbPath) && !CheckDatabaseIntegrity(_dbPath))
                 {
-                    DataSource = _dbPath,
-                    Mode = SqliteOpenMode.ReadWriteCreate,
-                    Cache = SqliteCacheMode.Shared,
-                    Pooling = true
-                }.ToString();
+                    // Handle corruption (e.g., backup and create new)
+                    HandleCorruptedDatabase(_dbPath);
+                    // After handling, initialization will create a new DB file
+                }
 
+                var connectionString = CreateConnectionString(_dbPath);
                 Debug.WriteLine($"Using connection string: {connectionString}");
 
-                // Create connection
                 _connection = new SqliteConnection(connectionString);
+                InitializeDatabase(); // Includes Open, Schema, Migrations, Close
                 
-                // Initialize database schema
-                InitializeDatabase();
-                
-                // Verify if the database file was created
                 Debug.WriteLine($"Database file exists after initialization: {File.Exists(_dbPath)}");
-                
                 _initializedSuccessfully = true;
+                _useInMemoryFallback = false; // Ensure we know we are using the file
 
-                // Check if we have no data and insert a test record if empty
-                if (IsFirstRun())
-                {
-                    Debug.WriteLine("Database appears to be empty - adding a test record");
-                    try
-                    {
-                        // Create a test record for today
-                        var testRecord = new AppUsageRecord
-                        {
-                            ProcessName = "TestApp",
-                            ApplicationName = "Test Application",
-                            Date = DateTime.Today,
-                            StartTime = DateTime.Today.AddHours(9),
-                            EndTime = DateTime.Today.AddHours(10),
-                            _accumulatedDuration = TimeSpan.FromHours(1)
-                        };
-                        
-                        // Save the test record
-                        SaveRecord(testRecord);
-                        Debug.WriteLine("Test record created successfully");
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Error creating test record: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    Debug.WriteLine("Database already contains records");
-                }
+                // Test record logic moved inside InitializeDatabase if needed or removed if not required
+                // ... (Removed IsFirstRun check and test record creation from here)
             }
             catch (Exception ex)
             {
-                // Log the error but don't crash
-                Debug.WriteLine($"Database initialization error: {ex.Message}");
+                Debug.WriteLine($"CRITICAL Database initialization error: {ex.Message}");
                 Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                 
-                // We'll still create a connection object with a default in-memory database
-                // so the app can run in a degraded mode without crashing
-                _connection = new SqliteConnection("Data Source=:memory:");
+                // Fallback to in-memory database
+                Debug.WriteLine("Attempting to initialize in-memory database as fallback.");
+                _connection = new SqliteConnection("Data Source=:memory:;Mode=Memory;Cache=Shared");
                 try
                 {
-                    _connection.Open();
                     InitializeInMemoryDatabase();
-                    _initializedSuccessfully = false;
+                    _initializedSuccessfully = true; // Considered initialized for in-memory operation
+                    _useInMemoryFallback = true;
+                    Debug.WriteLine("Successfully initialized in-memory database.");
                 }
                 catch (Exception memEx)
                 {
-                    // Last resort - we'll operate without database support
-                    Debug.WriteLine($"In-memory database initialization failed: {memEx.Message}");
+                    Debug.WriteLine($"FATAL: In-memory database initialization failed: {memEx.Message}");
+                    // If even in-memory fails, create a null connection or handle appropriately
+                     _connection = new SqliteConnection(); // Avoid null reference, but it won't work
                     _initializedSuccessfully = false;
+                    _useInMemoryFallback = true; // Still in fallback mode, just failed
                 }
+            }
+        }
+
+        // Helper to create connection string
+        private string CreateConnectionString(string dataSource)
+        {
+             return new SqliteConnectionStringBuilder
+             {
+                 DataSource = dataSource,
+                 Mode = SqliteOpenMode.ReadWriteCreate,
+                 Cache = SqliteCacheMode.Shared,
+                 Pooling = true // Pooling can be beneficial
+             }.ToString();
+        }
+
+        // New method to check DB integrity using PRAGMA
+        private bool CheckDatabaseIntegrity(string dbPath)
+        {
+            Debug.WriteLine($"Checking database integrity for: {dbPath}");
+            if (!File.Exists(dbPath)) return true; // No file, considered intact
+
+            // Use a temporary connection for the check
+            var checkConnectionString = CreateConnectionString(dbPath);
+            using (var checkConnection = new SqliteConnection(checkConnectionString))
+            {
+                try
+                {
+                    checkConnection.Open();
+                    using (var command = checkConnection.CreateCommand())
+                    {
+                        command.CommandText = "PRAGMA integrity_check;";
+                        var result = command.ExecuteScalar()?.ToString();
+                        Debug.WriteLine($"PRAGMA integrity_check result: {result}");
+                        // Integrity check returns "ok" if the database is valid
+                        return result != null && result.Equals("ok", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error during integrity check: {ex.Message}");
+                    return false; // Assume corruption if check fails
+                }
+                // No need for finally block, 'using' handles disposal/closing
+            }
+        }
+
+        // New method to handle corrupted database
+        private void HandleCorruptedDatabase(string dbPath)
+        {
+            string backupPath = dbPath + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmss");
+            Debug.WriteLine($"Database integrity check failed! Moving corrupted file to: {backupPath}");
+            try
+            {
+                File.Move(dbPath, backupPath);
+                Debug.WriteLine("Successfully moved corrupted database file.");
+                // Optionally: Notify user about the corruption and reset
+            }
+            catch (IOException ioEx)
+            {
+                 Debug.WriteLine($"Error moving corrupted database file (IOException): {ioEx.Message}");
+                 // Attempt to delete if move failed (e.g., file locked)
+                 try
+                 {
+                     File.Delete(dbPath);
+                     Debug.WriteLine("Successfully deleted corrupted database file after move failed.");
+                 }
+                 catch (Exception delEx)
+                 {
+                     Debug.WriteLine($"CRITICAL ERROR: Failed to move AND delete corrupted database file: {delEx.Message}");
+                     // At this point, initialization will likely fail, leading to in-memory fallback
+                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"CRITICAL ERROR: Failed to move corrupted database file: {ex.Message}");
+                // Initialization might fail, leading to in-memory fallback
             }
         }
 
@@ -395,17 +435,19 @@ namespace ScreenTimeTracker.Services
         public bool SaveRecord(AppUsageRecord record)
         {
             System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING SaveRecord for {record.ProcessName}");
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Database not initialized, skipping.");
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Database not initialized or using in-memory fallback, skipping.");
                 return false;
             }
             
             bool success = false;
+            SqliteTransaction? transaction = null; // Declare transaction variable
             try
             {
                 _connection.Open();
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection opened.");
+                transaction = _connection.BeginTransaction(); // Start transaction
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection opened and transaction started.");
 
                 // Validate date to prevent future dates
                 DateTime validatedStartTime = ValidateDate(record.StartTime);
@@ -420,7 +462,7 @@ namespace ScreenTimeTracker.Services
 
                 string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration); SELECT last_insert_rowid();";
 
-                using (var command = new SqliteCommand(insertSql, _connection))
+                using (var command = new SqliteCommand(insertSql, _connection, transaction)) // Assign transaction
                 {
                     command.Parameters.AddWithValue("@Date", dateString);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
@@ -445,12 +487,24 @@ namespace ScreenTimeTracker.Services
                          System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: ExecuteScalar returned null, save failed?");
                     }
                 }
+                
+                transaction.Commit(); // Commit transaction if successful
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Transaction committed.");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: **** ERROR **** saving record for {record.ProcessName}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                // Don't re-throw, just report failure
+                try
+                {
+                    transaction?.Rollback(); // Rollback transaction on error
+                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Transaction rolled back.");
+                }
+                catch (Exception rbEx)
+                {
+                     System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
+                }
+                success = false; // Ensure success is false on error
             }
             finally
             {
@@ -470,17 +524,18 @@ namespace ScreenTimeTracker.Services
         public void UpdateRecord(AppUsageRecord record)
         {
             System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING UpdateRecord for ID {record.Id} ({record.ProcessName})");
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Database not initialized, skipping.");
+                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Database not initialized or using in-memory fallback, skipping.");
                 return;
             }
             
-            bool success = false;
+            SqliteTransaction? transaction = null; // Declare transaction variable
             try
             {
                 _connection.Open();
-                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection opened.");
+                transaction = _connection.BeginTransaction(); // Start transaction
+                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection opened and transaction started.");
 
                 // Validate date to prevent future dates
                 DateTime validatedStartTime = ValidateDate(record.StartTime);
@@ -495,7 +550,7 @@ namespace ScreenTimeTracker.Services
 
                 string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration WHERE id = @Id;";
 
-                using (var command = new SqliteCommand(updateSql, _connection))
+                using (var command = new SqliteCommand(updateSql, _connection, transaction)) // Assign transaction
                 {
                     command.Parameters.AddWithValue("@Id", record.Id);
                     command.Parameters.AddWithValue("@Date", dateString);
@@ -508,22 +563,30 @@ namespace ScreenTimeTracker.Services
                     int rowsAffected = command.ExecuteNonQuery();
                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: AFTER ExecuteNonQuery for ID {record.Id}. Rows affected: {rowsAffected}.");
                     
-                    if (rowsAffected > 0)
+                    if (rowsAffected <= 0)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Updated record {record.ProcessName} with ID {record.Id}");
-                        success = true;
+                         System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: ExecuteNonQuery affected 0 rows, ID {record.Id} not found? Update failed.");
+                         throw new InvalidOperationException($"Update failed, record with ID {record.Id} not found."); // Force rollback
                     }
-                    else
-                    {
-                         System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: ExecuteNonQuery affected 0 rows, ID {record.Id} not found?");
-                    }
+                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Updated record {record.ProcessName} with ID {record.Id}");
                 }
+                
+                transaction.Commit(); // Commit transaction
+                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Transaction committed.");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: **** ERROR **** updating record ID {record.Id} ({record.ProcessName}): {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                // Don't re-throw
+                try
+                {
+                    transaction?.Rollback(); // Rollback transaction on error
+                     System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Transaction rolled back.");
+                }
+                catch (Exception rbEx)
+                {
+                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
+                }
             }
             finally
             {
@@ -532,7 +595,7 @@ namespace ScreenTimeTracker.Services
                     _connection.Close();
                     System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection closed.");
                 }
-                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING UpdateRecord for ID {record.Id}, Success: {success}");
+                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING UpdateRecord for ID {record.Id}");
             }
         }
 
@@ -541,8 +604,11 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetRecordsForDate(DateTime date)
         {
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            {
+                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get records operation");
                 return new List<AppUsageRecord>();
+            }
 
             var records = new List<AppUsageRecord>();
             
@@ -612,8 +678,11 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetAggregatedRecordsForDate(DateTime date)
         {
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            {
+                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get aggregated records operation");
                 return new List<AppUsageRecord>();
+            }
                 
             var records = new List<AppUsageRecord>();
             
@@ -677,8 +746,11 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<(string ProcessName, TimeSpan TotalDuration)> GetUsageReportForDateRange(DateTime startDate, DateTime endDate)
         {
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            {
+                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get usage report operation");
                 return new List<(string, TimeSpan)>();
+            }
 
             List<(string, TimeSpan)> usageData = new List<(string, TimeSpan)>();
             string startDateString = startDate.ToString("yyyy-MM-dd");
@@ -732,49 +804,75 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void CleanupExpiredRecords(int daysToKeep)
         {
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                Debug.WriteLine("Database not initialized, skipping cleanup operation");
+                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping cleanup operation");
                 return;
             }
 
+            SqliteTransaction? transaction = null;
             try
             {
                 DateTime cutoffDate = DateTime.Now.AddDays(-daysToKeep).Date;
                 string cutoffDateString = cutoffDate.ToString("yyyy-MM-dd");
 
                 _connection.Open();
+                transaction = _connection.BeginTransaction();
+                Debug.WriteLine("[LOG] CleanupExpiredRecords: Connection opened and transaction started.");
 
                 string deleteSql = @"DELETE FROM app_usage WHERE date < @CutoffDate;";
+                int rowsDeleted = 0;
 
-                using (var command = new SqliteCommand(deleteSql, _connection))
+                using (var command = new SqliteCommand(deleteSql, _connection, transaction))
                 {
                     command.Parameters.AddWithValue("@CutoffDate", cutoffDateString);
-                    int rowsDeleted = command.ExecuteNonQuery();
+                    rowsDeleted = command.ExecuteNonQuery();
                     System.Diagnostics.Debug.WriteLine($"Deleted {rowsDeleted} expired records older than {cutoffDateString}");
                 }
 
-                // Run VACUUM after deleting records to reclaim space
-                using (var command = _connection.CreateCommand())
+                // Only run VACUUM if records were actually deleted
+                if (rowsDeleted > 0)
                 {
-                    command.CommandText = "VACUUM;";
-                    command.ExecuteNonQuery();
-                    System.Diagnostics.Debug.WriteLine("Database vacuumed to reclaim space");
+                    Debug.WriteLine("[LOG] CleanupExpiredRecords: Running VACUUM...");
+                    using (var command = _connection.CreateCommand())
+                    {
+                        command.Transaction = transaction; // Assign transaction to VACUUM command
+                        command.CommandText = "VACUUM;";
+                        command.ExecuteNonQuery();
+                        System.Diagnostics.Debug.WriteLine("Database vacuumed to reclaim space");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("[LOG] CleanupExpiredRecords: No records deleted, skipping VACUUM.");
                 }
 
-                _connection.Close();
+                transaction.Commit(); // Commit transaction
+                Debug.WriteLine("[LOG] CleanupExpiredRecords: Transaction committed.");
+
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error cleaning up expired records: {ex.Message}");
-                throw;
+                 try
+                 {
+                     transaction?.Rollback(); // Rollback transaction on error
+                     Debug.WriteLine("[LOG] CleanupExpiredRecords: Transaction rolled back.");
+                 }
+                 catch (Exception rbEx)
+                 {
+                      Debug.WriteLine($"[LOG] CleanupExpiredRecords: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
+                 }
+                 // Consider rethrowing if cleanup is critical, otherwise just log
             }
             finally
             {
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
+                    Debug.WriteLine("[LOG] CleanupExpiredRecords: Connection closed.");
                 }
+                 Debug.WriteLine("[LOG] EXITING CleanupExpiredRecords");
             }
         }
 
@@ -784,9 +882,9 @@ namespace ScreenTimeTracker.Services
         /// <returns>True if the database passes integrity checks</returns>
         public bool PerformDatabaseMaintenance()
         {
-            if (!_initializedSuccessfully)
+            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                Debug.WriteLine("Database not initialized, skipping maintenance");
+                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping maintenance");
                 return false;
             }
             

@@ -25,6 +25,7 @@ using Windows.Globalization; // For DayOfWeek
 using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 using ScreenTimeTracker.Helpers;
 using Microsoft.UI.Dispatching;
+using System.Diagnostics; // Add for Debug.WriteLine
 
 namespace ScreenTimeTracker
 {
@@ -63,6 +64,53 @@ namespace ScreenTimeTracker
         
         private AppWindow _appWindow; // Field to hold the AppWindow
 
+        // P/Invoke constants and structures for power notifications
+        private const int WM_POWERBROADCAST = 0x0218;
+        private const int PBT_POWERSETTINGCHANGE = 0x8013;
+        private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
+
+        // GUID_CONSOLE_DISPLAY_STATE = {6FE69556-704A-47A0-8F24-C28D936FDA47}
+        private static readonly Guid GuidConsoleDisplayState = new Guid(0x6fe69556, 0x704a, 0x47a0, 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47);
+        // GUID_SYSTEM_AWAYMODE = {98A7F580-01F7-48AA-9C0F-44352C29E5C0}
+        private static readonly Guid GuidSystemAwayMode = new Guid(0x98a7f580, 0x01f7, 0x48aa, 0x9c, 0x0f, 0x44, 0x35, 0x2c, 0x29, 0xe5, 0xc0);
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        private struct POWERBROADCAST_SETTING
+        {
+            public Guid PowerSetting;
+            public uint DataLength;
+            // Followed by DataLength bytes of data
+            // For the settings we are interested in, Data is typically a single byte or DWORD (uint)
+            public byte Data; // Simplified for single byte data (like display state)
+        }
+
+        [DllImport("User32.dll", SetLastError = true, EntryPoint = "RegisterPowerSettingNotification", CharSet = CharSet.Unicode)]
+        private static extern IntPtr RegisterPowerSettingNotification(IntPtr hRecipient, ref Guid PowerSettingGuid, int Flags);
+
+        [DllImport("User32.dll", SetLastError = true, EntryPoint = "UnregisterPowerSettingNotification", CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnregisterPowerSettingNotification(IntPtr handle); 
+
+        // P/Invoke for window subclassing
+        private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        private const int GWLP_WNDPROC = -4;
+
+        // Fields for power notification handles
+        private IntPtr _hConsoleDisplayState = IntPtr.Zero; 
+        private IntPtr _hSystemAwayMode = IntPtr.Zero;
+
+        // Fields for window subclassing
+        private IntPtr _hWnd = IntPtr.Zero;
+        private WndProcDelegate? _newWndProcDelegate = null; // Keep delegate alive
+        private IntPtr _oldWndProc = IntPtr.Zero;
+
         public MainWindow()
         {
             _disposed = false;
@@ -92,6 +140,19 @@ namespace ScreenTimeTracker
 
             InitializeComponent();
 
+            // Get window handle AFTER InitializeComponent
+            _hWnd = WindowNative.GetWindowHandle(this);
+            if (_hWnd == IntPtr.Zero)
+            {
+                 Debug.WriteLine("CRITICAL ERROR: Could not get window handle in constructor.");
+                 // Cannot proceed with power notifications without HWND
+            }
+            else
+            {
+                // Subclass the window procedure
+                SubclassWindow();
+            }
+
             // Initialize the WindowControlHelper
             _windowHelper = new WindowControlHelper(this);
 
@@ -100,7 +161,15 @@ namespace ScreenTimeTracker
             // Log database initialization status
             System.Diagnostics.Debug.WriteLine($"[Database Check] DatabaseService initialized. IsDatabaseInitialized: {_databaseService.IsDatabaseInitialized()}");
             
-            _trackingService = new WindowTrackingService();
+            // Pass DatabaseService to WindowTrackingService
+            if (_databaseService == null) 
+            {
+                // Handle the case where database service failed to initialize (optional)
+                 System.Diagnostics.Debug.WriteLine("CRITICAL: DatabaseService is null, cannot initialize WindowTrackingService properly.");
+                 // Consider throwing an exception or showing an error message
+                 throw new InvalidOperationException("DatabaseService could not be initialized.");
+            }
+            _trackingService = new WindowTrackingService(_databaseService);
 
             // Set up tracking service events
             _trackingService.WindowChanged += TrackingService_WindowChanged;
@@ -130,6 +199,106 @@ namespace ScreenTimeTracker
             _appWindow.Closing += AppWindow_Closing;
         }
 
+        private void SubclassWindow()
+        {
+            if (_hWnd == IntPtr.Zero)
+            {
+                Debug.WriteLine("Cannot subclass window: HWND is zero.");
+                return;
+            }
+            
+            // Ensure the delegate is kept alive
+            _newWndProcDelegate = new WndProcDelegate(NewWindowProc);
+            IntPtr newWndProcPtr = Marshal.GetFunctionPointerForDelegate(_newWndProcDelegate);
+
+            // Set the new window procedure
+             _oldWndProc = SetWindowLongPtr(_hWnd, GWLP_WNDPROC, newWndProcPtr);
+            if (_oldWndProc == IntPtr.Zero)
+            {
+                 int error = Marshal.GetLastWin32Error();
+                 Debug.WriteLine($"Failed to subclass window procedure. Error code: {error}");
+                 _newWndProcDelegate = null; // Clear delegate if failed
+            }
+             else
+             {
+                 Debug.WriteLine("Successfully subclassed window procedure.");
+             }
+        }
+
+        private void RestoreWindowProc()
+        {
+             if (_hWnd != IntPtr.Zero && _oldWndProc != IntPtr.Zero)
+             {
+                 SetWindowLongPtr(_hWnd, GWLP_WNDPROC, _oldWndProc);
+                 _oldWndProc = IntPtr.Zero;
+                 _newWndProcDelegate = null; // Allow delegate to be garbage collected
+                 Debug.WriteLine("Restored original window procedure.");
+             }
+        }
+
+        // The new window procedure
+        private IntPtr NewWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            if (msg == WM_POWERBROADCAST)
+            {
+                if (wParam.ToInt32() == PBT_POWERSETTINGCHANGE)
+                {
+                    // Marshal lParam to our structure
+                    POWERBROADCAST_SETTING setting = Marshal.PtrToStructure<POWERBROADCAST_SETTING>(lParam);
+
+                    // Check the GUID and Data
+                    HandlePowerSettingChange(setting.PowerSetting, setting.Data);
+                }
+                // Note: Other PBT_ events exist (like PBT_APMSUSPEND, PBT_APMRESUMEAUTOMATIC) 
+                // but PBT_POWERSETTINGCHANGE is generally preferred for modern apps.
+            }
+
+            // Call the original window procedure for all messages
+            return CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
+        }
+
+        private void HandlePowerSettingChange(Guid settingGuid, byte data)
+        {
+            if (settingGuid == GuidConsoleDisplayState)
+            {
+                // 0 = Off, 1 = On, 2 = Dimmed
+                if (data == 0) // Display turning off (potential sleep)
+                {
+                    Debug.WriteLine("Power Event: Console Display State - OFF");
+                    _trackingService?.PauseTrackingForSuspend();
+                }
+                else if (data == 1) // Display turning on (potential resume)
+                {
+                     Debug.WriteLine("Power Event: Console Display State - ON");
+                     _trackingService?.ResumeTrackingAfterSuspend();
+                }
+                 else
+                 {
+                      Debug.WriteLine($"Power Event: Console Display State - DIMMED ({data})");
+                 }
+            }
+            else if (settingGuid == GuidSystemAwayMode)
+            {
+                // 1 = Entering Away Mode, 0 = Exiting Away Mode
+                if (data == 1) // Entering away mode (sleep)
+                {
+                     Debug.WriteLine("Power Event: System Away Mode - ENTERING");
+                     _trackingService?.PauseTrackingForSuspend();
+                }
+                else if (data == 0) // Exiting away mode (resume)
+                {
+                    Debug.WriteLine("Power Event: System Away Mode - EXITING");
+                    _trackingService?.ResumeTrackingAfterSuspend();
+                }
+            }
+        }
+
+        // Add this method to allow App.xaml.cs to access the service
+        public WindowTrackingService? GetTrackingService()
+        {
+            return _trackingService;
+        }
+
         private void ThrowIfDisposed()
         {
             if (_disposed)
@@ -143,6 +312,12 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine("[LOG] ENTERING Dispose");
             if (!_disposed)
             {
+                 // Unregister power notifications FIRST
+                 UnregisterPowerNotifications();
+
+                 // Restore original window procedure
+                 RestoreWindowProc();
+
                 // Unsubscribe from AppWindow event
                 if (_appWindow != null)
                 {
@@ -173,6 +348,8 @@ namespace ScreenTimeTracker
                  if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
                  if (_trackingService != null) _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
                  if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+                  // Ensure Loaded event is removed if subscribed
+                  if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded; 
 
                 _disposed = true;
                  System.Diagnostics.Debug.WriteLine("[LOG] MainWindow disposed.");
@@ -756,7 +933,7 @@ namespace ScreenTimeTracker
                                 ContentDialog infoDialog = new ContentDialog()
                                 {
                                     Title = "No Data Available",
-                                    Content = $"No usage data found for {DateDisplay.Text}.",
+                                    Content = $"No usage data found for {DateDisplay?.Text ?? "the selected date"}.",
                                     CloseButtonText = "OK",
                                     XamlRoot = this.Content.XamlRoot
                                 };
@@ -1430,6 +1607,9 @@ namespace ScreenTimeTracker
                         ViewModePanel.Visibility = Visibility.Collapsed;
                     }
                 });
+
+                // Register for power notifications AFTER window handle is valid and before tracking starts
+                RegisterPowerNotifications();
 
                 // Start tracking automatically (assuming StartTracking handles its internal errors)
                 StartTracking();
@@ -2243,6 +2423,72 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error during StopTrackingAndSave in Window_Closed: {ex.Message}");
                 // Optionally log to file as well
                 // Log.Error(ex, "Error saving data on window close.");
+            }
+        }
+
+        // New methods for registration/unregistration
+        private void RegisterPowerNotifications()
+        {
+            if (_hWnd == IntPtr.Zero)
+            {
+                Debug.WriteLine("Cannot register power notifications: HWND is zero.");
+                return;
+            }
+
+            try
+            {
+                Guid consoleGuid = GuidConsoleDisplayState; // Need local copy for ref parameter
+                _hConsoleDisplayState = RegisterPowerSettingNotification(_hWnd, ref consoleGuid, DEVICE_NOTIFY_WINDOW_HANDLE);
+                if (_hConsoleDisplayState == IntPtr.Zero)
+                {                    
+                    Debug.WriteLine($"Failed to register for GuidConsoleDisplayState. Error: {Marshal.GetLastWin32Error()}");
+                }
+                else
+                {
+                    Debug.WriteLine("Successfully registered for GuidConsoleDisplayState.");
+                }
+
+                Guid awayGuid = GuidSystemAwayMode; // Need local copy for ref parameter
+                _hSystemAwayMode = RegisterPowerSettingNotification(_hWnd, ref awayGuid, DEVICE_NOTIFY_WINDOW_HANDLE);
+                if (_hSystemAwayMode == IntPtr.Zero)
+                {
+                    Debug.WriteLine($"Failed to register for GuidSystemAwayMode. Error: {Marshal.GetLastWin32Error()}");
+                }
+                 else
+                 {
+                     Debug.WriteLine("Successfully registered for GuidSystemAwayMode.");
+                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error registering power notifications: {ex.Message}");
+            }
+        }
+
+        private void UnregisterPowerNotifications()
+        {
+            try
+            {
+                if (_hConsoleDisplayState != IntPtr.Zero)
+                {
+                    if (UnregisterPowerSettingNotification(_hConsoleDisplayState))
+                        Debug.WriteLine("Successfully unregistered GuidConsoleDisplayState.");
+                    else
+                        Debug.WriteLine($"Failed to unregister GuidConsoleDisplayState. Error: {Marshal.GetLastWin32Error()}");
+                    _hConsoleDisplayState = IntPtr.Zero;
+                }
+                if (_hSystemAwayMode != IntPtr.Zero)
+                {
+                    if (UnregisterPowerSettingNotification(_hSystemAwayMode))
+                        Debug.WriteLine("Successfully unregistered GuidSystemAwayMode.");
+                    else
+                        Debug.WriteLine($"Failed to unregister GuidSystemAwayMode. Error: {Marshal.GetLastWin32Error()}");
+                     _hSystemAwayMode = IntPtr.Zero;
+                }
+            }
+            catch (Exception ex)
+            {
+                 Debug.WriteLine($"Error unregistering power notifications: {ex.Message}");
             }
         }
     }
