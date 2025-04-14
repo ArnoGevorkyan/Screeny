@@ -143,7 +143,7 @@ namespace ScreenTimeTracker.Services
                     StartTime = DateTime.Now,
                     ProcessId = (int)processId,
                     WindowHandle = foregroundWindow,
-                    Date = DateTime.Now.Date,
+                    Date = EnsureValidDate(DateTime.Now.Date),
                     ApplicationName = processName // Default to process name, can be refined later
                 };
                 
@@ -215,6 +215,17 @@ namespace ScreenTimeTracker.Services
                 _records.Clear();
                 _disposed = true;
             }
+        }
+
+        private DateTime EnsureValidDate(DateTime date)
+        {
+            // If the date is in the future, use today's date
+            if (date > DateTime.Today)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: Future date detected ({date:yyyy-MM-dd}), using current date instead.");
+                return DateTime.Today;
+            }
+            return date;
         }
     }
 } 

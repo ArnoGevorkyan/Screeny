@@ -61,10 +61,29 @@ namespace ScreenTimeTracker
         // Counter for auto-save cycles to run database maintenance periodically
         private int _autoSaveCycleCount = 0;
         
+        private AppWindow _appWindow; // Field to hold the AppWindow
+
         public MainWindow()
         {
             _disposed = false;
-            _selectedDate = DateTime.Today;
+            
+            // Ensure today's date is valid
+            DateTime todayDate = DateTime.Today;
+            System.Diagnostics.Debug.WriteLine($"[LOG] System time check - Today: {todayDate:yyyy-MM-dd}, Now: {DateTime.Now}");
+            
+            // Validate that today's date is not in the future, fall back to a reasonable date if it is
+            if (todayDate.Year > 2024)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: System date may be incorrect ({todayDate:yyyy-MM-dd})");
+                // Use a reasonable default date (April 2024)
+                _selectedDate = new DateTime(2024, 4, 13);
+                System.Diagnostics.Debug.WriteLine($"[LOG] Using fallback date: {_selectedDate:yyyy-MM-dd}");
+            }
+            else
+            {
+                _selectedDate = todayDate;
+            }
+            
             _usageRecords = new ObservableCollection<AppUsageRecord>();
             
             // Initialize timer fields to avoid nullable warnings
@@ -78,6 +97,9 @@ namespace ScreenTimeTracker
 
             // Initialize services
             _databaseService = new DatabaseService();
+            // Log database initialization status
+            System.Diagnostics.Debug.WriteLine($"[Database Check] DatabaseService initialized. IsDatabaseInitialized: {_databaseService.IsDatabaseInitialized()}");
+            
             _trackingService = new WindowTrackingService();
 
             // Set up tracking service events
@@ -102,6 +124,10 @@ namespace ScreenTimeTracker
             _datePickerPopup = new DatePickerPopup(this);
             _datePickerPopup.SingleDateSelected += DatePickerPopup_SingleDateSelected;
             _datePickerPopup.DateRangeSelected += DatePickerPopup_DateRangeSelected;
+
+            // Get the AppWindow and subscribe to Closing event
+            _appWindow = GetAppWindowForCurrentWindow();
+            _appWindow.Closing += AppWindow_Closing;
         }
 
         private void ThrowIfDisposed()
@@ -114,29 +140,91 @@ namespace ScreenTimeTracker
 
         public void Dispose()
         {
+            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING Dispose");
             if (!_disposed)
             {
-                _trackingService.StopTracking();
-                _updateTimer.Stop();
-                _autoSaveTimer.Stop();
+                // Unsubscribe from AppWindow event
+                if (_appWindow != null)
+                {
+                    _appWindow.Closing -= AppWindow_Closing;
+                }
 
-                // Save any unsaved records
-                SaveRecordsToDatabase();
+                // Stop services - this might be redundant if PrepareForSuspend ran
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services (might be redundant)...");
+                _trackingService?.StopTracking();
+                _updateTimer?.Stop();
+                _autoSaveTimer?.Stop();
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
+
+                // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Save skipped - handled by PrepareForSuspend.");
                 
                 // Clear collections
-                _usageRecords.Clear();
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Clearing collections...");
+                _usageRecords?.Clear();
                 
-                // Dispose tracking service
-                _trackingService.Dispose();
+                // Dispose services
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Disposing services...");
+                _trackingService?.Dispose();
                 _databaseService?.Dispose();
                 
                 // Remove event handlers
-                _updateTimer.Tick -= UpdateTimer_Tick;
-                _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
-                _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Removing event handlers...");
+                 if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
+                 if (_trackingService != null) _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
+                 if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
 
                 _disposed = true;
+                 System.Diagnostics.Debug.WriteLine("[LOG] MainWindow disposed.");
             }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Already disposed.");
+            }
+            System.Diagnostics.Debug.WriteLine("[LOG] EXITING Dispose");
+        }
+
+        /// <summary>
+        /// Prepares the application for suspension by stopping tracking and saving data.
+        /// This is called from the App.OnSuspending event handler.
+        /// </summary>
+        public void PrepareForSuspend()
+        {
+            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING PrepareForSuspend");
+            try
+            {
+                // Debug check for system time
+                System.Diagnostics.Debug.WriteLine($"[LOG] Current system time: {DateTime.Now}");
+                
+                // Validate _selectedDate to ensure it's not in the future
+                if (_selectedDate > DateTime.Today)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future _selectedDate detected ({_selectedDate:yyyy-MM-dd}), resetting to today.");
+                    _selectedDate = DateTime.Today;
+                }
+                
+                // Ensure tracking is stopped first to finalize durations
+                if (_trackingService != null && _trackingService.IsTracking)
+                {
+                     System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE StopTracking()");
+                    _trackingService.StopTracking(); 
+                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER StopTracking()");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: Tracking service null or not tracking.");
+                }
+                
+                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE SaveRecordsToDatabase()");
+                SaveRecordsToDatabase();
+                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER SaveRecordsToDatabase()");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LOG] PrepareForSuspend: **** ERROR **** during save: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+            }
+             System.Diagnostics.Debug.WriteLine("[LOG] EXITING PrepareForSuspend");
         }
 
         // Add a counter for timer ticks to control periodic chart refreshes
@@ -340,13 +428,31 @@ namespace ScreenTimeTracker
             if (record == null)
                 return null;
 
-            // Check existing records for a match based on process name and window title
+            // First, check for a match based on process name (case-insensitive)
+            // This is the most reliable way to identify the same app across different sessions
+            var processMatch = _usageRecords.FirstOrDefault(r => 
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+                
+            if (processMatch != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by process name: {record.ProcessName}");
+                return processMatch;
+            }
+
+            // Check existing records for a match based on window handle (same session only)
             foreach (var r in _usageRecords)
             {
                 // If it's the exact same window, return it
-                if (r.WindowHandle == record.WindowHandle)
+                if (r.WindowHandle == record.WindowHandle && r.WindowHandle != IntPtr.Zero)
+                {
+                    System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by window handle for {record.ProcessName}");
                     return r;
-
+                }
+            }
+            
+            // Try to find matches based on application characteristics
+            foreach (var r in _usageRecords)
+            {
                 // For applications that should be consolidated, look for matching process names
                 string baseAppName = ApplicationProcessingHelper.GetBaseAppName(record.ProcessName);
                 if (!string.IsNullOrEmpty(baseAppName) && 
@@ -354,7 +460,10 @@ namespace ScreenTimeTracker
                 {
                     // For applications we want to consolidate, just match on process name
                     if (ApplicationProcessingHelper.IsApplicationThatShouldConsolidate(record.ProcessName))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match for consolidatable app: {record.ProcessName} -> {r.ProcessName}");
                         return r;
+                    }
                     
                     // For other applications, match on process name + check if they're related processes
                     if (r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) ||
@@ -362,12 +471,16 @@ namespace ScreenTimeTracker
                     {
                         // If window titles are similar, consider it the same application
                         if (ApplicationProcessingHelper.IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by title similarity: {record.ProcessName}");
                             return r;
+                        }
                     }
                 }
             }
 
             // No match found
+            System.Diagnostics.Debug.WriteLine($"FindExistingRecord: No match found for {record.ProcessName}");
             return null;
         }
 
@@ -433,7 +546,14 @@ namespace ScreenTimeTracker
 
         private void LoadRecordsForDate(DateTime date)
         {
-            System.Diagnostics.Debug.WriteLine($"Loading records for date: {date}");
+            System.Diagnostics.Debug.WriteLine($"Loading records for date: {date:yyyy-MM-dd}, System.Today: {DateTime.Today:yyyy-MM-dd}");
+            
+            // Make sure we're not working with a future date
+            if (date > DateTime.Today)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: Future date requested ({date:yyyy-MM-dd}), using today instead");
+                date = DateTime.Today;
+            }
             
             _selectedDate = date;
             _selectedEndDate = null;
@@ -474,6 +594,7 @@ namespace ScreenTimeTracker
                         // Get records for the week containing the selected date
                         var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
                         var endOfWeek = startOfWeek.AddDays(6);
+                        System.Diagnostics.Debug.WriteLine($"Loading weekly records from {startOfWeek:yyyy-MM-dd} to {endOfWeek:yyyy-MM-dd}");
                         records = GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
                         
                         // Update date display with week range (no year)
@@ -495,34 +616,122 @@ namespace ScreenTimeTracker
                         List<AppUsageRecord> dbRecords = new List<AppUsageRecord>();
                         if (_databaseService != null)
                         {
-                            dbRecords = _databaseService.GetRecordsForDate(date);
+                            // Check if database is initialized
+                            bool dbInitialized = _databaseService.IsDatabaseInitialized();
+                            System.Diagnostics.Debug.WriteLine($"Database initialized: {dbInitialized}");
+                            
+                            // Load raw records, not aggregated ones, to preserve timestamps
+                            dbRecords = _databaseService.GetRecordsForDate(date); 
+                            System.Diagnostics.Debug.WriteLine($"Loaded {dbRecords.Count} records from database for date {date:yyyy-MM-dd}");
+                            
+                            // Log the first few records
+                            foreach (var record in dbRecords.Take(3))
+                            {
+                                System.Diagnostics.Debug.WriteLine($" - DB Record: {record.ProcessName}, Duration: {record.Duration.TotalSeconds:F1}s, Date: {record.Date:yyyy-MM-dd}, StartTime: {record.StartTime:yyyy-MM-dd HH:mm:ss}");
+                            }
                         }
                         else
                         {
                             // Fallback if DB service fails - unlikely but safe
+                            System.Diagnostics.Debug.WriteLine("WARNING: _databaseService is null, using tracking service records as fallback");
                             dbRecords = _trackingService.GetRecords()
                                 .Where(r => r.IsFromDate(date))
                                 .ToList();
+                            System.Diagnostics.Debug.WriteLine($"Loaded {dbRecords.Count} records from tracking service as fallback");
                         }
                         
-                        // Aggregate records loaded FROM DATABASE
-                        var aggregatedDbData = dbRecords
-                            .GroupBy(r => r.ProcessName)
-                            .Select(g => {
-                                var totalDuration = TimeSpan.FromSeconds(g.Sum(rec => rec.Duration.TotalSeconds));
-                                var aggregatedRecord = AppUsageRecord.CreateAggregated(g.Key, date);
-                                aggregatedRecord._accumulatedDuration = totalDuration;
-                                aggregatedRecord.LoadAppIconIfNeeded(); 
-                                return aggregatedRecord;
-                            })
-                            .Where(ar => ar.Duration.TotalSeconds >= 1) 
-                            .ToList();
-
-                        // --- REMOVED MERGE BLOCK FOR TODAY ---
-                        // Let the normal tracking service updates handle live data.
-                        // The initial load will now show data persisted from the last session.
-                        records = aggregatedDbData;
-                        // --- END REMOVAL ---
+                        // --- REVISED MERGE BLOCK FOR TODAY ---
+                        if (date == DateTime.Today)
+                        {
+                             System.Diagnostics.Debug.WriteLine($"LoadRecordsForDate (Today): Starting merge. DB records: {dbRecords.Count}");
+                             // Combine DB records and live records
+                             var liveRecords = _trackingService.GetRecords()
+                                                 .Where(r => r.IsFromDate(date))
+                                                 .ToList();
+                             System.Diagnostics.Debug.WriteLine($"LoadRecordsForDate (Today): Live records: {liveRecords.Count}");
+                             
+                             // Create a dictionary to ensure we have one record per app by process name
+                             // Use case-insensitive comparison
+                             var uniqueApps = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+                             
+                             // Add database records first as the base 
+                             foreach (var dbRecord in dbRecords)
+                             {
+                                 if (!uniqueApps.ContainsKey(dbRecord.ProcessName))
+                                 {
+                                     uniqueApps[dbRecord.ProcessName] = dbRecord;
+                                     System.Diagnostics.Debug.WriteLine($"Added DB record: {dbRecord.ProcessName} - {dbRecord.Duration.TotalSeconds:F1}s");
+                                 }
+                                 else
+                                 {
+                                     // If we already have this process, merge durations
+                                     var existingRecord = uniqueApps[dbRecord.ProcessName];
+                                     existingRecord._accumulatedDuration += dbRecord.Duration;
+                                     System.Diagnostics.Debug.WriteLine($"Merged duplicate DB record: {dbRecord.ProcessName} - Total now: {existingRecord.Duration.TotalSeconds:F1}s");
+                                 }
+                             }
+                             
+                             // Now incorporate live records (merging with DB records if the process name matches)
+                             foreach (var liveRecord in liveRecords)
+                             {
+                                 if (uniqueApps.TryGetValue(liveRecord.ProcessName, out var existingRecord))
+                                 {
+                                     // If this process already exists, update its properties
+                                     // First preserve the accumulated duration from DB
+                                     TimeSpan dbDuration = existingRecord.Duration;
+                                     
+                                     // Only add the live record's duration if it's a NEW session (not already in DB)
+                                     // We check if live record's ID is 0 (not saved to DB yet)
+                                     if (liveRecord.Id == 0)
+                                     {
+                                         dbDuration += liveRecord.Duration;
+                                     }
+                                     
+                                     // Use the live record's window handle and focus state
+                                     existingRecord.WindowHandle = liveRecord.WindowHandle;
+                                     existingRecord.IsFocused = liveRecord.IsFocused;
+                                     existingRecord._accumulatedDuration = dbDuration;
+                                     
+                                     // Use live record's window title if the existing one is empty
+                                     if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(liveRecord.WindowTitle))
+                                     {
+                                         existingRecord.WindowTitle = liveRecord.WindowTitle;
+                                     }
+                                     
+                                     System.Diagnostics.Debug.WriteLine($"Updated {liveRecord.ProcessName} with live data. Duration: {existingRecord.Duration.TotalSeconds:F1}s");
+                                 }
+                                 else
+                                 {
+                                     // This is a new process we haven't seen before - add it
+                                     uniqueApps[liveRecord.ProcessName] = liveRecord;
+                                     System.Diagnostics.Debug.WriteLine($"Added new live record: {liveRecord.ProcessName} - {liveRecord.Duration.TotalSeconds:F1}s");
+                                 }
+                             }
+                             
+                             // Convert the dictionary to our list
+                             records = uniqueApps.Values.ToList();
+                             System.Diagnostics.Debug.WriteLine($"LoadRecordsForDate (Today): Final unique records: {records.Count}");
+                        }
+                        else
+                        {
+                            // For past dates, aggregate records loaded FROM DATABASE
+                            System.Diagnostics.Debug.WriteLine($"LoadRecordsForDate (Past Date: {date:yyyy-MM-dd}): Aggregating {dbRecords.Count} DB records.");
+                            records = dbRecords
+                                .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
+                                .Select(g => {
+                                    var totalDuration = TimeSpan.FromSeconds(g.Sum(rec => rec.Duration.TotalSeconds));
+                                    // Use CreateAggregated for past dates - StartTime will be midnight
+                                    var aggregatedRecord = AppUsageRecord.CreateAggregated(g.Key, date); 
+                                    aggregatedRecord._accumulatedDuration = totalDuration;
+                                    aggregatedRecord.LoadAppIconIfNeeded(); 
+                                     System.Diagnostics.Debug.WriteLine($"  Aggregated (Past): {aggregatedRecord.ProcessName}, Duration: {aggregatedRecord.Duration.TotalSeconds:F1}s");
+                                    return aggregatedRecord;
+                                })
+                                .Where(ar => ar.Duration.TotalSeconds >= 1) 
+                                .ToList();
+                             System.Diagnostics.Debug.WriteLine($"LoadRecordsForDate (Past Date): Records after aggregation: {records.Count}");
+                        }
+                        // --- END REVISED MERGE/AGGREGATION ---
                         
                         // Update chart title
                         SummaryTitle.Text = "Daily Screen Time Summary";
@@ -542,15 +751,22 @@ namespace ScreenTimeTracker
                     // Show a message to the user
                     DispatcherQueue.TryEnqueue(async () => {
                         try {
-                            ContentDialog infoDialog = new ContentDialog()
+                            if (this.Content != null)
                             {
-                                Title = "No Data Available",
-                                Content = $"No usage data found for {DateDisplay.Text}.",
-                                CloseButtonText = "OK",
-                                XamlRoot = Content.XamlRoot
-                            };
-                            
-                            await infoDialog.ShowAsync();
+                                ContentDialog infoDialog = new ContentDialog()
+                                {
+                                    Title = "No Data Available",
+                                    Content = $"No usage data found for {DateDisplay.Text}.",
+                                    CloseButtonText = "OK",
+                                    XamlRoot = this.Content.XamlRoot
+                                };
+                                
+                                await infoDialog.ShowAsync();
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                            }
                         }
                         catch (Exception dialogEx) {
                             System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
@@ -595,15 +811,22 @@ namespace ScreenTimeTracker
                 // Show an error message to the user
                 DispatcherQueue.TryEnqueue(async () => {
                     try {
-                        ContentDialog errorDialog = new ContentDialog()
+                        if (this.Content != null)
                         {
-                            Title = "Error Loading Data",
-                            Content = $"Failed to load screen time data: {ex.Message}",
-                            CloseButtonText = "OK",
-                            XamlRoot = Content.XamlRoot
-                        };
-                        
-                        await errorDialog.ShowAsync();
+                            ContentDialog errorDialog = new ContentDialog()
+                            {
+                                Title = "Error Loading Data",
+                                Content = $"Failed to load screen time data: {ex.Message}",
+                                CloseButtonText = "OK",
+                                XamlRoot = this.Content.XamlRoot
+                            };
+                            
+                            await errorDialog.ShowAsync();
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                        }
                     }
                     catch (Exception dialogEx) {
                         System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
@@ -750,52 +973,89 @@ namespace ScreenTimeTracker
 
         private void SaveRecordsToDatabase()
         {
-            // Skip saving if database is not available
-            if (_databaseService == null) return;
+            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING SaveRecordsToDatabase");
+            // Skip saving if database or tracking service is not available
+            if (_databaseService == null || _trackingService == null)
+            {
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: DB or Tracking service is null. Skipping save.");
+                System.Diagnostics.Debug.WriteLine("[LOG] EXITING SaveRecordsToDatabase (skipped)");
+                return;
+            }
 
             try
             {
-                // Save each record that's from today and not a system process
-                foreach (var record in _usageRecords.Where(r =>
-                    r.IsFromDate(DateTime.Now.Date) &&
-                    !IsWindowsSystemProcess(r.ProcessName) &&
-                    r.Duration.TotalSeconds > 0))
+                // Get the definitive list of records from the tracking service for today
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Getting records from tracking service...");
+                var recordsToSave = _trackingService.GetRecords()
+                                    .Where(r => r.IsFromDate(DateTime.Now.Date))
+                                    .ToList(); 
+                                    
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Found {recordsToSave.Count} records from tracking service for today.");
+
+                // Group by process name to avoid duplicates
+                var recordsByProcess = recordsToSave
+                    .Where(r => !IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds > 0)
+                    .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                    
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Found {recordsByProcess.Count} unique processes after filtering.");
+
+                // Save each unique process record after merging duplicates
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Starting save loop...");
+                foreach (var processGroup in recordsByProcess)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Saving record: {record.ProcessName}, Duration: {record.Duration}");
-
-                    // Make sure focus is turned off to finalize duration
-                    if (record.IsFocused)
-            {
-                record.SetFocus(false);
-                    }
-
-                    // If record has an ID greater than 0, it was loaded from the database
-                    if (record.Id > 0)
+                    try
                     {
-                        _databaseService.UpdateRecord(record);
+                        // Calculate total duration for this process
+                        var totalDuration = TimeSpan.FromSeconds(processGroup.Sum(r => r.Duration.TotalSeconds));
+                        
+                        // Get the first record as our representative (with longest duration preferably)
+                        var record = processGroup.OrderByDescending(r => r.Duration).First();
+                        
+                        // Ensure focus is off to finalize duration - critical step!
+                        if (record.IsFocused)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Explicitly finalizing duration for {record.ProcessName} before saving.");
+                            record.SetFocus(false);
+                        }
+                        
+                        // Use the calculated total duration
+                        record._accumulatedDuration = totalDuration;
+                        
+                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: >>> Preparing to save: {record.ProcessName}, Duration: {record.Duration.TotalSeconds:F1}s, ID: {record.Id}");
+
+                        // If record has an ID greater than 0, it likely exists in DB (but might be partial)
+                        if (record.Id > 0)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Calling UpdateRecord...");
+                            _databaseService.UpdateRecord(record);
+                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: UpdateRecord returned.");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Calling SaveRecord...");
+                            _databaseService.SaveRecord(record);
+                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: SaveRecord returned.");
+                        }
+                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: <<< Finished save attempt for: {record.ProcessName}");
                     }
-                    else
+                    catch (Exception processEx)
                     {
-                        _databaseService.SaveRecord(record);
+                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Error saving process {processGroup.Key}: {processEx.Message}");
                     }
                 }
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: FINISHED save loop.");
 
-                System.Diagnostics.Debug.WriteLine("Records saved to database");
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Save process completed normally.");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error saving records: {ex.Message}");
-
-                // Show error dialog
-                var dialog = new ContentDialog
-                {
-                    Title = "Error",
-                    Content = $"Failed to save records: {ex.Message}",
-                    CloseButtonText = "OK"
-                };
-
-                dialog.XamlRoot = this.Content.XamlRoot;
-                _ = dialog.ShowAsync();
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: **** ERROR **** during save process: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+            }
+            finally
+            {
+                System.Diagnostics.Debug.WriteLine("[LOG] EXITING SaveRecordsToDatabase");
             }
         }
 
@@ -1055,15 +1315,20 @@ namespace ScreenTimeTracker
                         
                         // Try to load the icon if it's not already loaded
                         mostUsedApp.LoadAppIconIfNeeded();
+                        // Use null-forgiving operator as mostUsedApp is checked above
                         mostUsedApp.PropertyChanged += (s, e) =>
                         {
-                            if (e.PropertyName == nameof(AppUsageRecord.AppIcon) && mostUsedApp.AppIcon != null)
+                            // Safely check mostUsedApp inside the handler
+                            if (mostUsedApp != null && e.PropertyName == nameof(AppUsageRecord.AppIcon) && mostUsedApp.AppIcon != null)
                             {
                                 DispatcherQueue.TryEnqueue(() =>
                                 {
-                                    MostUsedAppIcon.Source = mostUsedApp.AppIcon;
-                                    MostUsedAppIcon.Visibility = Visibility.Visible;
-                                    MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
+                                    {
+                                        MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                                        MostUsedAppIcon.Visibility = Visibility.Visible;
+                                        MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                                    }
                                 });
                             }
                         };
@@ -1103,33 +1368,28 @@ namespace ScreenTimeTracker
             return ChartHelper.FormatTimeSpan(time);
         }
 
-        // New method to handle initialization after window is loaded
-        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        // New method to handle initialization after window is loaded - Made async void
+        private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            System.Diagnostics.Debug.WriteLine("MainWindow_Loaded event triggered");
+            
             try
             {
-                System.Diagnostics.Debug.WriteLine("MainWindow_Loaded called");
-                
-                // Perform database maintenance on startup (in background)
-                if (_databaseService != null)
+                ThrowIfDisposed(); // Check if already disposed early
+
+                // Double-check our selected date is valid (not in the future)
+                if (_selectedDate > DateTime.Today)
                 {
-                    Task.Run(() => 
-                    {
-                        try
-                        {
-                            // This will perform integrity checks and optimization
-                            bool integrityPassed = _databaseService.PerformDatabaseMaintenance();
-                            System.Diagnostics.Debug.WriteLine($"Database maintenance completed. Integrity passed: {integrityPassed}");
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Database maintenance error: {ex.Message}");
-                        }
-                    });
+                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future date detected at load time: {_selectedDate:yyyy-MM-dd}");
+                    _selectedDate = DateTime.Today;
+                    System.Diagnostics.Debug.WriteLine($"[LOG] Corrected to: {_selectedDate:yyyy-MM-dd}");
                 }
                 
-                // Initialize UI elements
+                // Set up UI elements
                 SetUpUiElements();
+                
+                // Check if this is the first run
+                CheckFirstRun();
                 
                 // Set today's date and update button text
                 _selectedDate = DateTime.Today;
@@ -1142,7 +1402,7 @@ namespace ScreenTimeTracker
                     DateDisplay.Text = "Today";
                 }
                 
-                // Load today's records
+                // Load today's records (assuming LoadRecordsForDate handles its internal errors)
                 LoadRecordsForDate(_selectedDate);
 
                 // Set up the UsageListView
@@ -1150,9 +1410,6 @@ namespace ScreenTimeTracker
                 {
                     UsageListView.ItemsSource = _usageRecords;
                 }
-                
-                // Check if this is the first run
-                CheckFirstRun();
                 
                 // Clean up system processes that shouldn't be tracked
                 CleanupSystemProcesses();
@@ -1174,15 +1431,50 @@ namespace ScreenTimeTracker
                     }
                 });
 
-                // Start tracking automatically
+                // Start tracking automatically (assuming StartTracking handles its internal errors)
                 StartTracking();
                 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
             }
+            catch (ObjectDisposedException odEx) // Catch specific expected exceptions first
+            {
+                // This might happen if the window is closed rapidly during loading
+                System.Diagnostics.Debug.WriteLine($"Error in MainWindow_Loaded (ObjectDisposed): {odEx.Message}");
+                // Don't try to show UI if disposed
+            }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in MainWindow_Loaded: {ex.Message}");
+                // Log the critical error first, as UI might not be available
+                System.Diagnostics.Debug.WriteLine($"CRITICAL Error in MainWindow_Loaded: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+
+                // Attempt to show an error dialog, but safely
+                try
+                {
+                    // Check if window is still valid and has a XamlRoot before showing dialog
+                    if (!_disposed && this.Content?.XamlRoot != null) 
+                    {
+                        ContentDialog errorDialog = new ContentDialog()
+                        {
+                            Title = "Application Load Error",
+                            Content = $"The application encountered a critical error during startup and may not function correctly.\n\nDetails: {ex.Message}",
+                            CloseButtonText = "OK",
+                            XamlRoot = this.Content.XamlRoot // Use the existing XamlRoot
+                        };
+                        await errorDialog.ShowAsync(); // Await the dialog
+                    }
+                    else
+                    {
+                         System.Diagnostics.Debug.WriteLine("Could not show error dialog: Window content/XamlRoot was null or window disposed.");
+                    }
+                }
+                catch (Exception dialogEx)
+                {
+                    // Log error showing the dialog itself
+                    System.Diagnostics.Debug.WriteLine($"Error showing error dialog in MainWindow_Loaded: {dialogEx.Message}");
+                }
+                // Consider if the app should close here depending on the severity?
+                // For now, just log and show message if possible.
             }
         }
 
@@ -1384,82 +1676,123 @@ namespace ScreenTimeTracker
         // Event handlers for DatePickerPopup events
         private void DatePickerPopup_SingleDateSelected(object? sender, DateTime selectedDate)
         {
-            _selectedDate = selectedDate;
-            _selectedEndDate = null;
-            _isDateRangeSelected = false;
-            
-            // Update button text
-            UpdateDatePickerButtonText();
-            
-            // Special handling for Today vs. other days
-            var today = DateTime.Today;
-            if (_selectedDate == today)
+            try
             {
-                // For "Today", use the current tracking settings
-                _currentTimePeriod = TimePeriod.Daily;
-                _currentChartViewMode = ChartViewMode.Hourly;
+                System.Diagnostics.Debug.WriteLine($"DatePickerPopup_SingleDateSelected: Selected date: {selectedDate:yyyy-MM-dd}, CurrentTimePeriod: {_currentTimePeriod}");
                 
-                // Update view mode label and hide toggle panel
-                DispatcherQueue.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = "Hourly View";
-                    }
-                    
-                    // Hide the view mode panel (user can't change the view)
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
-                });
+                _selectedDate = selectedDate;
+                _selectedEndDate = null;
+                _isDateRangeSelected = false;
                 
-                // Load records for today immediately and with normal priority
-                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () => {
-                    // Show loading indicator
-                    if (LoadingIndicator != null)
-                    {
-                        LoadingIndicator.Visibility = Visibility.Visible;
-                    }
-
-                    // Load the data immediately
-                    LoadRecordsForDate(_selectedDate);
-                    
-                    // Hide loading indicator
-                    if (LoadingIndicator != null)
-                    {
-                        LoadingIndicator.Visibility = Visibility.Collapsed;
-                    }
-                });
-            }
-            else
-            {
-                // Ensure we switch to Daily period when selecting a single past date
-                _currentTimePeriod = TimePeriod.Daily;
+                // Update button text
+                UpdateDatePickerButtonText();
                 
-                // For other single dates, use the normal update logic with a delay
-                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
-                    // Show loading indicator
-                    if (LoadingIndicator != null)
-                    {
-                        LoadingIndicator.Visibility = Visibility.Visible;
-                    }
+                // Special handling for Today vs. other days
+                var today = DateTime.Today;
+                if (_selectedDate == today)
+                {
+                    System.Diagnostics.Debug.WriteLine("Switching to Today view");
                     
-                    // Use a delay to allow UI to show loading indicator
-                    DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
-                        // Small delay to give UI time to update
-                        await Task.Delay(100);
-                        
-                        // Load the data
-                        LoadRecordsForDate(_selectedDate);
-                        UpdateChartViewMode();
-                        
-                        // Hide loading indicator
-                        if (LoadingIndicator != null)
+                    // For "Today", use the current tracking settings
+                    _currentTimePeriod = TimePeriod.Daily;
+                    _currentChartViewMode = ChartViewMode.Hourly;
+                    
+                    // Update view mode label and hide toggle panel (on UI thread)
+                    DispatcherQueue.TryEnqueue(() => {
+                        try
                         {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                            if (ViewModeLabel != null)
+                            {
+                                ViewModeLabel.Text = "Hourly View";
+                            }
+                            
+                            // Hide the view mode panel (user can't change the view)
+                            if (ViewModePanel != null)
+                            {
+                                ViewModePanel.Visibility = Visibility.Collapsed;
+                            }
+                            
+                            // Show loading indicator
+                            if (LoadingIndicator != null)
+                            {
+                                LoadingIndicator.Visibility = Visibility.Visible;
+                            }
+                            
+                            // Load data on the same UI update to avoid race conditions
+                            // Use Task.Run with a slight delay to ensure UI updates properly
+                            Task.Delay(150).ContinueWith(_ => {
+                                DispatcherQueue.TryEnqueue(() => {
+                                    try 
+                                    {
+                                        // Load the data
+                                        LoadRecordsForDate(_selectedDate);
+                                        
+                                        // Hide loading indicator
+                                        if (LoadingIndicator != null)
+                                        {
+                                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Error loading records for Today: {ex.Message}");
+                                    }
+                                });
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error in UI update: {ex.Message}");
                         }
                     });
-                });
+                }
+                else
+                {
+                    // Ensure we switch to Daily period when selecting a single past date
+                    _currentTimePeriod = TimePeriod.Daily;
+                    
+                    // For other single dates, use the normal update logic with a delay
+                    DispatcherQueue.TryEnqueue(() => {
+                        try
+                        {
+                            // Show loading indicator
+                            if (LoadingIndicator != null)
+                            {
+                                LoadingIndicator.Visibility = Visibility.Visible;
+                            }
+                            
+                            // Use a delay to allow UI to show loading indicator
+                            Task.Delay(50).ContinueWith(_ => {
+                                DispatcherQueue.TryEnqueue(() => {
+                                    try
+                                    {
+                                        // Load the data
+                                        LoadRecordsForDate(_selectedDate);
+                                        UpdateChartViewMode();
+                                        
+                                        // Hide loading indicator
+                                        if (LoadingIndicator != null)
+                                        {
+                                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
+                                    }
+                                });
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error updating UI for date selection: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in DatePickerPopup_SingleDateSelected: {ex.Message}");
             }
         }
         
@@ -1610,15 +1943,34 @@ namespace ScreenTimeTracker
                         mergedData[aggRecord.ProcessName] = aggRecord;
                     }
 
-                    // Overwrite with or add live records (more accurate for today)
+                    // Overwrite or ADD live records, ensuring total duration is correct
                     foreach (var liveRecord in liveRecords)
                     {
-                        // If the live record is already in the merged data (from aggregation),
-                        // we might want to keep the aggregated duration + live increment,
-                        // but for simplicity, we'll just use the live record directly as it's most current.
-                        // This assumes the live record reflects total usage for today accurately.
                         liveRecord.LoadAppIconIfNeeded(); // Ensure icon is loaded
-                        mergedData[liveRecord.ProcessName] = liveRecord; 
+                        
+                        if (mergedData.TryGetValue(liveRecord.ProcessName, out var existingRecord))
+                        {
+                            // Existing record found from aggregation.
+                            // Update its focus state and potentially duration if it represents today.
+                            // Ensure the existingRecord's duration reflects the TOTAL for the range.
+                            // If the live record represents *today's* contribution, 
+                            // we need to ensure the total duration shown is correct.
+                            // For simplicity, the current aggregated duration from the DB
+                            // should already include today's saved time. The liveRecord 
+                            // has the *current session's* time. 
+                            // We'll use the aggregated record as the base and update its focus state.
+                            // The `IncrementDuration` in the timer tick handles adding live time.
+                            System.Diagnostics.Debug.WriteLine($"Updating focus state for {existingRecord.ProcessName} from live data.");
+                            existingRecord.IsFocused = liveRecord.IsFocused;
+                            // We don't overwrite the duration here, as the aggregation should be correct
+                        }
+                        else
+                        {
+                            // Live record not found in aggregation, add it directly.
+                            // This happens if the app was only used today and not saved yet.
+                            System.Diagnostics.Debug.WriteLine($"Adding new live record {liveRecord.ProcessName} to merged data.");
+                            mergedData[liveRecord.ProcessName] = liveRecord;
+                        }
                     }
                     
                     records = mergedData.Values.ToList();
@@ -1640,15 +1992,22 @@ namespace ScreenTimeTracker
                     // Show a message to the user
                     DispatcherQueue.TryEnqueue(async () => {
                         try {
-                            ContentDialog infoDialog = new ContentDialog()
+                            if (this.Content != null)
                             {
-                                Title = "No Data Available",
-                                Content = $"No usage data found for the selected date range ({startDate:MMM d} - {endDate:MMM d}).",
-                                CloseButtonText = "OK",
-                                XamlRoot = Content.XamlRoot
-                            };
-                            
-                            await infoDialog.ShowAsync();
+                                ContentDialog infoDialog = new ContentDialog()
+                                {
+                                    Title = "No Data Available",
+                                    Content = $"No usage data found for the selected date range ({startDate:MMM d} - {endDate:MMM d}).",
+                                    CloseButtonText = "OK",
+                                    XamlRoot = this.Content.XamlRoot
+                                };
+                                
+                                await infoDialog.ShowAsync();
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                            }
                         }
                         catch (Exception dialogEx) {
                             System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
@@ -1733,15 +2092,22 @@ namespace ScreenTimeTracker
                 // Show an error message to the user
                 DispatcherQueue.TryEnqueue(async () => {
                     try {
-                        ContentDialog errorDialog = new ContentDialog()
+                        if (this.Content != null)
                         {
-                            Title = "Error Loading Data",
-                            Content = $"Failed to load screen time data: {ex.Message}",
-                            CloseButtonText = "OK",
-                            XamlRoot = Content.XamlRoot
-                        };
-                        
-                        await errorDialog.ShowAsync();
+                            ContentDialog errorDialog = new ContentDialog()
+                            {
+                                Title = "Error Loading Data",
+                                Content = $"Failed to load screen time data: {ex.Message}",
+                                CloseButtonText = "OK",
+                                XamlRoot = this.Content.XamlRoot
+                            };
+                            
+                            await errorDialog.ShowAsync();
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("Content was null, cannot show error dialog.");
+                        }
                     }
                     catch (Exception dialogEx) {
                         System.Diagnostics.Debug.WriteLine($"Error showing dialog: {dialogEx.Message}");
@@ -1815,6 +2181,68 @@ namespace ScreenTimeTracker
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error cleaning system processes: {ex.Message}");
+            }
+        }
+
+        // Helper method to get the AppWindow
+        private AppWindow GetAppWindowForCurrentWindow()
+        {
+            IntPtr hWnd = WindowNative.GetWindowHandle(this);
+            WindowId wndId = Win32Interop.GetWindowIdFromWindow(hWnd);
+            return AppWindow.GetFromWindowId(wndId);
+        }
+
+        // Event handler for AppWindow Closing - REMOVED save logic
+        private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+        {
+            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING AppWindow_Closing (Save logic removed - handled by Suspending)");
+            // Attempt to save records synchronously before closing
+            // try
+            // {
+                // // Ensure tracking is stopped first to finalize durations
+                // if (_trackingService != null && _trackingService.IsTracking)
+                // {
+                //      System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: BEFORE StopTracking()");
+                //     _trackingService.StopTracking(); 
+                //     System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: AFTER StopTracking()");
+                // }
+                // else
+                // {
+                //     System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: Tracking service null or not tracking.");
+                // }
+                // 
+                // System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: BEFORE SaveRecordsToDatabase()");
+                // SaveRecordsToDatabase();
+                // System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: AFTER SaveRecordsToDatabase()");
+            // }
+            // catch (Exception ex)
+            // {
+            //      System.Diagnostics.Debug.WriteLine($"[LOG] AppWindow_Closing: **** ERROR **** during save attempt: {ex.Message}");
+            // }
+            System.Diagnostics.Debug.WriteLine("[LOG] EXITING AppWindow_Closing (Save logic removed - handled by Suspending)");
+            // We don't cancel the closing process: args.Cancel = true;
+        }
+
+        // Event handler for the Window.Closed event
+        private void Window_Closed(object sender, WindowEventArgs args)
+        {
+            System.Diagnostics.Debug.WriteLine("Window_Closed event triggered.");
+            try
+            {
+                // Stop tracking if service exists
+                _trackingService?.StopTracking();
+                System.Diagnostics.Debug.WriteLine("Tracking stopped in Window_Closed.");
+                
+                // Save data if database service exists
+                SaveRecordsToDatabase();
+                System.Diagnostics.Debug.WriteLine("SaveRecordsToDatabase completed successfully in Window_Closed.");
+            }
+            catch (Exception ex)
+            {
+                // Log any errors during the save process on close
+                System.Diagnostics.Debug.WriteLine($"Error during StopTrackingAndSave in Window_Closed: {ex.Message}");
+                // Optionally log to file as well
+                // Log.Error(ex, "Error saving data on window close.");
             }
         }
     }

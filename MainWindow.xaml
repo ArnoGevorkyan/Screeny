@@ -8,7 +8,8 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:ScreenTimeTracker.Models"
     xmlns:lvc="using:LiveChartsCore.SkiaSharpView.WinUI"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    Closed="Window_Closed">
 
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base"/>
@@ -36,7 +37,7 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             
-            <Image Source="Assets/app-icon.svg" 
+            <Image Source="Assets/app-icon.ico" 
                    Width="16" 
                    Height="16"
                    Margin="8,0,8,0"/>

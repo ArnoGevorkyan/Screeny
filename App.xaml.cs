@@ -2,13 +2,22 @@ using Microsoft.UI.Xaml;
 using System;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
-using Windows.Storage;
 using System.IO;
 using SQLitePCL;
 using System.Diagnostics;
 using System.Text;
 using System.Reflection;
 using WinRT;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Data;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices.WindowsRuntime;
+using Windows.Foundation;
+using Windows.Foundation.Collections;
 
 namespace ScreenTimeTracker;
 
@@ -27,6 +36,9 @@ public partial class App : Application
     private const uint MB_OK = 0x00000000;
 
     private Window? m_window;
+
+    // Add static property to hold MainWindow instance
+    public static Window? MainWindowInstance { get; private set; }
 
     /// <summary>
     /// Initializes the singleton application object.  This is the first line of authored code
@@ -65,6 +77,8 @@ public partial class App : Application
             // Store the UI thread's dispatcher for use throughout the app
             DispatcherHelper.Initialize(DispatcherQueue.GetForCurrentThread());
             WriteToLog("Dispatcher initialized");
+
+            // Setup logging as early as possible
         }
         catch (Exception ex)
         {
@@ -94,6 +108,9 @@ public partial class App : Application
             
             m_window = new MainWindow();
             WriteToLog("MainWindow created successfully");
+            
+            // Store the instance
+            MainWindowInstance = m_window; 
             
             m_window.Activate();
             WriteToLog("MainWindow activated");
@@ -202,7 +219,8 @@ public partial class App : Application
     {
         try
         {
-            string logFolder = Path.Combine(
+            // Use System.IO.Path explicitly if needed, but removing Shapes should fix it.
+            string logFolder = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ScreenTimeTracker");
 
@@ -211,7 +229,7 @@ public partial class App : Application
                 Directory.CreateDirectory(logFolder);
             }
 
-            string logFile = Path.Combine(logFolder, "app_log.txt");
+            string logFile = System.IO.Path.Combine(logFolder, "app_log.txt");
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
             string logEntry = $"[{timestamp}] {message}\n";
 

@@ -1381,13 +1381,21 @@ namespace ScreenTimeTracker.Models
 
         public static AppUsageRecord CreateAggregated(string processName, DateTime date)
         {
+            // Validate the date to prevent future dates
+            DateTime validDate = date;
+            if (validDate > DateTime.Today)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: CreateAggregated received future date ({date:yyyy-MM-dd}), using today instead.");
+                validDate = DateTime.Today;
+            }
+            
             return new AppUsageRecord
             {
                 ProcessName = processName,
-                StartTime = date.Date,
+                StartTime = validDate.Date,
                 EndTime = null,
                 _accumulatedDuration = TimeSpan.Zero,
-                _lastFocusTime = date.Date,
+                _lastFocusTime = validDate.Date,
                 IsFocused = false
             };
         }

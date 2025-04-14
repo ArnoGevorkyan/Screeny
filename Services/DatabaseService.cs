@@ -33,17 +33,24 @@ namespace ScreenTimeTracker.Services
                 if (!Directory.Exists(dataDirectory))
                 {
                     Directory.CreateDirectory(dataDirectory);
+                    Debug.WriteLine($"Created database directory: {dataDirectory}");
                 }
 
                 // Path is already initialized in the field declaration
                 Debug.WriteLine($"Database path: {_dbPath}");
+                Debug.WriteLine($"Database directory exists: {Directory.Exists(Path.GetDirectoryName(_dbPath) ?? "")}");
+                Debug.WriteLine($"Database file exists before connection: {File.Exists(_dbPath)}");
 
                 // Create connection string
                 var connectionString = new SqliteConnectionStringBuilder
                 {
                     DataSource = _dbPath,
-                    Mode = SqliteOpenMode.ReadWriteCreate
+                    Mode = SqliteOpenMode.ReadWriteCreate,
+                    Cache = SqliteCacheMode.Shared,
+                    Pooling = true
                 }.ToString();
+
+                Debug.WriteLine($"Using connection string: {connectionString}");
 
                 // Create connection
                 _connection = new SqliteConnection(connectionString);
@@ -51,7 +58,41 @@ namespace ScreenTimeTracker.Services
                 // Initialize database schema
                 InitializeDatabase();
                 
+                // Verify if the database file was created
+                Debug.WriteLine($"Database file exists after initialization: {File.Exists(_dbPath)}");
+                
                 _initializedSuccessfully = true;
+
+                // Check if we have no data and insert a test record if empty
+                if (IsFirstRun())
+                {
+                    Debug.WriteLine("Database appears to be empty - adding a test record");
+                    try
+                    {
+                        // Create a test record for today
+                        var testRecord = new AppUsageRecord
+                        {
+                            ProcessName = "TestApp",
+                            ApplicationName = "Test Application",
+                            Date = DateTime.Today,
+                            StartTime = DateTime.Today.AddHours(9),
+                            EndTime = DateTime.Today.AddHours(10),
+                            _accumulatedDuration = TimeSpan.FromHours(1)
+                        };
+                        
+                        // Save the test record
+                        SaveRecord(testRecord);
+                        Debug.WriteLine("Test record created successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error creating test record: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("Database already contains records");
+                }
             }
             catch (Exception ex)
             {
@@ -105,17 +146,36 @@ namespace ScreenTimeTracker.Services
 
             try
             {
+                // Make sure we're using a fresh connection state
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
+                
+                _connection.Open();
+                Debug.WriteLine("IsFirstRun: Opened database connection");
+                
                 using var command = _connection.CreateCommand();
                 command.CommandText = "SELECT COUNT(*) FROM app_usage";
-                _connection.Open();
                 var result = Convert.ToInt32(command.ExecuteScalar());
+                
+                Debug.WriteLine($"IsFirstRun: Found {result} records in database");
+                
                 _connection.Close();
                 return result == 0;
             }
-            catch
+            catch (Exception ex)
             {
                 // If we can't query, assume it's first run
+                Debug.WriteLine($"IsFirstRun failed: {ex.Message}");
                 return true;
+            }
+            finally
+            {
+                if (_connection.State != System.Data.ConnectionState.Closed)
+                {
+                    _connection.Close();
+                }
             }
         }
 
@@ -317,65 +377,91 @@ namespace ScreenTimeTracker.Services
         }
 
         /// <summary>
+        /// Validates a date to ensure it's not in the future
+        /// </summary>
+        private DateTime ValidateDate(DateTime date)
+        {
+            if (date > DateTime.Now)
+            {
+                Debug.WriteLine($"WARNING: Future date detected ({date:yyyy-MM-dd}), using current date instead.");
+                return DateTime.Now;
+            }
+            return date;
+        }
+
+        /// <summary>
         /// Saves an app usage record to the database
         /// </summary>
         public bool SaveRecord(AppUsageRecord record)
         {
+            System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING SaveRecord for {record.ProcessName}");
             if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized, skipping save operation");
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Database not initialized, skipping.");
                 return false;
             }
             
+            bool success = false;
             try
             {
                 _connection.Open();
+                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection opened.");
 
-                // Extract date component for date-based filtering
-                string dateString = record.StartTime.ToString("yyyy-MM-dd");
+                // Validate date to prevent future dates
+                DateTime validatedStartTime = ValidateDate(record.StartTime);
+                DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
+                string dateString = validatedStartTime.ToString("yyyy-MM-dd");
 
-                string insertSql = @"
-                INSERT INTO app_usage 
-                    (date, process_name, app_name, start_time, end_time, duration)
-                VALUES 
-                    (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration);
-                SELECT last_insert_rowid();";
+                // Log if there was validation
+                if (validatedStartTime != record.StartTime)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
+                }
+
+                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration); SELECT last_insert_rowid();";
 
                 using (var command = new SqliteCommand(insertSql, _connection))
                 {
                     command.Parameters.AddWithValue("@Date", dateString);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                    command.Parameters.AddWithValue("@StartTime", record.StartTime.ToString("o"));
-                    command.Parameters.AddWithValue("@EndTime", record.EndTime.HasValue ? record.EndTime.Value.ToString("o") : null);
+                    command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
+                    command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
                     command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
                     
-                    // Get the ID of the inserted record
+                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: BEFORE ExecuteScalar...");
                     var result = command.ExecuteScalar();
+                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: AFTER ExecuteScalar.");
+                    
                     if (result != null)
                     {
                         long id = Convert.ToInt64(result);
                         record.Id = (int)id;
+                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Saved record {record.ProcessName} with ID {record.Id}");
+                        success = true;
+                    }
+                    else
+                    {
+                         System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: ExecuteScalar returned null, save failed?");
                     }
                 }
-
-                _connection.Close();
-                System.Diagnostics.Debug.WriteLine($"Saved record: {record.ProcessName} with ID {record.Id}");
-                return true;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error saving record: {ex.Message}");
-                return false;
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: **** ERROR **** saving record for {record.ProcessName}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                // Don't re-throw, just report failure
             }
             finally
             {
-                // Ensure the connection is closed even on exception
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
+                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection closed.");
                 }
+                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING SaveRecord for {record.ProcessName}, Success: {success}");
             }
+            return success;
         }
 
         /// <summary>
@@ -383,28 +469,31 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void UpdateRecord(AppUsageRecord record)
         {
+            System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING UpdateRecord for ID {record.Id} ({record.ProcessName})");
             if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized, skipping update operation");
+                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Database not initialized, skipping.");
                 return;
             }
-
+            
+            bool success = false;
             try
             {
                 _connection.Open();
+                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection opened.");
 
-                // Extract date component for consistency
-                string dateString = record.StartTime.ToString("yyyy-MM-dd");
+                // Validate date to prevent future dates
+                DateTime validatedStartTime = ValidateDate(record.StartTime);
+                DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
+                string dateString = validatedStartTime.ToString("yyyy-MM-dd");
 
-                string updateSql = @"
-                UPDATE app_usage 
-                SET 
-                    date = @Date,
-                    process_name = @ProcessName,
-                    app_name = @ApplicationName,
-                    end_time = @EndTime,
-                    duration = @Duration
-                WHERE id = @Id;";
+                // Log if there was validation
+                if (validatedStartTime != record.StartTime)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
+                }
+
+                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration WHERE id = @Id;";
 
                 using (var command = new SqliteCommand(updateSql, _connection))
                 {
@@ -412,27 +501,38 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@Date", dateString);
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                    command.Parameters.AddWithValue("@EndTime", record.EndTime.HasValue ? record.EndTime.Value.ToString("o") : null);
+                    command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
                     command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
                     
-                    command.ExecuteNonQuery();
+                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: BEFORE ExecuteNonQuery for ID {record.Id}...");
+                    int rowsAffected = command.ExecuteNonQuery();
+                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: AFTER ExecuteNonQuery for ID {record.Id}. Rows affected: {rowsAffected}.");
+                    
+                    if (rowsAffected > 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Updated record {record.ProcessName} with ID {record.Id}");
+                        success = true;
+                    }
+                    else
+                    {
+                         System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: ExecuteNonQuery affected 0 rows, ID {record.Id} not found?");
+                    }
                 }
-
-                _connection.Close();
-                System.Diagnostics.Debug.WriteLine($"Updated record: {record.ProcessName} with ID {record.Id}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error updating record: {ex.Message}");
-                throw;
+                System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: **** ERROR **** updating record ID {record.Id} ({record.ProcessName}): {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                // Don't re-throw
             }
             finally
             {
-                // Ensure the connection is closed even on exception
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
+                    System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection closed.");
                 }
+                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING UpdateRecord for ID {record.Id}, Success: {success}");
             }
         }
 
