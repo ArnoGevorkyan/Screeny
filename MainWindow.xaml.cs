@@ -430,22 +430,21 @@ namespace ScreenTimeTracker
                     {
                         System.Diagnostics.Debug.WriteLine($"Incrementing duration for displayed record: {recordToUpdate.ProcessName}");
                         
-                        // --- FIX START: Only increment if viewing today or a range including today ---
+                        // --- Check if viewing today or a range including today --- 
                         bool isViewingToday = _selectedDate.Date == DateTime.Today && !_isDateRangeSelected;
                         bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
                                                           DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
                                                           
                         if (isViewingToday || isViewingRangeIncludingToday)
                         {
-                            // Use the new IncrementDuration method
+                            // Increment duration every second for accuracy
                             recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
-                            didUpdate = true;
+                            // REMOVED: didUpdate = true; - We don't force UI update just for duration increment
                         }
                         else
                         {
                              System.Diagnostics.Debug.WriteLine("Not incrementing duration - viewing a past date/range.");
                         }
-                        // --- FIX END ---
                     }
                     else
                     {
@@ -453,20 +452,16 @@ namespace ScreenTimeTracker
                     }
                 }
                 
-                // Periodically force UI refresh even if no specific app was updated
-                // to ensure chart updates correctly.
-                if (didUpdate || _timerTickCounter >= 5) // Force update every ~5 seconds
+                // --- CHANGE: Only update UI based on timer interval, not duration increment --- 
+                // Periodically force UI refresh to ensure chart updates correctly.
+                if (_timerTickCounter >= 15) // Update UI every ~15 seconds (Adjust interval as needed)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Updating UI (didUpdate={didUpdate}, tickCounter={_timerTickCounter})");
-
-                    if (_timerTickCounter >= 5)
-                    {
-                        _timerTickCounter = 0;
-                    }
+                    System.Diagnostics.Debug.WriteLine($"Periodic UI Update Triggered (tickCounter={_timerTickCounter})");
+                    _timerTickCounter = 0; // Reset counter
                     
                     // Update summary and chart
                     UpdateSummaryTab();
-                    UpdateUsageChart(liveFocusedApp);
+                    UpdateUsageChart(liveFocusedApp); // Pass live app in case it needs it
                 }
             }
             catch (Exception ex)
@@ -1891,97 +1886,72 @@ namespace ScreenTimeTracker
                     _currentTimePeriod = TimePeriod.Daily;
                     _currentChartViewMode = ChartViewMode.Hourly;
                     
-                    // Update view mode label and hide toggle panel (on UI thread)
-                    DispatcherQueue.TryEnqueue(() => {
+                    // --- REVISED: Load data safely on UI thread using async/await --- 
+                    DispatcherQueue.TryEnqueue(async () => { // Make lambda async
                         try
                         {
-                            if (ViewModeLabel != null)
-                            {
-                                ViewModeLabel.Text = "Hourly View";
-                            }
-                            
-                            // Hide the view mode panel (user can't change the view)
-                            if (ViewModePanel != null)
-                            {
-                                ViewModePanel.Visibility = Visibility.Collapsed;
-                            }
+                            // Update view mode UI first
+                            if (ViewModeLabel != null) ViewModeLabel.Text = "Hourly View";
+                            if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
                             
                             // Show loading indicator
-                            if (LoadingIndicator != null)
-                            {
-                                LoadingIndicator.Visibility = Visibility.Visible;
-                            }
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
+
+                            // Short delay to allow UI to update (render loading indicator)
+                            await Task.Delay(50); 
+
+                            // Load data directly on UI thread
+                            LoadRecordsForDate(_selectedDate);
+
+                            // Hide loading indicator AFTER loading is done
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
                             
-                            // Load data on the same UI update to avoid race conditions
-                            // Use Task.Run with a slight delay to ensure UI updates properly
-                            Task.Delay(150).ContinueWith(_ => {
-                                DispatcherQueue.TryEnqueue(() => {
-                                    try 
-                                    {
-                                        // Load the data
-                                        LoadRecordsForDate(_selectedDate);
-                                        
-                                        // Hide loading indicator
-                                        if (LoadingIndicator != null)
-                                        {
-                                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"Error loading records for Today: {ex.Message}");
-                                    }
-                                });
-                            });
+                             System.Diagnostics.Debug.WriteLine("Today view loaded successfully on UI thread.");
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Error in UI update: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for Today view: {ex.Message}");
+                            // Hide loading indicator in case of error
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
+                            // Optionally show error dialog
                         }
                     });
+                    // --- END REVISED --- 
                 }
-                else
+                else // Handle selection of other single dates
                 {
+                   // ... (Existing logic for other single dates, keep similar async pattern if needed) ...
                     // Ensure we switch to Daily period when selecting a single past date
                     _currentTimePeriod = TimePeriod.Daily;
                     
-                    // For other single dates, use the normal update logic with a delay
-                    DispatcherQueue.TryEnqueue(() => {
+                    // --- REVISED: Load data safely on UI thread using async/await --- 
+                    DispatcherQueue.TryEnqueue(async () => { // Make lambda async
                         try
                         {
                             // Show loading indicator
-                            if (LoadingIndicator != null)
-                            {
-                                LoadingIndicator.Visibility = Visibility.Visible;
-                            }
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
                             
-                            // Use a delay to allow UI to show loading indicator
-                            Task.Delay(50).ContinueWith(_ => {
-                                DispatcherQueue.TryEnqueue(() => {
-                                    try
-                                    {
-                                        // Load the data
-                                        LoadRecordsForDate(_selectedDate);
-                                        UpdateChartViewMode();
-                                        
-                                        // Hide loading indicator
-                                        if (LoadingIndicator != null)
-                                        {
-                                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
-                                    }
-                                });
-                            });
+                            // Short delay to allow UI to update
+                            await Task.Delay(50); 
+                            
+                            // Load the data directly on UI thread
+                            LoadRecordsForDate(_selectedDate);
+                            UpdateChartViewMode(); // Update chart view after loading
+                            
+                            // Hide loading indicator AFTER loading is done
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
+
+                            System.Diagnostics.Debug.WriteLine("Past date view loaded successfully on UI thread.");
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Error updating UI for date selection: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for past date view: {ex.Message}");
+                            // Hide loading indicator in case of error
+                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
+                            // Optionally show error dialog
                         }
                     });
+                     // --- END REVISED --- 
                 }
             }
             catch (Exception ex)
@@ -2007,43 +1977,89 @@ namespace ScreenTimeTracker
                 _currentChartViewMode = ChartViewMode.Daily;
                 
                 // Update view mode label and hide toggle panel
-                DispatcherQueue.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
+                DispatcherQueue.TryEnqueue(async () => {
+                    try
                     {
-                        ViewModeLabel.Text = "Daily View";
+                        // Update UI first
+                        if (ViewModeLabel != null)
+                        {
+                            ViewModeLabel.Text = "Daily View";
+                        }
+                        
+                        // Hide the view mode panel (user can't change the view)
+                        if (ViewModePanel != null)
+                        {
+                            ViewModePanel.Visibility = Visibility.Collapsed;
+                        }
+                        
+                        // Show loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Visible;
+                        }
+                        
+                        // Short delay to allow UI to update
+                        await Task.Delay(50);
+                        
+                        // Load the data directly on UI thread
+                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                        
+                        // Hide loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
+                        
+                        System.Diagnostics.Debug.WriteLine("Last 7 days view loaded successfully on UI thread");
                     }
-                    
-                    // Hide the view mode panel (user can't change the view)
-                    if (ViewModePanel != null)
+                    catch (Exception ex)
                     {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
+                        System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for Last 7 days view: {ex.Message}");
+                        // Hide loading indicator in case of error
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
                     }
                 });
             }
-            
-            // Load records for the date range - use DispatcherQueue to allow UI to update first
-            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => {
-                // Show loading indicator
-                if (LoadingIndicator != null)
-                {
-                    LoadingIndicator.Visibility = Visibility.Visible;
-                }
-                
-                // Use a delay to allow UI to show loading indicator
-                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, async () => {
-                    // Small delay to give UI time to update
-                    await Task.Delay(100);
-                    
-                    // Load the data
-                    LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                    
-                    // Hide loading indicator
-                    if (LoadingIndicator != null)
+            else
+            {
+                // Load records for the date range - use DispatcherQueue to allow UI to update first
+                DispatcherQueue.TryEnqueue(async () => {
+                    try
                     {
-                        LoadingIndicator.Visibility = Visibility.Collapsed;
+                        // Show loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Visible;
+                        }
+                        
+                        // Short delay to allow UI to update
+                        await Task.Delay(50);
+                        
+                        // Load the data directly on UI thread
+                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                        
+                        // Hide loading indicator
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
+                        
+                        System.Diagnostics.Debug.WriteLine("Date range view loaded successfully on UI thread");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for date range view: {ex.Message}");
+                        // Hide loading indicator in case of error
+                        if (LoadingIndicator != null)
+                        {
+                            LoadingIndicator.Visibility = Visibility.Collapsed;
+                        }
                     }
                 });
-            });
+            }
         }
         
         private void UpdateDatePickerButtonText()
