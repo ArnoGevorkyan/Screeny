@@ -6,13 +6,13 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="ScreenTimeTrackerApp"
-    Publisher="CN=Developer"
+    Name="ArnoGevorkyan.ScreenyScreenTime"
+    Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
     Version="1.0.0.0" />
 
   <Properties>
     <DisplayName>Screeny</DisplayName>
-    <PublisherDisplayName>Developer</PublisherDisplayName>
+    <PublisherDisplayName>Arno Gevorkyan</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

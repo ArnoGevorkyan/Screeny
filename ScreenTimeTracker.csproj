@@ -9,7 +9,7 @@
     <Platforms>x64</Platforms>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsPackageType>MSIX</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <ApplicationIcon>Assets\screeny icon.ico</ApplicationIcon>
     <AssemblyName>Screeny</AssemblyName>
