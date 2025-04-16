@@ -18,8 +18,7 @@
 
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
-    <!-- Make sure MinVersion matches your project setting -->
-     <PackageDependency Name="Microsoft.WindowsAppRuntime.1.5" MinVersion="5001.138.2003.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+    <PackageDependency Name="Microsoft.WindowsAppRuntime.1.5" MinVersion="5001.138.2003.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
   </Dependencies>
 
   <Resources>
@@ -36,28 +35,22 @@
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
-        <!-- Add actual paths to your logo assets -->
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
 
-      <!-- Startup Task Extension -->
       <Extensions>
-         <uap:Extension Category="windows.startupTask" Executable="Screeny.exe" EntryPoint="$targetentrypoint$">
+         <uap:Extension Category="windows.startupTask" EntryPoint="$targetentrypoint$">
             <uap:StartupTask TaskId="ScreenyStartupTask" Enabled="true" DisplayName="Screeny Screen Time Tracker" />
          </uap:Extension>
       </Extensions>
-      <!-- End Startup Task Extension -->
 
     </Application>
   </Applications>
 
   <Capabilities>
-    <!-- Required for network access if needed, leave if unsure -->
     <Capability Name="internetClient" />
-     <!-- Required for WinUI 3 Desktop apps -->
-     <rescap:Capability Name="runFullTrust" />
-     <!-- Required for APIs like GetForegroundWindow, GetWindowText -->
-     <rescap:Capability Name="unvirtualizedResources" />
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
   </Capabilities>
 </Package> 
