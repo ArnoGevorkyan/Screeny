@@ -1,6 +1,6 @@
 # Privacy Policy for Screeny
 
-*Last Updated: March 27, 2024*
+*Last Updated: April 15, 2025*
 
 ## Our Commitment to Your Privacy
 

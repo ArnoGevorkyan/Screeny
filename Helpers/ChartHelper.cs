@@ -598,6 +598,17 @@ namespace ScreenTimeTracker.Helpers
         /// <returns>Formatted time string</returns>
         public static string FormatTimeSpan(TimeSpan time)
         {
+            // Cap extremely large durations to prevent unrealistic display values
+            // 365 days as reasonable maximum (1 year)
+            const int MaxReasonableDays = 365;
+            
+            if (time.TotalDays > MaxReasonableDays)
+            {
+                System.Diagnostics.Debug.WriteLine($"WARNING: Capping unrealistic duration of {time.TotalDays:F1} days to {MaxReasonableDays} days");
+                // Create a new TimeSpan capped at the maximum
+                time = TimeSpan.FromDays(MaxReasonableDays);
+            }
+            
             if (time.TotalDays >= 1)
             {
                 return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";

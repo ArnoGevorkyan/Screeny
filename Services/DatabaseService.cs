@@ -6,6 +6,7 @@ using System.IO;
 using System.Threading.Tasks;
 using SQLitePCL;
 using System.Diagnostics;
+using System.Linq;
 
 namespace ScreenTimeTracker.Services
 {
@@ -18,6 +19,7 @@ namespace ScreenTimeTracker.Services
         private bool _initializedSuccessfully = false;
         private bool _disposed = false;
         private bool _useInMemoryFallback = false;
+        private List<AppUsageRecord> _memoryFallbackRecords = new List<AppUsageRecord>();
 
         /// <summary>
         /// Initializes a new instance of the DatabaseService class.
@@ -626,41 +628,52 @@ namespace ScreenTimeTracker.Services
                         SELECT id, process_name, app_name, start_time, end_time, duration
                         FROM app_usage
                         WHERE date = $date
-                        ORDER BY duration DESC;"; // Order by duration to show most used apps first
+                        ORDER BY process_name, duration DESC;"; // Group by process_name to keep related entries together
                     command.Parameters.AddWithValue("$date", dateString);
                     
                     using (var reader = command.ExecuteReader())
                     {
+                        // Dictionary to aggregate records with the same process name
+                        var processGroups = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+                        
                         while (reader.Read())
                         {
                             try
                             {
+                                string processName = reader.GetString(1);
                                 var dbStartTime = DateTime.Parse(reader.GetString(3));
-                                // Important: Preserve the actual start time from the database 
-                                // instead of just using the date parameter
+                                long durationMs = !reader.IsDBNull(5) ? reader.GetInt64(5) : 0;
                                 
-                                var record = new AppUsageRecord
+                                // If we already have a record for this process, update it
+                                if (processGroups.TryGetValue(processName, out var existingRecord))
                                 {
-                                    Id = reader.GetInt32(0),
-                                    ProcessName = reader.GetString(1),
-                                    ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : reader.GetString(1),
-                                    Date = date, // Use date for the Date field
-                                    StartTime = dbStartTime // Use actual start time from database
-                                };
-                                
-                                if (!reader.IsDBNull(4))
-                                {
-                                    record.EndTime = DateTime.Parse(reader.GetString(4));
+                                    // Add the duration to the existing record
+                                    existingRecord._accumulatedDuration += TimeSpan.FromMilliseconds(durationMs);
+                                    Debug.WriteLine($"Merged record: {processName}, total duration now: {existingRecord.Duration.TotalSeconds:F1}s");
                                 }
-                                
-                                if (!reader.IsDBNull(5))
+                                else
                                 {
-                                    // Convert milliseconds to TimeSpan
-                                    record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(5));
+                                    // Create a new record
+                                    var record = new AppUsageRecord
+                                    {
+                                        Id = reader.GetInt32(0),
+                                        ProcessName = processName,
+                                        ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : processName,
+                                        Date = date, // Use date for the Date field
+                                        StartTime = dbStartTime // Use actual start time from database
+                                    };
+                                    
+                                    if (!reader.IsDBNull(4))
+                                    {
+                                        record.EndTime = DateTime.Parse(reader.GetString(4));
+                                    }
+                                    
+                                    record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
+                                    
+                                    // Add to our dictionary
+                                    processGroups[processName] = record;
+                                    Debug.WriteLine($"Added new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s");
                                 }
-                                
-                                records.Add(record);
-                                Debug.WriteLine($"Loaded record: {record.ProcessName}, StartTime: {record.StartTime}, Duration: {record.Duration.TotalSeconds}s");
                             }
                             catch (Exception parseEx)
                             {
@@ -668,6 +681,9 @@ namespace ScreenTimeTracker.Services
                                 // Continue to next record
                             }
                         }
+                        
+                        // Convert dictionary values to our final list
+                        records = processGroups.Values.ToList();
                     }
                 }
             }
@@ -684,7 +700,7 @@ namespace ScreenTimeTracker.Services
                 }
             }
             
-            Debug.WriteLine($"Loaded {records.Count} records for date {date:yyyy-MM-dd}");
+            Debug.WriteLine($"Loaded {records.Count} aggregated records for date {date:yyyy-MM-dd}");
             return records;
         }
 
@@ -795,6 +811,29 @@ namespace ScreenTimeTracker.Services
                         {
                             string processName = reader.GetString(0);
                             long totalDurationMs = reader.GetInt64(1);
+                            
+                            // Cap the duration at a reasonable maximum to prevent overflow/errors
+                            // Max milliseconds per day = 86,400,000 (24 hrs * 60 min * 60 sec * 1000 ms)
+                            // Calculate the theoretical max for the date range (days between dates * 24 hours)
+                            int daysBetween = (int)(endDate - startDate).TotalDays + 1;
+                            long maxReasonableDurationMs = daysBetween * 86400000; // max milliseconds for the date range
+                            
+                            // Additionally ensure we stay within TimeSpan.MaxValue limits
+                            long maxAllowedMs = (long)(TimeSpan.MaxValue.TotalMilliseconds * 0.9); // 90% of max as safety margin
+                            
+                            if (totalDurationMs < 0 || totalDurationMs > maxReasonableDurationMs)
+                            {
+                                Debug.WriteLine($"WARNING: Unrealistic duration detected for {processName}: {totalDurationMs}ms ({totalDurationMs / 86400000.0:F1} days). Capping to {maxReasonableDurationMs}ms ({daysBetween} days)");
+                                totalDurationMs = maxReasonableDurationMs;
+                            }
+                            
+                            // Final safety check for TimeSpan limits
+                            if (totalDurationMs > maxAllowedMs)
+                            {
+                                Debug.WriteLine($"WARNING: Duration exceeds TimeSpan.MaxValue limits for {processName}: {totalDurationMs}ms. Capping to {maxAllowedMs}ms");
+                                totalDurationMs = maxAllowedMs;
+                            }
+                            
                             TimeSpan duration = TimeSpan.FromMilliseconds(totalDurationMs);
 
                             usageData.Add((processName, duration));
@@ -975,6 +1014,95 @@ namespace ScreenTimeTracker.Services
                     _connection?.Dispose();
                 }
                 _disposed = true;
+            }
+        }
+
+        public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
+        {
+            try
+            {
+                // Ensure the database is initialized
+                if (!IsDatabaseInitialized())
+                {
+                    System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
+                    return new List<AppUsageRecord>();
+                }
+
+                if (_useInMemoryFallback)
+                {
+                    // Use the in-memory backup data if we're in fallback mode
+                    return _memoryFallbackRecords
+                        .Where(r => r.Date.Date >= startDate.Date && r.Date.Date <= endDate.Date)
+                        .ToList();
+                }
+
+                // Convert dates to the format stored in the database (YYYY-MM-DD)
+                string startDateStr = startDate.ToString("yyyy-MM-dd");
+                string endDateStr = endDate.ToString("yyyy-MM-dd");
+
+                // Create SQL to get all records for the date range
+                string sql = @"
+                    SELECT ProcessName, ApplicationName, Duration, StartHour, StartMinute, StartSecond, Date
+                    FROM AppUsage
+                    WHERE Date BETWEEN @StartDate AND @EndDate
+                    ORDER BY Date ASC, ProcessName ASC";
+
+                List<AppUsageRecord> records = new List<AppUsageRecord>();
+
+                using (var connection = new SqliteConnection(_connection.ConnectionString))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = sql;
+                        command.Parameters.AddWithValue("@StartDate", startDateStr);
+                        command.Parameters.AddWithValue("@EndDate", endDateStr);
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                string processName = reader.GetString(0);
+                                string appName = reader.GetString(1);
+                                double durationSeconds = reader.GetDouble(2);
+                                int startHour = reader.GetInt32(3);
+                                int startMinute = reader.GetInt32(4);
+                                int startSecond = reader.GetInt32(5);
+                                string dateStr = reader.GetString(6);
+
+                                // Parse the date
+                                if (DateTime.TryParse(dateStr, out DateTime date))
+                                {
+                                    // Create the start time
+                                    DateTime startTime = new DateTime(
+                                        date.Year, date.Month, date.Day,
+                                        startHour, startMinute, startSecond
+                                    );
+
+                                    // Create the app usage record
+                                    var record = new AppUsageRecord
+                                    {
+                                        ProcessName = processName,
+                                        ApplicationName = appName ?? processName,
+                                        Date = date,
+                                        StartTime = startTime,
+                                        _accumulatedDuration = TimeSpan.FromSeconds(durationSeconds)
+                                    };
+
+                                    records.Add(record);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return records;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in GetRawRecordsForDateRange: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                return new List<AppUsageRecord>();
             }
         }
     }

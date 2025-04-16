@@ -587,6 +587,13 @@ namespace ScreenTimeTracker.Helpers
                 var today = DateTime.Today;
                 var lastWeek = today.AddDays(-6); // 7 days including today
                 
+                // Extra validation to ensure dates are valid
+                if (lastWeek > today)
+                {
+                    System.Diagnostics.Debug.WriteLine($"WARNING: Invalid date range calculation - lastWeek ({lastWeek:yyyy-MM-dd}) is after today ({today:yyyy-MM-dd})");
+                    lastWeek = today.AddDays(-1); // Fallback to yesterday if calculation is wrong
+                }
+                
                 _selectedDate = lastWeek;
                 _selectedEndDate = today;
                 _isDateRangeSelected = true;
@@ -603,10 +610,17 @@ namespace ScreenTimeTracker.Helpers
                     
                     if (calendar != null)
                     {
-                        // WinUI 3 Calendar can't show range selection visually,
-                        // so we just select the start date
-                        calendar.SelectedDates.Clear();
-                        calendar.SelectedDates.Add(new DateTimeOffset(lastWeek));
+                        try
+                        {
+                            // WinUI 3 Calendar can't show range selection visually,
+                            // so we just select the start date
+                            calendar.SelectedDates.Clear();
+                            calendar.SelectedDates.Add(new DateTimeOffset(lastWeek));
+                        }
+                        catch (Exception calEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Error updating calendar selection: {calEx.Message}");
+                        }
                     }
                     
                     if (dateText != null)
@@ -622,6 +636,10 @@ namespace ScreenTimeTracker.Helpers
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Last7Days_Click: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                
+                // Recover from error - close popup without changing selection
+                ClosePopup();
             }
         }
 
