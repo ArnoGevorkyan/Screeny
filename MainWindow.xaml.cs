@@ -1120,7 +1120,8 @@ namespace ScreenTimeTracker
                             ApplicationName = processName, // Default ApplicationName to ProcessName
                             _accumulatedDuration = totalDuration,
                             Date = startDate, // Assign a date (start date is reasonable for aggregation)
-                            StartTime = startDate // Assign a start time
+                            StartTime = startDate, // Assign a start time
+                            IsFocused = false // Ensure aggregated records are not marked as focused
                         };
                         uniqueRecords[processName] = record;
                         System.Diagnostics.Debug.WriteLine($"Added base record: {record.ProcessName}, Historical Duration: {record.Duration.TotalSeconds:F1}s");
@@ -1145,7 +1146,8 @@ namespace ScreenTimeTracker
                             existingRecord._accumulatedDuration += liveRecord.Duration; // Add durations correctly
 
                             // Update other relevant properties from live record if needed
-                            existingRecord.IsFocused = liveRecord.IsFocused;
+                            // CRITICAL: Do NOT set IsFocused = true for the aggregated record here.
+                            // existingRecord.IsFocused = liveRecord.IsFocused; // REMOVE or ensure it stays false
                             existingRecord.WindowHandle = liveRecord.WindowHandle; // Keep latest handle
                             if (!string.IsNullOrEmpty(liveRecord.WindowTitle)) existingRecord.WindowTitle = liveRecord.WindowTitle; // Keep latest title
                             // Use the live record's StartTime if it's earlier than the current one
@@ -1162,6 +1164,10 @@ namespace ScreenTimeTracker
                         {
                             // This process was only running live today, not historically in the range
                             liveRecord.Date = DateTime.Today; // Ensure date is set correctly
+                            // Ensure IsFocused is handled correctly if adding a live-only record
+                            // If it's truly live-only, its IsFocused state might be relevant, but it's being added to an aggregated list.
+                            // For consistency in the aggregated view, maybe set IsFocused = false here too?
+                            // liveRecord.IsFocused = false; // Consider this if live-only records appear focused in agg view
                             uniqueRecords[liveRecord.ProcessName] = liveRecord;
                             System.Diagnostics.Debug.WriteLine($"Added new live-only record: {liveRecord.ProcessName}, Duration: {liveRecord.Duration.TotalSeconds:F1}s");
                         }
