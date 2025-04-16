@@ -2971,7 +2971,11 @@ namespace ScreenTimeTracker
                 var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
                 foreach (var record in sortedRecords)
                 {
-                    _usageRecords.Add(record);
+                    // Add explicit null check before adding
+                    if (_usageRecords != null)
+                    {
+                        _usageRecords.Add(record);
+                    }
                 }
                 
                 // Update the ListView
@@ -2981,14 +2985,17 @@ namespace ScreenTimeTracker
                         UsageListView.ItemsSource = null;
                         UsageListView.ItemsSource = _usageRecords;
                         
-                        // Update the chart
-                        if (_usageRecords != null) // Check _usageRecords before calling UpdateUsageChart
+                        // Update the chart (already has null check)
+                        if (_usageRecords != null)
                         {
                             UpdateUsageChart();
                         }
                         
-                        // Update the summary tab
-                        UpdateSummaryTab(_usageRecords.ToList()); // Pass _usageRecords
+                        // Update the summary tab (add explicit null check)
+                        if (_usageRecords != null)
+                        {
+                            UpdateSummaryTab(_usageRecords.ToList());
+                        }
                     }
                 });
                 
