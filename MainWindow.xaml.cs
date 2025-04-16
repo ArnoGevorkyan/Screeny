@@ -111,6 +111,8 @@ namespace ScreenTimeTracker
         private WndProcDelegate? _newWndProcDelegate = null; // Keep delegate alive
         private IntPtr _oldWndProc = IntPtr.Zero;
 
+        private TrayIconHelper? _trayIconHelper; // Add field for TrayIconHelper
+
         public MainWindow()
         {
             _disposed = false;
@@ -141,6 +143,15 @@ namespace ScreenTimeTracker
             {
                 // Subclass the window procedure
                 SubclassWindow();
+                // Initialize TrayIconHelper AFTER getting handle
+                _trayIconHelper = new TrayIconHelper(_hWnd);
+                 Debug.WriteLine("TrayIconHelper initialized.");
+                 // Subscribe to TrayIconHelper events
+                 if (_trayIconHelper != null)
+                 {
+                     _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
+                     _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
+                 }
             }
 
             // Initialize the WindowControlHelper
@@ -229,6 +240,10 @@ namespace ScreenTimeTracker
         // The new window procedure
         private IntPtr NewWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
+            // Handle Tray Icon Messages first
+            _trayIconHelper?.HandleWindowMessage(msg, wParam, lParam);
+
+            // Then handle Power Notifications
             if (msg == WM_POWERBROADCAST)
             {
                 if (wParam.ToInt32() == PBT_POWERSETTINGCHANGE)
@@ -243,7 +258,7 @@ namespace ScreenTimeTracker
                 // but PBT_POWERSETTINGCHANGE is generally preferred for modern apps.
             }
 
-            // Call the original window procedure for all messages
+            // Call the original window procedure for all other messages
             return CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
         }
 
@@ -302,7 +317,10 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine("[LOG] ENTERING Dispose");
             if (!_disposed)
             {
-                 // Unregister power notifications FIRST
+                 // Dispose Tray Icon Helper FIRST to remove icon
+                 _trayIconHelper?.Dispose();
+
+                 // Unregister power notifications
                  UnregisterPowerNotifications();
 
                  // Restore original window procedure
@@ -314,15 +332,15 @@ namespace ScreenTimeTracker
                     _appWindow.Closing -= AppWindow_Closing;
                 }
 
-                // Stop services - this might be redundant if PrepareForSuspend ran
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services (might be redundant)...");
+                // Stop services
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services...");
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
                 _autoSaveTimer?.Stop();
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
 
-                // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Save skipped - handled by PrepareForSuspend.");
+                // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
+                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Save skipped.");
                 
                 // Clear collections
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Clearing collections...");
@@ -336,10 +354,19 @@ namespace ScreenTimeTracker
                 // Remove event handlers
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Removing event handlers...");
                  if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
-                 if (_trackingService != null) _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
+                 if (_trackingService != null) 
+                 { 
+                     _trackingService.WindowChanged -= TrackingService_WindowChanged;
+                     _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
+                 }
                  if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
-                  // Ensure Loaded event is removed if subscribed
-                  if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded; 
+                 if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded;
+                 // Unsubscribe from Tray Icon events
+                 if (_trayIconHelper != null)
+                 {
+                     _trayIconHelper.ShowClicked -= TrayIcon_ShowClicked;
+                     _trayIconHelper.ExitClicked -= TrayIcon_ExitClicked;
+                 }
 
                 _disposed = true;
                  System.Diagnostics.Debug.WriteLine("[LOG] MainWindow disposed.");
@@ -1763,6 +1790,9 @@ namespace ScreenTimeTracker
                 // Register for power notifications AFTER window handle is valid and before tracking starts
                 RegisterPowerNotifications();
 
+                // Add the tray icon
+                _trayIconHelper?.AddIcon("Screeny - Tracking");
+
                 // Start tracking automatically (assuming StartTracking handles its internal errors)
                 StartTracking();
                 
@@ -2637,32 +2667,15 @@ namespace ScreenTimeTracker
         // Event handler for AppWindow Closing - REMOVED save logic
         private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
         {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING AppWindow_Closing (Save logic removed - handled by Suspending)");
-            // Attempt to save records synchronously before closing
-            // try
-            // {
-                // // Ensure tracking is stopped first to finalize durations
-                // if (_trackingService != null && _trackingService.IsTracking)
-                // {
-                //      System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: BEFORE StopTracking()");
-                //     _trackingService.StopTracking(); 
-                //     System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: AFTER StopTracking()");
-                // }
-                // else
-                // {
-                //     System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: Tracking service null or not tracking.");
-                // }
-                // 
-                // System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: BEFORE SaveRecordsToDatabase()");
-                // SaveRecordsToDatabase();
-                // System.Diagnostics.Debug.WriteLine("[LOG] AppWindow_Closing: AFTER SaveRecordsToDatabase()");
-            // }
-            // catch (Exception ex)
-            // {
-            //      System.Diagnostics.Debug.WriteLine($"[LOG] AppWindow_Closing: **** ERROR **** during save attempt: {ex.Message}");
-            // }
-            System.Diagnostics.Debug.WriteLine("[LOG] EXITING AppWindow_Closing (Save logic removed - handled by Suspending)");
-            // We don't cancel the closing process: args.Cancel = true;
+            Debug.WriteLine("[LOG] AppWindow_Closing: Hiding window instead of closing.");
+            // Prevent the window from closing
+            args.Cancel = true;
+            
+            // Hide the window
+            sender.Hide();
+            
+            // Optional: Show a notification that the app is still running?
+            // _trayIconHelper?.ShowNotification("Screeny", "Still running in the background.");
         }
 
         // Event handler for the Window.Closed event
@@ -3144,6 +3157,47 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
             }
+        }
+
+        // Event Handlers for Tray Icon Clicks
+        private void TrayIcon_ShowClicked(object? sender, EventArgs e)
+        {
+            Debug.WriteLine("Tray Icon Show Clicked");
+            // Ensure we run this on the UI thread
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (_appWindow != null)
+                    {
+                        _appWindow.Show();
+                        // Optionally bring to foreground/restore if minimized
+                        // P/Invoke for SetForegroundWindow might be needed
+                    }
+                }
+                catch (Exception ex)
+                {                    
+                    Debug.WriteLine($"Error showing window from tray: {ex.Message}");
+                }
+            });
+        }
+
+        private void TrayIcon_ExitClicked(object? sender, EventArgs e)
+        {
+            Debug.WriteLine("Tray Icon Exit Clicked");
+            // Ensure proper cleanup and exit
+            // Using Application.Current.Exit() is generally preferred for WinUI 3
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    Application.Current.Exit();
+                }
+                catch (Exception ex)
+                {                    
+                    Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
+                }
+            });
         }
     }
 }

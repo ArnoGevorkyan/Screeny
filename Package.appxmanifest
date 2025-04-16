@@ -52,6 +52,16 @@
     </Application>
   </Applications>
 
+  <Extensions>
+    <Extension Category="windows.startupTask"
+                 Executable="Screeny.exe" 
+                 EntryPoint="ScreenTimeTracker.App">
+      <StartupTask TaskId="ScreenyStartupTask" 
+                   Enabled="true" 
+                   DisplayName="Screeny Screen Time Tracker" />
+    </Extension>
+  </Extensions>
+
   <Capabilities>
     <!-- Required for network access if needed, leave if unsure -->
     <Capability Name="internetClient" />
