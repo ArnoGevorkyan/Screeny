@@ -609,21 +609,26 @@ namespace ScreenTimeTracker.Helpers
                 time = TimeSpan.FromDays(MaxReasonableDays);
             }
             
-            if (time.TotalDays >= 1)
+            int days = (int)time.TotalDays;
+            int hours = time.Hours;
+            int minutes = time.Minutes;
+            int seconds = time.Seconds;
+
+            if (days > 0)
             {
-                return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";
+                return $"{days}d {hours}h {minutes}m"; // Show d/h/m for multiple days
             }
-            else if (time.TotalHours >= 1)
+            else if (hours > 0)
             {
-                return $"{(int)time.TotalHours}h {time.Minutes}m";
+                return $"{hours}h {minutes}m {seconds}s"; // Show h/m/s for multiple hours
             }
-            else if (time.TotalMinutes >= 1)
+            else if (minutes > 0)
             {
-                return $"{(int)time.TotalMinutes}m {time.Seconds}s";
+                return $"{minutes}m {seconds}s"; // Show m/s for multiple minutes
             }
             else
             {
-                return $"{time.Seconds}s";
+                return $"{seconds}s"; // Show s for seconds only
             }
         }
     }

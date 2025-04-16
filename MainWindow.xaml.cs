@@ -472,7 +472,7 @@ namespace ScreenTimeTracker
                             if (!_disposed && _usageRecords != null)
                             {
                                 // Update summary and chart
-                                UpdateSummaryTab();
+                                UpdateSummaryTab(_usageRecords.ToList()); // Pass List
                                 UpdateUsageChart(liveFocusedApp); // Pass live app in case it needs it
                             }
                         }
@@ -594,7 +594,10 @@ namespace ScreenTimeTracker
                             {
                                 System.Diagnostics.Debug.WriteLine("Manually refreshing UsageListView");
                                 UsageListView.ItemsSource = null;
-                                UsageListView.ItemsSource = _usageRecords;
+                                if (UsageListView != null) // Add explicit null check here
+                                {
+                                     UsageListView.ItemsSource = _usageRecords;
+                                }
                             }
                         });
                     }
@@ -604,7 +607,7 @@ namespace ScreenTimeTracker
                     {
                         // Update the summary and chart in real-time
                         System.Diagnostics.Debug.WriteLine("Updating summary and chart in real-time");
-                        UpdateSummaryTab();
+                        UpdateSummaryTab(_usageRecords.ToList()); // Pass List
                         UpdateUsageChart();
                     }
                 });
@@ -1009,12 +1012,15 @@ namespace ScreenTimeTracker
                 {
                     DispatcherQueue?.TryEnqueue(() => {
                         UsageListView.ItemsSource = null;
-                        UsageListView.ItemsSource = _usageRecords;
+                        if (UsageListView != null) // Add explicit null check here
+                        {
+                             UsageListView.ItemsSource = _usageRecords;
+                        }
                     });
                 }
                 
                 // Update the summary tab
-                UpdateSummaryTab();
+                UpdateSummaryTab(_usageRecords.ToList()); // Pass List
                 
                 // Update chart based on current view mode
                 UpdateChartViewMode();
@@ -1145,7 +1151,7 @@ namespace ScreenTimeTracker
                 var filteredRecords = aggregatedRecords
                     .Where(r =>
                         !IsWindowsSystemProcess(r.ProcessName) &&
-                        r.Duration.TotalMinutes >= 1)  // Filter based on TOTAL duration (e.g., >= 1 minute)
+                        r.Duration.TotalSeconds >= 300)  // Filter based on TOTAL duration (>= 5 minutes)
                     .ToList();
                 System.Diagnostics.Debug.WriteLine($"Found {filteredRecords.Count} records after primary filtering.");
 
@@ -1535,7 +1541,7 @@ namespace ScreenTimeTracker
                 {
                     // Otherwise just update the chart and summary
                     UpdateUsageChart();
-                    UpdateSummaryTab();
+                    UpdateSummaryTab(_usageRecords.ToList()); // Pass List
                 }
             }
             catch (Exception ex)
@@ -2397,13 +2403,19 @@ namespace ScreenTimeTracker
                     var sortedAggregatedList = finalAggregatedRecords.OrderByDescending(r => r.Duration).ToList();
                      System.Diagnostics.Debug.WriteLine($"Updating ListView with {sortedAggregatedList.Count} sorted aggregated records.");
 
-                    DispatcherQueue?.TryEnqueue(() => {
+                    DispatcherQueue?.TryEnqueue(() => { // <-- UI thread update
+                        System.Diagnostics.Debug.WriteLine("*** INSIDE DispatcherQueue for ListView update ***"); // Log Entry
                         if (!_disposed && UsageListView != null)
                         {
+                            System.Diagnostics.Debug.WriteLine($"--> Setting ItemsSource with {sortedAggregatedList.Count} items."); // Log Count
                             // IMPORTANT: Set ItemsSource to the AGGREGATED list, not _usageRecords
                             UsageListView.ItemsSource = null;
-                            UsageListView.ItemsSource = sortedAggregatedList; // Use the aggregated list here
-                            System.Diagnostics.Debug.WriteLine("ListView refreshed with aggregated data.");
+                            UsageListView.ItemsSource = sortedAggregatedList; // <-- Is this line executing correctly?
+                            System.Diagnostics.Debug.WriteLine("--> ListView ItemsSource SET."); // Log Exit
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("--> ListView update SKIPPED (disposed or UsageListView is null).");
                         }
                     });
                 }
@@ -2426,7 +2438,7 @@ namespace ScreenTimeTracker
                 }
 
                 // Set View Mode and Update Chart (which uses _usageRecords with granular data)
-                UpdateViewModeAndChartForDateRange(startDate, endDate);
+                UpdateViewModeAndChartForDateRange(startDate, endDate, finalAggregatedRecords);
 
 
                 System.Diagnostics.Debug.WriteLine($"LoadRecordsForDateRange: Successfully completed. Displaying {finalAggregatedRecords.Count} aggregated items in list.");
@@ -2464,7 +2476,7 @@ namespace ScreenTimeTracker
         }
 
         // Helper to set view mode and trigger chart/summary updates
-        private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate)
+        private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
         {
              var todayForCheck = DateTime.Today;
              var lastWeekStart = todayForCheck.AddDays(-6);
@@ -2480,7 +2492,7 @@ namespace ScreenTimeTracker
                          if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
                          if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
                          UpdateUsageChart(); // Uses granular _usageRecords
-                         UpdateSummaryTab(); // Uses granular _usageRecords by default
+                         UpdateSummaryTab(aggregatedRecords); // Pass aggregated records
                      }
                  });
              }
@@ -2494,7 +2506,7 @@ namespace ScreenTimeTracker
                          if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
                          if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Visible;
                          UpdateUsageChart(); // Uses granular _usageRecords
-                         UpdateSummaryTab(); // Uses granular _usageRecords by default
+                         UpdateSummaryTab(aggregatedRecords); // Pass aggregated records
                      }
                  });
              }
@@ -2604,7 +2616,7 @@ namespace ScreenTimeTracker
                     }
                     
                     // Update the summary and chart
-                    UpdateSummaryTab();
+                    UpdateSummaryTab(_usageRecords.ToList()); // Pass List
                     UpdateUsageChart();
                 }
             }
@@ -2883,7 +2895,7 @@ namespace ScreenTimeTracker
                         UpdateUsageChart();
                         
                         // Update the summary tab
-                        UpdateSummaryTab();
+                        UpdateSummaryTab(records); // Pass the received records
                     }
                 });
                 
@@ -2951,10 +2963,13 @@ namespace ScreenTimeTracker
                         UsageListView.ItemsSource = _usageRecords;
                         
                         // Update the chart
-                        UpdateUsageChart();
+                        if (_usageRecords != null) // Check _usageRecords before calling UpdateUsageChart
+                        {
+                            UpdateUsageChart();
+                        }
                         
                         // Update the summary tab
-                        UpdateSummaryTab();
+                        UpdateSummaryTab(_usageRecords.ToList()); // Pass _usageRecords
                     }
                 });
                 
@@ -3000,6 +3015,134 @@ namespace ScreenTimeTracker
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error in SetTimeFrameHeader: {ex.Message}");
+            }
+        }
+
+        private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
+        {
+            try
+            {
+                // Get total screen time
+                TimeSpan totalTime = TimeSpan.Zero;
+                
+                // Find most used app
+                AppUsageRecord? mostUsedApp = null;
+                
+                // Calculate total time and find most used app
+                foreach (var record in recordsToSummarize) // Use the parameter here
+                {
+                    // Add safety check for ridiculously long durations
+                    // Cap individual record durations at 24 hours per day for the current time period
+                    TimeSpan cappedDuration = record.Duration;
+                    int maxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
+                    TimeSpan maxReasonableDuration = TimeSpan.FromHours(24 * maxDays);
+                    
+                    if (cappedDuration > maxReasonableDuration)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"WARNING: Capping unrealistic duration for {record.ProcessName}: {cappedDuration.TotalHours:F1}h to {maxReasonableDuration.TotalHours:F1}h");
+                        cappedDuration = maxReasonableDuration;
+                    }
+                    
+                    // Use the capped duration for calculations
+                    totalTime += cappedDuration;
+                    
+                    if (mostUsedApp == null || cappedDuration > mostUsedApp.Duration)
+                    {
+                        mostUsedApp = record;
+                        // Store the capped duration to ensure most used app comparison is fair
+                        if (mostUsedApp.Duration > maxReasonableDuration)
+                        {
+                            // We can't directly modify record.Duration as it's a calculated property,
+                            // but we'll use the capped value for comparison
+                        }
+                    }
+                }
+                
+                // Ensure total time is also reasonable
+                int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
+                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
+                if (totalTime > absoluteMaxDuration)
+                {
+                    System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
+                    totalTime = absoluteMaxDuration;
+                }
+                
+                // Update total time display
+                TotalScreenTime.Text = FormatTimeSpan(totalTime);
+                
+                // Update most used app
+                if (mostUsedApp != null && mostUsedApp.Duration.TotalSeconds > 0)
+                {
+                    // Ensure most used app duration is also reasonable before display
+                    TimeSpan cappedMostUsedDuration = mostUsedApp.Duration;
+                    if (cappedMostUsedDuration > absoluteMaxDuration)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"WARNING: Capping most used app ({mostUsedApp.ProcessName}) duration from {cappedMostUsedDuration.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
+                        cappedMostUsedDuration = absoluteMaxDuration;
+                    }
+                    
+                    MostUsedApp.Text = mostUsedApp.ProcessName;
+                    MostUsedAppTime.Text = FormatTimeSpan(cappedMostUsedDuration);
+                    
+                    // Update the icon for most used app
+                    if (mostUsedApp.AppIcon != null)
+                    {
+                        MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                        MostUsedAppIcon.Visibility = Visibility.Visible;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                    }
+                    else
+                    {
+                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                        
+                        // Try to load the icon if it's not already loaded
+                        mostUsedApp.LoadAppIconIfNeeded();
+                        // Use null-forgiving operator as mostUsedApp is checked above
+                        mostUsedApp.PropertyChanged += (s, e) =>
+                        {
+                            // Safely check mostUsedApp inside the handler
+                            if (mostUsedApp != null && e.PropertyName == nameof(AppUsageRecord.AppIcon) && mostUsedApp.AppIcon != null)
+                            {
+                                DispatcherQueue.TryEnqueue(() =>
+                                {
+                                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
+                                    {
+                                        MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                                        MostUsedAppIcon.Visibility = Visibility.Visible;
+                                        MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                                    }
+                                });
+                            }
+                        };
+                    }
+                }
+                else
+                {
+                    MostUsedApp.Text = "None";
+                    MostUsedAppTime.Text = "0h 0m";
+                    MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                    MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                }
+                
+                // Calculate daily average for weekly/monthly views
+                if (_currentTimePeriod != TimePeriod.Daily && AveragePanel != null)
+                {
+                    int dayCount = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
+                    if (dayCount > 0)
+                    {
+                        TimeSpan averageTime = TimeSpan.FromTicks(totalTime.Ticks / dayCount);
+                        DailyAverage.Text = FormatTimeSpan(averageTime);
+                    }
+                    else
+                    {
+                        DailyAverage.Text = "0h 0m";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
             }
         }
     }
