@@ -2823,7 +2823,10 @@ namespace ScreenTimeTracker
                 // Add sorted records to the observable collection
                 foreach (var record in sortedRecords)
                 {
-                    _usageRecords.Add(record);
+                    if (_usageRecords != null) // Add explicit null check
+                    {
+                        _usageRecords.Add(record);
+                    }
                 }
                 
                 // Force a refresh of the ListView
