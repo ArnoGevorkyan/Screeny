@@ -53,28 +53,31 @@
                      Style="{ThemeResource CaptionTextBlockStyle}"/>
         </Grid>
 
-        <!-- Date Selection -->
-        <StackPanel Grid.Row="1" 
-                    Orientation="Horizontal" 
-                    Spacing="8"
-                    Margin="0,0,0,10">
-            <TextBlock Text="Select Date:" 
-                      VerticalAlignment="Center"/>
-            <Button x:Name="DatePickerButton"
-                   Content="Today"
-                   Click="DatePickerButton_Click"/>
-        </StackPanel>
-
-        <!-- Control Buttons -->
-        <Grid Grid.Row="2">
+        <!-- Date Selection and Control Buttons (Combined into one row) -->
+        <Grid Grid.Row="1" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/> <!-- Date Label -->
+                <ColumnDefinition Width="*"/>    <!-- Spacer -->
+                <ColumnDefinition Width="Auto"/> <!-- Buttons -->
             </Grid.ColumnDefinitions>
 
+            <!-- Date Section (Left) -->
             <StackPanel Grid.Column="0" 
                         Orientation="Horizontal" 
-                        Spacing="8">
+                        Spacing="8"
+                        VerticalAlignment="Center">
+                <TextBlock Text="Select Date:" VerticalAlignment="Center"/>
+                <Button x:Name="DatePickerButton"
+                       Content="Today"
+                       Click="DatePickerButton_Click"/>
+            </StackPanel>
+
+            <!-- Control Buttons (Right) -->
+            <StackPanel Grid.Column="2" 
+                        Orientation="Horizontal" 
+                        Spacing="8"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center">
                 <Button x:Name="StartButton" 
                         Content="Start Tracking" 
                         Click="StartButton_Click"/>
