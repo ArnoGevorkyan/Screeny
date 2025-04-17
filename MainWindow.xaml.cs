@@ -1646,8 +1646,20 @@ namespace ScreenTimeTracker
                         cappedMostUsedDuration = absoluteMaxDuration;
                     }
                     
-                    MostUsedApp.Text = mostUsedApp.ProcessName;
-                    MostUsedAppTime.Text = FormatTimeSpan(cappedMostUsedDuration);
+                    // Conditionally format text based on whether a date range is selected
+                    if (_isDateRangeSelected)
+                    {
+                        string dateString = mostUsedApp.StartTime.Date.ToString("MMM d"); // Format like "Apr 15"
+                        MostUsedApp.Text = $"{mostUsedApp.ProcessName} (on {dateString}): {FormatTimeSpan(cappedMostUsedDuration)}";
+                    }
+                    else
+                    {
+                        // Single day view - omit the date
+                        MostUsedApp.Text = $"{mostUsedApp.ProcessName}: {FormatTimeSpan(cappedMostUsedDuration)}";
+                    }
+
+                    // Hide the separate time TextBlock as it's now included above or handled by the main text
+                    MostUsedAppTime.Visibility = Visibility.Collapsed; 
                     
                     // Update the icon for most used app
                     if (mostUsedApp.AppIcon != null)
@@ -1685,7 +1697,8 @@ namespace ScreenTimeTracker
                 else
                 {
                     MostUsedApp.Text = "None";
-                    MostUsedAppTime.Text = "0h 0m";
+                    // MostUsedAppTime.Text = "0h 0m"; // No longer needed
+                    MostUsedAppTime.Visibility = Visibility.Collapsed; // Hide time text block
                     MostUsedAppIcon.Visibility = Visibility.Collapsed;
                     MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
                 }
@@ -3107,8 +3120,20 @@ namespace ScreenTimeTracker
                         cappedMostUsedDuration = absoluteMaxDuration;
                     }
                     
-                    MostUsedApp.Text = mostUsedApp.ProcessName;
-                    MostUsedAppTime.Text = FormatTimeSpan(cappedMostUsedDuration);
+                    // Conditionally format text based on whether a date range is selected
+                    if (_isDateRangeSelected)
+                    {
+                        string dateString = mostUsedApp.StartTime.Date.ToString("MMM d"); // Format like "Apr 15"
+                        MostUsedApp.Text = $"{mostUsedApp.ProcessName} (on {dateString}): {FormatTimeSpan(cappedMostUsedDuration)}";
+                    }
+                    else
+                    {
+                        // Single day view - omit the date
+                        MostUsedApp.Text = $"{mostUsedApp.ProcessName}: {FormatTimeSpan(cappedMostUsedDuration)}";
+                    }
+
+                    // Hide the separate time TextBlock as it's now included above or handled by the main text
+                    MostUsedAppTime.Visibility = Visibility.Collapsed; 
                     
                     // Update the icon for most used app
                     if (mostUsedApp.AppIcon != null)
@@ -3146,7 +3171,8 @@ namespace ScreenTimeTracker
                 else
                 {
                     MostUsedApp.Text = "None";
-                    MostUsedAppTime.Text = "0h 0m";
+                    // MostUsedAppTime.Text = "0h 0m"; // No longer needed
+                    MostUsedAppTime.Visibility = Visibility.Collapsed; // Hide time text block
                     MostUsedAppIcon.Visibility = Visibility.Collapsed;
                     MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
                 }
