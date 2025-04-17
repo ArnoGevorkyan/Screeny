@@ -1,56 +1,58 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  IgnorableNamespaces="uap desktop rescap">
 
-  <Identity
-    Name="ArnoGevorkyan.ScreenyScreenTime"
-    Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
-    Version="1.0.0.0" />
+	<Identity
+	  Name="ArnoGevorkyan.ScreenyScreenTime"
+	  Publisher="CN=ArnoTESTER"
+	  Version="1.0.2.0" />
 
-  <Properties>
-    <DisplayName>Screeny</DisplayName>
-    <PublisherDisplayName>Arno Gevorkyan</PublisherDisplayName>
-    <Logo>Assets\StoreLogo.png</Logo>
-  </Properties>
+	<Properties>
+		<DisplayName>Screeny</DisplayName>
+		<PublisherDisplayName>Arno Gevorkyan</PublisherDisplayName>
+		<Logo>Assets\StoreLogo.png</Logo>
+	</Properties>
 
-  <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
-    <PackageDependency Name="Microsoft.WindowsAppRuntime.1.5" MinVersion="5001.138.2003.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
-  </Dependencies>
+	<Dependencies>
+		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+		<PackageDependency Name="Microsoft.WindowsAppRuntime.1.5" MinVersion="5001.138.2003.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+	</Dependencies>
 
-  <Resources>
-    <Resource Language="x-generate"/>
-  </Resources>
+	<Resources>
+		<Resource Language="x-generate"/>
+	</Resources>
 
-  <Applications>
-    <Application Id="App"
-      Executable="$targetnametoken$.exe"
-      EntryPoint="$targetentrypoint$">
-      <uap:VisualElements
-        DisplayName="Screeny"
-        Description="Tracks screen time per application."
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
-        <uap:SplashScreen Image="Assets\SplashScreen.png" />
-      </uap:VisualElements>
+	<Applications>
+		<Application Id="App"
+		  Executable="Screeny.exe"
+		  EntryPoint="Windows.FullTrustApplication">
+			<uap:VisualElements
+			  DisplayName="Screeny"
+			  Description="Tracks screen time per application."
+			  BackgroundColor="transparent"
+			  Square150x150Logo="Assets\Square150x150Logo.png"
+			  Square44x44Logo="Assets\Square44x44Logo.png">
+				<uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+				<uap:SplashScreen Image="Assets\SplashScreen.png" />
+			</uap:VisualElements>
 
-      <Extensions>
-         <uap:Extension Category="windows.startupTask" EntryPoint="$targetentrypoint$">
-            <uap:StartupTask TaskId="ScreenyStartupTask" Enabled="true" DisplayName="Screeny Screen Time Tracker" />
-         </uap:Extension>
-      </Extensions>
+			<Extensions>
+				<desktop:Extension Category="windows.fullTrustProcess" Executable="Screeny.exe" EntryPoint="Windows.FullTrustApplication" />
+				<desktop:Extension Category="windows.startupTask" Executable="Screeny.exe" EntryPoint="Windows.FullTrustApplication">
+					<desktop:StartupTask TaskId="ScreenyStartupTask" Enabled="true" DisplayName="Screeny Screen Time Tracker" />
+				</desktop:Extension>
+			</Extensions>
 
-    </Application>
-  </Applications>
+		</Application>
+	</Applications>
 
-  <Capabilities>
-    <Capability Name="internetClient" />
-    <rescap:Capability Name="runFullTrust" />
-    <rescap:Capability Name="unvirtualizedResources" />
-  </Capabilities>
-</Package> 
+	<Capabilities>
+		<Capability Name="internetClient" />
+		<rescap:Capability Name="runFullTrust" />
+		<rescap:Capability Name="unvirtualizedResources" />
+	</Capabilities>
+</Package>
