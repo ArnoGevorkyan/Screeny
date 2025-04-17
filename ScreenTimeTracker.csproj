@@ -11,6 +11,8 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>MSIX</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>false</WindowsAppSdkUndockedRegFreeWinRTInitialize>
     <ApplicationIcon>Assets\screeny icon.ico</ApplicationIcon>
     <AssemblyName>Screeny</AssemblyName>
   </PropertyGroup>
@@ -18,11 +20,12 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.WinUI.UI.Controls.DataGrid" Version="7.1.2" />
     <PackageReference Include="LiveChartsCore.SkiaSharpView.WinUI" Version="2.0.0-rc5.3" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="7.0.10" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240311000" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.2428" />
-    <PackageReference Include="ScottPlot.WinUI" Version="5.0.23" />
-    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.4" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250401001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <PackageReference Include="ScottPlot.WinUI" Version="5.0.55" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.4" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" ExcludeAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
