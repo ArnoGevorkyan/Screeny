@@ -137,22 +137,23 @@ namespace ScreenTimeTracker
             if (_hWnd == IntPtr.Zero)
             {
                  Debug.WriteLine("CRITICAL ERROR: Could not get window handle in constructor.");
-                 // Cannot proceed with power notifications without HWND
+                 // Cannot proceed with power notifications or subclassing without HWND
             }
-            else
-            {
-                // Subclass the window procedure
-                SubclassWindow();
-                // Initialize TrayIconHelper AFTER getting handle
-                _trayIconHelper = new TrayIconHelper(_hWnd);
-                 Debug.WriteLine("TrayIconHelper initialized.");
-                 // Subscribe to TrayIconHelper events
-                 if (_trayIconHelper != null)
-                 {
-                     _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
-                     _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
-                 }
-            }
+            // MOVED SubclassWindow() and TrayIconHelper initialization to MainWindow_Loaded
+            // else
+            // {
+            //     // Subclass the window procedure
+            //     SubclassWindow();
+            //     // Initialize TrayIconHelper AFTER getting handle
+            //     _trayIconHelper = new TrayIconHelper(_hWnd);
+            //      Debug.WriteLine("TrayIconHelper initialized.");
+            //      // Subscribe to TrayIconHelper events
+            //      if (_trayIconHelper != null)
+            //      {
+            //          _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
+            //          _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
+            //      }
+            // }
 
             // Initialize the WindowControlHelper
             _windowHelper = new WindowControlHelper(this);
@@ -1737,6 +1738,25 @@ namespace ScreenTimeTracker
             try
             {
                 ThrowIfDisposed(); // Check if already disposed early
+
+                // --- Moved from constructor: Setup subclassing and tray icon --- 
+                if (_hWnd != IntPtr.Zero)
+                {
+                    SubclassWindow(); // Subclass here
+                    _trayIconHelper = new TrayIconHelper(_hWnd); // Initialize here
+                    Debug.WriteLine("TrayIconHelper initialized in Loaded.");
+                    // Subscribe to TrayIconHelper events
+                    if (_trayIconHelper != null)
+                    {
+                        _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
+                        _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("WARNING: Skipping SubclassWindow/TrayIcon init in Loaded due to missing HWND.");
+                }
+                // --- End moved section ---
 
                 // Set up window title and icon using the helper
                 _windowHelper.SetUpWindow(); 
