@@ -8,11 +8,11 @@
 
 	<Identity
 	  Name="ArnoGevorkyan.ScreenyScreenTime"
-	  Publisher="CN=ArnoTESTER"
-	  Version="1.0.2.0" />
+	  Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
+	  Version="1.0.20.0" />
 
 	<Properties>
-		<DisplayName>Screeny</DisplayName>
+		<DisplayName>Screeny – Screen Time</DisplayName>
 		<PublisherDisplayName>Arno Gevorkyan</PublisherDisplayName>
 		<Logo>Assets\StoreLogo.png</Logo>
 	</Properties>
@@ -31,7 +31,7 @@
 		  Executable="Screeny.exe"
 		  EntryPoint="Windows.FullTrustApplication">
 			<uap:VisualElements
-			  DisplayName="Screeny"
+			  DisplayName="Screeny – Screen Time"
 			  Description="Tracks screen time per application."
 			  BackgroundColor="transparent"
 			  Square150x150Logo="Assets\Square150x150Logo.png"
