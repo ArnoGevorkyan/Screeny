@@ -9,7 +9,7 @@
 	<Identity
 	  Name="ArnoGevorkyan.ScreenyScreenTime"
 	  Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
-	  Version="1.0.20.0" />
+	  Version="1.3.0.0" />
 
 	<Properties>
 		<DisplayName>Screeny – Screen Time</DisplayName>
@@ -19,7 +19,7 @@
 
 	<Dependencies>
 		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
-		<PackageDependency Name="Microsoft.WindowsAppRuntime.1.5" MinVersion="5001.138.2003.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+		<!-- Windows App SDK runtime is shipped self‑contained inside the package, so no external framework dependency is declared. -->
 	</Dependencies>
 
 	<Resources>
@@ -53,6 +53,6 @@
 	<Capabilities>
 		<Capability Name="internetClient" />
 		<rescap:Capability Name="runFullTrust" />
-		<rescap:Capability Name="unvirtualizedResources" />
+		<!-- Removed `unvirtualizedResources`; not required and triggers restricted capability review. -->
 	</Capabilities>
 </Package>

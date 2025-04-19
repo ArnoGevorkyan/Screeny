@@ -198,38 +198,83 @@ public partial class App : Application
         }
     }
 
-    private void ShowErrorAndExit(string message, Exception ex)
+    private static void ShowErrorAndExit(string message, Exception ex, bool exit = true)
     {
-        string errorMessage = $"{message}\n\nError: {ex.Message}";
-        
-        // Try to use native MessageBox as a fallback
-        MessageBox(IntPtr.Zero, errorMessage, "Application Error", MB_ICONERROR | MB_OK);
-        
-        // Log and exit
-        WriteToLog("Showing error message box and exiting application");
-        Exit();
+        string detailedMessage = $"{message}\n\nError: {ex.Message}\n\nSee Screeny_ErrorLog.txt for details.";
+        WriteToLog($"ShowErrorAndExit: {detailedMessage}"); // Log the error message shown to user
+        LogExceptionToFile(ex); // Ensure the exception is logged
+        MessageBox(IntPtr.Zero, detailedMessage, "Critical Application Error", MB_OK | MB_ICONERROR);
+        if (exit)
+        {
+            Environment.Exit(1); // Завершаем приложение
+        }
     }
 
     private void App_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
-        e.Handled = true;
-        
-        // Log the exception
-        WriteToLog($"UNHANDLED EXCEPTION: {e.Exception.GetType().Name}");
-        WriteToLog($"Message: {e.Exception.Message}");
-        WriteToLog($"Stack trace: {e.Exception.StackTrace}");
-        
-        if (e.Exception.InnerException != null)
-        {
-            WriteToLog($"Inner exception: {e.Exception.InnerException.Message}");
-            WriteToLog($"Inner stack trace: {e.Exception.InnerException.StackTrace}");
-        }
-        
-        // Show error message
-        ShowErrorAndExit("An unhandled exception occurred.", e.Exception);
+        WriteToLog($"CRITICAL UNHANDLED EXCEPTION: {e.Exception}");
+        // Логируем ошибку перед падением
+        LogExceptionToFile(e.Exception); // Используем отдельный метод для записи в файл
+        e.Handled = true; // Помечаем как обработанное, чтобы приложение НЕ падало сразу (для теста)
+
+        // Показываем сообщение пользователю (можно улучшить диалог)
+        ShowErrorDialog("An critical error occurred. Please check the log file.");
     }
 
-    private void WriteToLog(string message)
+    // Дополнительный обработчик на случай ошибок в XAML потоках (если понадобится)
+    // private void Current_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+    // {
+    //    WriteToLog($"CRITICAL XAML UNHANDLED EXCEPTION: {e.Exception}");
+    //    LogExceptionToFile(e.Exception);
+    //    e.Handled = true;
+    //    ShowErrorDialog("An critical UI error occurred. Please check the log file.");
+    // }
+
+    // Метод для записи ошибки в файл
+    private static void LogExceptionToFile(Exception ex)
+    {
+        try
+        {
+            string logPath = System.IO.Path.Combine(
+                System.AppContext.BaseDirectory, // Папка рядом с Screeny.exe
+                "Screeny_ErrorLog.txt");
+
+            string errorMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ERROR: {ex.GetType().Name}\n" +
+                                  $"Message: {ex.Message}\n" +
+                                  $"Stack Trace:\n{ex.StackTrace}\n\n";
+
+            // Добавляем информацию о внутреннем исключении, если оно есть
+            Exception? currentEx = ex.InnerException;
+            int level = 1;
+            while (currentEx != null)
+            {
+                errorMessage += $"--- Inner Exception (Level {level}) ---\n" +
+                                $"Type: {currentEx.GetType().Name}\n" +
+                                $"Message: {currentEx.Message}\n" +
+                                $"Stack Trace:\n{currentEx.StackTrace}\n\n";
+                currentEx = currentEx.InnerException;
+                level++;
+            }
+
+            System.IO.File.AppendAllText(logPath, errorMessage);
+        }
+        catch (Exception logEx)
+        {
+            // Ошибка при записи лога - выводим в Debug
+            System.Diagnostics.Debug.WriteLine($"Failed to log exception to file: {logEx}");
+            System.Diagnostics.Debug.WriteLine($"Original exception: {ex}");
+            // Попробуем показать сообщение об ошибке хотя бы в MessageBox
+            ShowErrorAndExit("Failed to write error log.", logEx, false);
+        }
+    }
+
+    // Упрощенный метод для показа ошибки пользователю
+    private static void ShowErrorDialog(string message)
+    {
+       MessageBox(IntPtr.Zero, message, "Application Error", MB_OK | MB_ICONERROR);
+    }
+
+    private static void WriteToLog(string message)
     {
         try
         {
