@@ -364,6 +364,8 @@
     <MainPackageIdentityName>ArnoGevorkyan.ScreenyScreenTime</MainPackageIdentityName>
     <ReservedNames>
       <ReservedName>Screeny – Screen Time</ReservedName>
+      <ReservedName>Screeny – Track Your Screen Time</ReservedName>
+      <ReservedName>Screeny – Screen Time Tracker</ReservedName>
     </ReservedNames>
   </ProductReservedInfo>
   <AccountPackageIdentityNames />
