@@ -273,7 +273,7 @@ namespace ScreenTimeTracker.Helpers
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
-                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
+                        MinStep = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
                         Labeler = FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
@@ -433,6 +433,12 @@ namespace ScreenTimeTracker.Helpers
                 else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
                 else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
                 
+                // Для недельного режима: округляем максимум до ближайшего чётного часа
+                if (timePeriod == TimePeriod.Weekly)
+                {
+                    yAxisMax = Math.Ceiling(yAxisMax / 2) * 2;
+                }
+
                 System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
                 // Create the column series with system accent color
@@ -472,7 +478,7 @@ namespace ScreenTimeTracker.Helpers
                         MinLimit = 0,
                         MaxLimit = yAxisMax,
                         ForceStepToMin = true,
-                        MinStep = yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5),  // Use 2h steps for larger values
+                        MinStep = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
                         Labeler = FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
