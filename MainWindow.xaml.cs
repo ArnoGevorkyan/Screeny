@@ -1594,8 +1594,8 @@ namespace ScreenTimeTracker
         {
             try
             {
-                // Calculate total screen time by merging overlapping raw usage intervals
-                TimeSpan totalTime = CalculateTotalActiveTime(recordsToSummarize);
+                // Calculate total screen time by summing individual record durations
+                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, rec) => sum + rec.Duration);
                 // Cap to reasonable maximum
                 int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
                 TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
