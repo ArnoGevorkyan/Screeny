@@ -1619,6 +1619,33 @@ namespace ScreenTimeTracker
                 }
                 // Update most used app (rest of existing code remains)
                  
+                // ... existing code ...
+                // Update most used app (rest of existing code remains)
+                if (mostUsedApp != null)
+                {
+                    MostUsedApp.Text = mostUsedApp.ProcessName;
+                    MostUsedAppTime.Text = FormatTimeSpan(mostUsedApp.Duration);
+                    mostUsedApp.LoadAppIconIfNeeded();
+                    if (mostUsedApp.AppIcon != null)
+                    {
+                        MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                        MostUsedAppIcon.Visibility = Visibility.Visible;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                    }
+                    else
+                    {
+                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                    }
+                }
+                else
+                {
+                    MostUsedApp.Text = "None";
+                    MostUsedAppTime.Text = FormatTimeSpan(TimeSpan.Zero);
+                    MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                    MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                }
+                // ... existing code ...
              }
              catch (Exception ex)
              {

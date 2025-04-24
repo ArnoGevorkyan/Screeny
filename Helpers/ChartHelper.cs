@@ -1,6 +1,7 @@
 using LiveChartsCore;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
+using LiveChartsCore.Defaults;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using ScreenTimeTracker.Models;
@@ -96,17 +97,32 @@ namespace ScreenTimeTracker.Helpers
                     hourlyUsage[i] = 0;
                 }
 
-                // Process all usage records to distribute time by hour
-                System.Diagnostics.Debug.WriteLine($"Processing {usageRecords.Count} records for hourly chart");
+                // Process all usage records and distribute time by hourly slots
+                System.Diagnostics.Debug.WriteLine($"Processing {usageRecords.Count} records for hourly chart with precise slicing");
                 foreach (var record in usageRecords)
                 {
-                    // Get the hour from the start time
-                    int startHour = record.StartTime.Hour;
-                    
-                    // Add the duration to the appropriate hour (convert to hours)
-                    hourlyUsage[startHour] += record.Duration.TotalHours;
-                    
-                    System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, Hour: {startHour}, Duration: {record.Duration.TotalHours:F4} hours");
+                    var start = record.StartTime;
+                    var end = start + record.Duration;
+                    // Distribute duration across each hour bucket intersecting the record
+                    for (int hr = start.Hour; hr <= end.Hour; hr++)
+                    {
+                        var slotStart = start.Date.AddHours(hr);
+                        var slotEnd = slotStart.AddHours(1);
+                        var overlapStart = start > slotStart ? start : slotStart;
+                        var overlapEnd = end < slotEnd ? end : slotEnd;
+                        var overlap = (overlapEnd - overlapStart).TotalHours;
+                        if (overlap > 0)
+                        {
+                            hourlyUsage[hr] += overlap;
+                            System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, SlotHour: {hr}, Overlap: {overlap:F4} hours");
+                        }
+                    }
+                }
+
+                // After slicing distributions, ensure values do not exceed 1h per slot
+                foreach (var hrKey in hourlyUsage.Keys.ToList())
+                {
+                    hourlyUsage[hrKey] = Math.Min(hourlyUsage[hrKey], 1.0);
                 }
 
                 // Check if all values are zero
@@ -177,6 +193,9 @@ namespace ScreenTimeTracker.Helpers
                 }
                 
                 System.Diagnostics.Debug.WriteLine($"Filtered to hours {filteredStartHour}-{filteredEndHour} based on usage");
+                // Do not include future hours beyond now
+                int nowHour = DateTime.Now.Hour;
+                if (filteredEndHour > nowHour) filteredEndHour = nowHour;
 
                 // Set up series and labels for the chart
                 var values = new List<double>();
@@ -234,55 +253,52 @@ namespace ScreenTimeTracker.Helpers
                 
                 System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
-                // Create the line series with system accent color
-                var lineSeries = new LineSeries<double>
+                // Create column series for hourly usage (values already clamped to max 1h)
+                var columnSeries = new ColumnSeries<double>
                 {
-                    Values = values,
-                    Fill = null,
-                    GeometrySize = 4, // Add small data points for better visibility
-                    Stroke = new SolidColorPaint(seriesColor, 2.5f), // Use system accent color with slightly thicker line
-                    GeometryStroke = new SolidColorPaint(seriesColor, 2), // Match stroke color
-                    GeometryFill = new SolidColorPaint(SKColors.White), // White fill for points
-                    Name = "Usage"
+                    Values       = values,
+                    Fill         = new SolidColorPaint(seriesColor),
+                    Stroke       = null,
+                    Padding      = 0,
+                    Name         = "Usage"
                 };
+                chart.Series = new ISeries[] { columnSeries };
 
-                // Set up the axes with improved contrast
+                // Category X-axis using hour labels
                 chart.XAxes = new Axis[]
                 {
                     new Axis
                     {
                         Labels = labels,
-                        LabelsRotation = useShortLabels ? 0 : 45, // Rotate labels when space is limited
+                        LabelsRotation = useShortLabels ? 0 : 45,
                         ForceStepToMin = true,
-                        MinStep = 1,
-                        TextSize = 11, // Slightly larger text
-                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
+                        MinStep        = 1,
+                        TextSize       = 11,
+                        LabelsPaint    = new SolidColorPaint(axisColor),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100))
                     }
                 };
 
+                // Set up Y-axis fixed from 0 to 1 hour
                 chart.YAxes = new Axis[]
                 {
                     new Axis
                     {
-                        Name = "Hours",
-                        NamePaint = new SolidColorPaint(axisColor),
-                        NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(axisColor),
-                        TextSize = 11, // Slightly larger text
-                        MinLimit = 0,
-                        MaxLimit = yAxisMax,
-                        ForceStepToMin = true,
-                        MinStep = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
-                        Labeler = FormatHoursForYAxis,
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
+                        Name            = "Hours",
+                        NamePaint       = new SolidColorPaint(axisColor),
+                        NameTextSize    = 12,
+                        LabelsPaint     = new SolidColorPaint(axisColor),
+                        TextSize        = 11,
+                        MinLimit        = 0,
+                        MaxLimit        = 1,
+                        ForceStepToMin  = true,
+                        MinStep         = 0.25,
+                        Labeler         = FormatHoursForYAxis,
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100))
                     }
                 };
 
-                // Update the chart with new series
-                chart.Series = new ISeries[] { lineSeries };
-                
-                System.Diagnostics.Debug.WriteLine("Hourly chart updated with values");
+                System.Diagnostics.Debug.WriteLine("Hourly chart updated with rectangle annotations");
             }
             else // Daily view
             {
