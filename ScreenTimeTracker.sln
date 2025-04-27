@@ -5,6 +5,8 @@ VisualStudioVersion = 17.12.35728.132
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScreenTimeTracker", "ScreenTimeTracker.csproj", "{0C174C90-ACAE-4CAA-BABB-4EF49B6C1F91}"
 EndProject
+Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "ScreenTimeTracker.PackageNew", "..\ScreenTimeTracker.PackageNew\ScreenTimeTracker.PackageNew.wapproj", "{47158236-DCD8-43E9-857F-59161293DACD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -49,6 +51,36 @@ Global
 		{0C174C90-ACAE-4CAA-BABB-4EF49B6C1F91}.Release|x86.ActiveCfg = Release|x64
 		{0C174C90-ACAE-4CAA-BABB-4EF49B6C1F91}.Release|x86.Build.0 = Release|x64
 		{0C174C90-ACAE-4CAA-BABB-4EF49B6C1F91}.Release|x86.Deploy.0 = Release|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM.ActiveCfg = Debug|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM.Build.0 = Debug|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM.Deploy.0 = Debug|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM64.Build.0 = Debug|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x64.ActiveCfg = Debug|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x64.Build.0 = Debug|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x64.Deploy.0 = Debug|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x86.ActiveCfg = Debug|x86
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x86.Build.0 = Debug|x86
+		{47158236-DCD8-43E9-857F-59161293DACD}.Debug|x86.Deploy.0 = Debug|x86
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|Any CPU.Deploy.0 = Release|Any CPU
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM.ActiveCfg = Release|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM.Build.0 = Release|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM.Deploy.0 = Release|ARM
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM64.ActiveCfg = Release|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM64.Build.0 = Release|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|ARM64.Deploy.0 = Release|ARM64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x64.ActiveCfg = Release|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x64.Build.0 = Release|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x64.Deploy.0 = Release|x64
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x86.ActiveCfg = Release|x86
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x86.Build.0 = Release|x86
+		{47158236-DCD8-43E9-857F-59161293DACD}.Release|x86.Deploy.0 = Release|x86
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
