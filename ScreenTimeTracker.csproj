@@ -29,8 +29,10 @@
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
     <AppxBundlePlatforms>x64</AppxBundlePlatforms>
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
-    <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
+    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
     <GenerateTemporaryStoreCertificate>True</GenerateTemporaryStoreCertificate>
+    <AppxPackageDir>bin\AppPackages\</AppxPackageDir>
+    <PackageCertificateThumbprint>5FDF281B3C45773D5346E7BF85EDC1F51FFB83D0</PackageCertificateThumbprint>
   </PropertyGroup>
 
   <ItemGroup>
