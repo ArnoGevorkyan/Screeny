@@ -19,6 +19,8 @@ using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using ScreenTimeTracker.Services; // Assuming WindowTrackingService is here
+using System.Threading.Tasks;
+using System.Threading;
 
 namespace ScreenTimeTracker;
 
@@ -96,6 +98,10 @@ public partial class App : Application
         try
         {
             WriteToLog("OnLaunched method called - attempting to create the main window");
+            
+            // Add handler for unobserved task exceptions
+            TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+            WriteToLog("UnobservedTaskException handler registered");
             
             // Log runtime information
             WriteToLog($"Running on .NET version: {Environment.Version}");
@@ -302,6 +308,25 @@ public partial class App : Application
         {
             // If logging itself fails, we can only write to debug output
             Debug.WriteLine($"LOGGING ERROR: {ex.Message}");
+        }
+    }
+
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        WriteToLog($"CRITICAL UNOBSERVED TASK EXCEPTION: {e.Exception}");
+        LogExceptionToFile(e.Exception);
+        
+        // Mark as observed to prevent app crash
+        e.SetObserved();
+        
+        // Log each inner exception
+        if (e.Exception.InnerExceptions != null)
+        {
+            foreach (var innerEx in e.Exception.InnerExceptions)
+            {
+                WriteToLog($"Inner exception: {innerEx.Message}");
+                WriteToLog($"Stack trace: {innerEx.StackTrace}");
+            }
         }
     }
 }

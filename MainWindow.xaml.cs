@@ -520,6 +520,13 @@ namespace ScreenTimeTracker
 
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
+            // Check if window is disposed
+            if (_disposed)
+            {
+                System.Diagnostics.Debug.WriteLine("TrackingService_UsageRecordUpdated: Window is disposed, ignoring event");
+                return;
+            }
+            
             try
             {
                 // Process the application record to improve its naming
@@ -540,6 +547,13 @@ namespace ScreenTimeTracker
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
+                    // Double-check disposed state on UI thread
+                    if (_disposed)
+                    {
+                        System.Diagnostics.Debug.WriteLine("UI Update cancelled - window disposed");
+                        return;
+                    }
+                    
                     System.Diagnostics.Debug.WriteLine($"UI Update: Processing record for: {record.ProcessName} ({record.WindowTitle})");
 
                     // Track if we made any changes that require UI updates
@@ -1845,9 +1859,23 @@ namespace ScreenTimeTracker
         // New method to handle initialization after window is loaded
         private void TrackingService_WindowChanged(object? sender, EventArgs e)
         {
+            // Check if window is disposed
+            if (_disposed)
+            {
+                System.Diagnostics.Debug.WriteLine("TrackingService_WindowChanged: Window is disposed, ignoring event");
+                return;
+            }
+            
             // This handles window change events from the tracking service
             DispatcherQueue.TryEnqueue(() =>
             {
+                // Double-check disposed state on UI thread
+                if (_disposed)
+                {
+                    System.Diagnostics.Debug.WriteLine("Window change UI update cancelled - window disposed");
+                    return;
+                }
+                
                 try
                 {
                     // Update the UI based on current tracking data

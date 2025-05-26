@@ -3,3 +3,22 @@ description:
 globs:
 alwaysApply: false
 ---
+# Tracking and Data Persistence
+
+## Window Tracking
+*   Active window tracking is implemented in [Services/WindowTrackingService.cs](mdc:Services/WindowTrackingService.cs).
+*   It uses a `System.Timers.Timer` to periodically check the foreground window.
+*   P/Invoke calls (`GetForegroundWindow`, `GetWindowText`, `GetWindowThreadProcessId`) are used to get window details.
+*   It manages a list of [Models/AppUsageRecord.cs](mdc:Models/AppUsageRecord.cs) for the current session.
+*   Tracking can be paused/resumed, notably during system suspend events detected via P/Invoke in [MainWindow.xaml.cs](mdc:MainWindow.xaml.cs).
+
+## Data Persistence
+*   Data is stored in an SQLite database located at `%LOCALAPPDATA%\ScreenTimeTracker\screentime.db`.
+*   All database interactions are handled by [Services/DatabaseService.cs](mdc:Services/DatabaseService.cs).
+*   The service includes:
+    *   Schema creation and migrations (see `InitializeDatabase`, `CheckAndPerformMigrations`).
+    *   CRUD operations for [Models/AppUsageRecord.cs](mdc:Models/AppUsageRecord.cs) (`SaveRecord`, `UpdateRecord`, `GetRecordsForDate`, etc.).
+    *   Data aggregation methods (`GetAggregatedRecordsForDate`, `GetUsageReportForDateRange`).
+    *   Database integrity checks (`CheckDatabaseIntegrity`) and fallback to in-memory DB on corruption.
+    *   Database maintenance (`PerformDatabaseMaintenance` performing `VACUUM`, `optimize`).
+*   Data is typically saved periodically via an auto-save timer in [MainWindow.xaml.cs](mdc:MainWindow.xaml.cs) or immediately before suspend events.

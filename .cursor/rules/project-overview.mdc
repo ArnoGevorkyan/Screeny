@@ -3,3 +3,26 @@ description:
 globs:
 alwaysApply: false
 ---
+# Project Overview: ScreenTimeTracker (Screeny)
+
+This is a WinUI 3 desktop application built with C# and .NET 8 for tracking application screen time on Windows.
+
+## Key Technologies
+*   **UI:** WinUI 3 ([Microsoft.WindowsAppSDK](mdc:ScreenTimeTracker.csproj))
+*   **Language:** C#
+*   **Framework:** .NET 8 ([ScreenTimeTracker.csproj](mdc:ScreenTimeTracker.csproj))
+*   **Database:** SQLite ([Microsoft.Data.Sqlite](mdc:ScreenTimeTracker.csproj)) managed by [Services/DatabaseService.cs](mdc:Services/DatabaseService.cs)
+*   **Charting:** LiveCharts ([LiveChartsCore.SkiaSharpView.WinUI](mdc:ScreenTimeTracker.csproj))
+*   **Packaging:** MSIX ([Package.appxmanifest](mdc:Package.appxmanifest))
+
+## Core Components
+*   **Entry Point:** [App.xaml.cs](mdc:App.xaml.cs) initializes the application, services, and logging.
+*   **Main Window:** [MainWindow.xaml](mdc:MainWindow.xaml) (UI) and [MainWindow.xaml.cs](mdc:MainWindow.xaml.cs) (logic) display data and manage user interaction. It's a very large class handling UI, service coordination, and OS interactions.
+*   **Tracking Service:** [Services/WindowTrackingService.cs](mdc:Services/WindowTrackingService.cs) uses P/Invoke to monitor the active window.
+*   **Database Service:** [Services/DatabaseService.cs](mdc:Services/DatabaseService.cs) handles all SQLite operations (CRUD, aggregation, maintenance). Stores data in `%LOCALAPPDATA%\ScreenTimeTracker\screentime.db`.
+*   **Data Model:** [Models/AppUsageRecord.cs](mdc:Models/AppUsageRecord.cs) holds the usage data. Note: This class is very large.
+*   **Helpers:** The [Helpers/](mdc:Helpers/) directory contains utilities for the tray icon, charts, date picking, etc.
+
+## Build & Packaging
+*   The project targets x64 and uses a self-contained Windows App SDK deployment.
+*   It's packaged as an MSIX defined in [Package.appxmanifest](mdc:Package.appxmanifest), which also includes configuration for auto-startup.

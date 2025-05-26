@@ -9,7 +9,7 @@
 	<Identity
 	  Name="ArnoGevorkyan.ScreenyScreenTime"
 	  Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
-	  Version="1.4.5.0" />
+	  Version="1.4.6.0" />
 
 	<Properties>
 		<DisplayName>Screeny – Screen Time</DisplayName>
@@ -18,7 +18,7 @@
 	</Properties>
 
 	<Dependencies>
-		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.22631.0" />
 		<!-- Windows App SDK runtime is shipped self‑contained inside the package, so no external framework dependency is declared. -->
 	</Dependencies>
 
