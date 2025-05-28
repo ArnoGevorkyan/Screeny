@@ -19,12 +19,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 ## Installation
 
 ### Microsoft Store
-*(Coming soon)*
-
-### Manual Installation
-1. Download the latest release from the [Releases](https://github.com/YOUR_USERNAME/screeny/releases) page
-2. Extract the zip file
-3. Run the included executable
+*(https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)*
 
 ## Usage
 
@@ -43,7 +38,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 
 ### Build Steps
 ```
-git clone https://github.com/YOUR_USERNAME/screeny.git
+git clone https://github.com/ArnoGevorkyan/screeny.git
 cd screeny
 dotnet build
 ```
