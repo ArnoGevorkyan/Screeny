@@ -2,7 +2,7 @@
 
 A privacy-focused screen time tracker for Windows, built with WinUI 3 and the Windows App SDK.
 
-![Screeny Screenshot](Assets/app-icon.ico)
+![Screeny Screenshot](Assets/microsoft.png)
 
 ## About
 
