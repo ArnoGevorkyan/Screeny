@@ -32,14 +32,14 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 ## Building from Source
 
 ### Prerequisites
-- Windows 10 (1809) or newer
+- Windows 11
 - [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0) or newer
 - [Windows App SDK](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/set-up-your-development-environment)
 
 ### Build Steps
 ```
-git clone https://github.com/ArnoGevorkyan/screeny.git
-cd screeny
+git clone https://github.com/ArnoGevorkyan/Screeny.git
+cd Screeny
 dotnet build
 ```
 
