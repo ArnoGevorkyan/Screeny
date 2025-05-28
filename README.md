@@ -18,7 +18,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 
 ## Installation
 
-### [Microsoft Store Product Page](https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)
+### 🪟 [Microsoft Store Product Page](https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)
 
 ## Usage
 
