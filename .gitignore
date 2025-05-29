@@ -56,3 +56,52 @@ artifacts/
 *.pidb
 *.svclog
 *.scc
+
+# WinUI 3 / UWP / MSIX specific
+AppPackages/
+Package.StoreAssociation.xml
+*_TemporaryKey.pfx
+*.appx
+*.appxbundle
+*.appxupload
+*.msix
+*.msixbundle
+*.msixupload
+BundleArtifacts/
+
+# Certificates (keep template/dev certs out of source control)
+*.pfx
+*.p12
+*.cer
+
+# Application logs and data
+log.txt
+logs/
+*.sqlite
+*.sqlite3
+*.db
+
+# IDE specific files
+.cursor/
+.windsurfrules
+*.DotSettings
+*.DotSettings.user
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Rider
+.idea/
+
+# JetBrains
+*.sln.iml
+
+# Temporary files
+*.swp
+*.swo
+*~
