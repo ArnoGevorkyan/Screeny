@@ -2,7 +2,7 @@
 
 A privacy-focused screen time tracker for Windows, built with WinUI 3 and the Windows App SDK.
 
-![Screeny Screenshot](Assets/app-icon.ico)
+![Screeny Screenshot](Assets/microsoft.png)
 
 ## About
 
@@ -18,8 +18,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 
 ## Installation
 
-### Microsoft Store
-*(https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)*
+### 🪟 [Microsoft Store Product Page](https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)
 
 ## Usage
 
@@ -32,14 +31,14 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 ## Building from Source
 
 ### Prerequisites
-- Windows 10 (1809) or newer
+- Windows 11
 - [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0) or newer
 - [Windows App SDK](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/set-up-your-development-environment)
 
 ### Build Steps
 ```
-git clone https://github.com/ArnoGevorkyan/screeny.git
-cd screeny
+git clone https://github.com/ArnoGevorkyan/Screeny.git
+cd Screeny
 dotnet build
 ```
 
@@ -49,7 +48,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
+This project is licensed under the Apache License - see the [LICENSE](LICENSE.md) file for details.
 
 ## Privacy
 
