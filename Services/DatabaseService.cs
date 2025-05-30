@@ -462,6 +462,35 @@ namespace ScreenTimeTracker.Services
                     System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
                 }
 
+                // Validate and cap duration
+                long durationMs = (long)record.Duration.TotalMilliseconds;
+                
+                // Cap duration at 8 hours for a single session
+                const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+                if (durationMs > maxSessionDurationMs)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Duration {durationMs}ms exceeds 8 hours for {record.ProcessName}. Capping at 8 hours.");
+                    durationMs = maxSessionDurationMs;
+                }
+                
+                // Ensure duration is not negative
+                if (durationMs < 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Negative duration {durationMs}ms for {record.ProcessName}. Setting to 0.");
+                    durationMs = 0;
+                }
+                
+                // If we have both start and end times, calculate actual duration
+                if (validatedEndTime.HasValue)
+                {
+                    var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
+                    if (calculatedDuration >= 0 && calculatedDuration < durationMs)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Using calculated duration {calculatedDuration}ms instead of {durationMs}ms");
+                        durationMs = (long)calculatedDuration;
+                    }
+                }
+
                 string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration); SELECT last_insert_rowid();";
 
                 using (var command = new SqliteCommand(insertSql, _connection, transaction)) // Assign transaction
@@ -471,7 +500,7 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
                     command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
-                    command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
+                    command.Parameters.AddWithValue("@Duration", durationMs);
                     
                     System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: BEFORE ExecuteScalar...");
                     var result = command.ExecuteScalar();
@@ -550,6 +579,35 @@ namespace ScreenTimeTracker.Services
                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
                 }
 
+                // Validate and cap duration (same logic as SaveRecord)
+                long durationMs = (long)record.Duration.TotalMilliseconds;
+                
+                // Cap duration at 8 hours for a single session
+                const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+                if (durationMs > maxSessionDurationMs)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Duration {durationMs}ms exceeds 8 hours for {record.ProcessName}. Capping at 8 hours.");
+                    durationMs = maxSessionDurationMs;
+                }
+                
+                // Ensure duration is not negative
+                if (durationMs < 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Negative duration {durationMs}ms for {record.ProcessName}. Setting to 0.");
+                    durationMs = 0;
+                }
+                
+                // If we have both start and end times, calculate actual duration
+                if (validatedEndTime.HasValue)
+                {
+                    var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
+                    if (calculatedDuration >= 0 && calculatedDuration < durationMs)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Using calculated duration {calculatedDuration}ms instead of {durationMs}ms");
+                        durationMs = (long)calculatedDuration;
+                    }
+                }
+
                 string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration WHERE id = @Id;";
 
                 using (var command = new SqliteCommand(updateSql, _connection, transaction)) // Assign transaction
@@ -559,7 +617,7 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
-                    command.Parameters.AddWithValue("@Duration", (long)record.Duration.TotalMilliseconds);
+                    command.Parameters.AddWithValue("@Duration", durationMs);
                     
                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: BEFORE ExecuteNonQuery for ID {record.Id}...");
                     int rowsAffected = command.ExecuteNonQuery();

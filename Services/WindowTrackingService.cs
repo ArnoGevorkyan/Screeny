@@ -12,11 +12,13 @@ namespace ScreenTimeTracker.Services
     public class WindowTrackingService : IDisposable
     {
         private readonly System.Timers.Timer _timer;
+        private readonly System.Timers.Timer _dayChangeTimer;
         private AppUsageRecord? _currentRecord;
         private readonly List<AppUsageRecord> _records;
         private bool _disposed;
         private readonly DatabaseService _databaseService;
         private readonly object _lockObject = new object();
+        private DateTime _lastCheckedDate;
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -49,6 +51,12 @@ namespace ScreenTimeTracker.Services
             _timer = new System.Timers.Timer(1000);
             _timer.Elapsed += Timer_Elapsed;
             _timer.AutoReset = true;
+            
+            _dayChangeTimer = new System.Timers.Timer(60000);
+            _dayChangeTimer.Elapsed += DayChangeTimer_Elapsed;
+            _dayChangeTimer.AutoReset = true;
+            _lastCheckedDate = DateTime.Now.Date;
+            
             IsTracking = false;
             Debug.WriteLine("WindowTrackingService initialized.");
         }
@@ -63,7 +71,9 @@ namespace ScreenTimeTracker.Services
                 Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
                 _records.Clear();
                 _timer.Start();
+                _dayChangeTimer.Start();
                 IsTracking = true;
+                _lastCheckedDate = DateTime.Now.Date;
             }
             
             // Call CheckActiveWindow outside of lock to avoid deadlock
@@ -79,6 +89,7 @@ namespace ScreenTimeTracker.Services
 
                 Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking (Normal) ====");
                 _timer.Stop();
+                _dayChangeTimer.Stop();
                 IsTracking = false;
                 if (_currentRecord != null)
                 {
@@ -100,6 +111,7 @@ namespace ScreenTimeTracker.Services
 
                 Debug.WriteLine("==== WindowTrackingService.PauseTrackingForSuspend() - Pausing for system suspend ====");
                 _timer.Stop();
+                _dayChangeTimer.Stop();
                 IsTracking = false;
 
                 if (_currentRecord != null)
@@ -162,6 +174,7 @@ namespace ScreenTimeTracker.Services
                 IsTracking = true;
                 _records.Clear();
                 _timer.Start();
+                _dayChangeTimer.Start();
             }
             
             // Call CheckActiveWindow outside of lock to avoid deadlock
@@ -179,11 +192,135 @@ namespace ScreenTimeTracker.Services
             {
                 System.Diagnostics.Debug.WriteLine("Timer_Elapsed - Checking active window");
                 CheckActiveWindow();
+                
+                // Periodic cleanup: Save and remove records that haven't been focused for > 5 minutes
+                var now = DateTime.Now;
+                var recordsToRemove = new List<AppUsageRecord>();
+                
+                foreach (var record in _records)
+                {
+                    // Skip the current record and focused records
+                    if (record == _currentRecord || record.IsFocused)
+                        continue;
+                    
+                    // If record has an end time and it's been more than 5 minutes, save and remove it
+                    if (record.EndTime.HasValue && (now - record.EndTime.Value).TotalMinutes > 5)
+                    {
+                        recordsToRemove.Add(record);
+                    }
+                    // If record doesn't have end time but hasn't been updated in 5 minutes, close it
+                    else if (!record.EndTime.HasValue && record.Duration.TotalSeconds > 0 && 
+                             (now - record.StartTime - record.Duration).TotalMinutes > 5)
+                    {
+                        record.EndTime = record.StartTime + record.Duration;
+                        recordsToRemove.Add(record);
+                    }
+                }
+                
+                // Save and remove old records
+                foreach (var record in recordsToRemove)
+                {
+                    try
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Saving and removing old record: {record.ProcessName}");
+                        lock (_databaseService)
+                        {
+                            _databaseService.SaveRecord(record);
+                        }
+                        _records.Remove(record);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error saving old record: {ex.Message}");
+                    }
+                }
             }
             catch (Exception ex)
             {
                 // Log the exception but don't let it crash the app
                 System.Diagnostics.Debug.WriteLine($"ERROR in Timer_Elapsed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        private void DayChangeTimer_Elapsed(object? sender, ElapsedEventArgs e)
+        {
+            lock (_lockObject)
+            {
+                if (_disposed || !IsTracking) return;
+            }
+            
+            try
+            {
+                System.Diagnostics.Debug.WriteLine("DayChangeTimer_Elapsed - Checking for day change");
+                var currentDate = DateTime.Now.Date;
+                
+                if (currentDate != _lastCheckedDate)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Day changed from {_lastCheckedDate:yyyy-MM-dd} to {currentDate:yyyy-MM-dd}");
+                    
+                    lock (_lockObject)
+                    {
+                        // End all current sessions at 23:59:59 of the previous day
+                        var endOfPreviousDay = _lastCheckedDate.AddDays(1).AddSeconds(-1);
+                        
+                        // Save and close any current record
+                        if (_currentRecord != null)
+                        {
+                            _currentRecord.SetFocus(false);
+                            _currentRecord.EndTime = endOfPreviousDay;
+                            
+                            try
+                            {
+                                // Save the record immediately
+                                lock (_databaseService)
+                                {
+                                    _databaseService.SaveRecord(_currentRecord);
+                                }
+                                Debug.WriteLine($"Day change: Saved record for {_currentRecord.ProcessName}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"ERROR saving record during day change: {ex.Message}");
+                            }
+                        }
+                        
+                        // Save all accumulated records
+                        foreach (var record in _records)
+                        {
+                            if (!record.EndTime.HasValue)
+                            {
+                                record.EndTime = endOfPreviousDay;
+                            }
+                            
+                            try
+                            {
+                                lock (_databaseService)
+                                {
+                                    _databaseService.SaveRecord(record);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"ERROR saving record during day change: {ex.Message}");
+                            }
+                        }
+                        
+                        // Clear all records for the new day
+                        _records.Clear();
+                        _currentRecord = null;
+                        _lastCheckedDate = currentDate;
+                        
+                        Debug.WriteLine($"Day change completed. All sessions closed and saved.");
+                    }
+                    
+                    // Re-check active window to start fresh tracking for the new day
+                    CheckActiveWindow();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ERROR in DayChangeTimer_Elapsed: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }
@@ -223,21 +360,26 @@ namespace ScreenTimeTracker.Services
                     return;
                 }
                 
-                if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
-                {
-                    System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Skipping our own process");
-                    return;
-                }
+                // Comment out this check - we want to track Screeny too
+                // if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
+                // {
+                //     System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Skipping our own process");
+                //     return;
+                // }
 
                 var windowTitle = GetActiveWindowTitle(foregroundWindow);
                 var processName = GetProcessName(foregroundWindow);
 
                 System.Diagnostics.Debug.WriteLine($"CheckActiveWindow - Detected window: {processName} ({processId}) - '{windowTitle}'");
+                System.Diagnostics.Debug.WriteLine($"  Window Handle: {foregroundWindow}");
+                System.Diagnostics.Debug.WriteLine($"  Current Record: {_currentRecord?.ProcessName ?? "None"}");
+                System.Diagnostics.Debug.WriteLine($"  Total Records in List: {_records.Count}");
 
-                if (windowTitle.IndexOf("Screeny", StringComparison.OrdinalIgnoreCase) >= 0)
+                // Debug: Show all currently tracked records
+                System.Diagnostics.Debug.WriteLine("  Currently tracked records:");
+                foreach (var r in _records)
                 {
-                    System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Ignoring our own window based on title");
-                    return;
+                    System.Diagnostics.Debug.WriteLine($"    - {r.ProcessName}: IsFocused={r.IsFocused}, Duration={r.Duration.TotalSeconds:F1}s");
                 }
 
                 if (_currentRecord != null && 
@@ -248,6 +390,16 @@ namespace ScreenTimeTracker.Services
                     System.Diagnostics.Debug.WriteLine($"Unfocusing previous window: {_currentRecord.ProcessName} - {_currentRecord.WindowTitle}");
                     _currentRecord.SetFocus(false);
                     _currentRecord = null;
+                }
+
+                // IMPORTANT: Unfocus ALL records first to ensure only one is tracking
+                foreach (var record in _records)
+                {
+                    if (record.IsFocused)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Unfocusing background window: {record.ProcessName}");
+                        record.SetFocus(false);
+                    }
                 }
 
                 var existingRecord = _records.FirstOrDefault(r => 
@@ -416,6 +568,17 @@ namespace ScreenTimeTracker.Services
                     catch (Exception ex)
                     {
                         Debug.WriteLine($"Error disposing timer: {ex.Message}");
+                    }
+                    
+                    try
+                    {
+                        _dayChangeTimer.Stop();
+                        _dayChangeTimer.Elapsed -= DayChangeTimer_Elapsed;
+                        _dayChangeTimer.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error disposing day change timer: {ex.Message}");
                     }
                     
                     IsTracking = false;

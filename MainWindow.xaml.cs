@@ -442,12 +442,21 @@ namespace ScreenTimeTracker
                 _timerTickCounter++;
                 int localTickCounter = _timerTickCounter;
         
+                // Debug: Show all current records and their focus states
+                System.Diagnostics.Debug.WriteLine($"Current UI records (count={_usageRecords.Count}):");
+                foreach (var rec in _usageRecords)
+                {
+                    System.Diagnostics.Debug.WriteLine($"  - {rec.ProcessName}: IsFocused={rec.IsFocused}, Duration={rec.Duration.TotalSeconds:F1}s");
+                }
+        
                 // Get the LIVE focused application from the tracking service
                 var liveFocusedApp = _trackingService?.CurrentRecord;
                 AppUsageRecord? recordToUpdate = null;
 
                 if (liveFocusedApp != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Live focused app from tracking service: {liveFocusedApp.ProcessName}, IsFocused={liveFocusedApp.IsFocused}");
+                    
                     // Safely access collection - check if disposed first
                     if (_disposed || _usageRecords == null) return;
                     
@@ -461,21 +470,42 @@ namespace ScreenTimeTracker
 
                     if (recordToUpdate != null && !_disposed)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Incrementing duration for displayed record: {recordToUpdate.ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"Found record for {recordToUpdate.ProcessName}, IsFocused={recordToUpdate.IsFocused}");
                         
-                        // --- Check if viewing today or a range including today --- 
-                        bool isViewingToday = _selectedDate.Date == DateTime.Today && !_isDateRangeSelected;
-                        bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
-                                                          DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
-                                                          
-                        if (isViewingToday || isViewingRangeIncludingToday)
+                        // IMPORTANT: Check if this record matches the CURRENTLY focused app
+                        bool isActuallyFocused = liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
+                        
+                        System.Diagnostics.Debug.WriteLine($"Is {recordToUpdate.ProcessName} actually focused? {isActuallyFocused}");
+                        
+                        if (isActuallyFocused)
                         {
-                            // Increment duration every second for accuracy
-                            recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
+                            System.Diagnostics.Debug.WriteLine($"Incrementing duration for ACTUALLY FOCUSED record: {recordToUpdate.ProcessName}");
+                            
+                            // --- Check if viewing today or a range including today --- 
+                            bool isViewingToday = _selectedDate.Date == DateTime.Today && !_isDateRangeSelected;
+                            bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
+                                                              DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
+                                                              
+                            if (isViewingToday || isViewingRangeIncludingToday)
+                            {
+                                // Increment duration every second for accuracy
+                                recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
+                            }
+                            else
+                            {
+                                 System.Diagnostics.Debug.WriteLine("Not incrementing duration - viewing a past date/range.");
+                            }
                         }
                         else
                         {
-                             System.Diagnostics.Debug.WriteLine("Not incrementing duration - viewing a past date/range.");
+                            System.Diagnostics.Debug.WriteLine($"NOT incrementing duration for {recordToUpdate.ProcessName} - it's not the current focused app!");
+                            
+                            // Make sure it's marked as unfocused in the UI collection
+                            if (recordToUpdate.IsFocused)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Correcting focus state for {recordToUpdate.ProcessName} - setting to unfocused");
+                                recordToUpdate.SetFocus(false);
+                            }
                         }
                     }
                     else
@@ -566,9 +596,10 @@ namespace ScreenTimeTracker
                     {
                         System.Diagnostics.Debug.WriteLine($"Found existing record: {existingRecord.ProcessName}");
                         
-                        // Update the existing record instead of adding a new one
+                        // Update the existing record's focus state
                         if (existingRecord.IsFocused != record.IsFocused)
                         {
+                            System.Diagnostics.Debug.WriteLine($"Focus state changed for {existingRecord.ProcessName}: {existingRecord.IsFocused} -> {record.IsFocused}");
                             existingRecord.SetFocus(record.IsFocused);
                             recordsChanged = true;
                         }
@@ -582,10 +613,15 @@ namespace ScreenTimeTracker
                         // If we're updating the active status, make sure we unfocus any other records
                         if (record.IsFocused)
                         {
-                            foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord && r.IsFocused))
+                            System.Diagnostics.Debug.WriteLine($"Setting {record.ProcessName} as focused, unfocusing all others");
+                            foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord))
                             {
-                                otherRecord.SetFocus(false);
-                                recordsChanged = true;
+                                if (otherRecord.IsFocused)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Unfocusing {otherRecord.ProcessName}");
+                                    otherRecord.SetFocus(false);
+                                    recordsChanged = true;
+                                }
                             }
                         }
                     }
@@ -603,9 +639,14 @@ namespace ScreenTimeTracker
                         // If we're adding a new focused record, unfocus all other records
                         if (record.IsFocused)
                         {
-                            foreach (var otherRecord in _usageRecords.Where(r => r.IsFocused))
+                            System.Diagnostics.Debug.WriteLine($"New record {record.ProcessName} is focused, unfocusing all existing records");
+                            foreach (var otherRecord in _usageRecords)
                             {
-                                otherRecord.SetFocus(false);
+                                if (otherRecord.IsFocused)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Unfocusing existing record: {otherRecord.ProcessName}");
+                                    otherRecord.SetFocus(false);
+                                }
                             }
                         }
 
@@ -1859,41 +1900,58 @@ namespace ScreenTimeTracker
         // New method to handle initialization after window is loaded
         private void TrackingService_WindowChanged(object? sender, EventArgs e)
         {
-            // Check if window is disposed
-            if (_disposed)
+            try
             {
-                System.Diagnostics.Debug.WriteLine("TrackingService_WindowChanged: Window is disposed, ignoring event");
-                return;
-            }
-            
-            // This handles window change events from the tracking service
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                // Double-check disposed state on UI thread
-                if (_disposed)
-                {
-                    System.Diagnostics.Debug.WriteLine("Window change UI update cancelled - window disposed");
-                    return;
-                }
+                System.Diagnostics.Debug.WriteLine("==== WINDOW CHANGED EVENT ====");
                 
-                try
+                DispatcherQueue.TryEnqueue(() =>
                 {
-                    // Update the UI based on current tracking data
-                    if (_trackingService.CurrentRecord != null && !IsWindowsSystemProcess(_trackingService.CurrentRecord.ProcessName))
+                    // Get the currently focused app from the tracking service
+                    var currentRecord = _trackingService?.CurrentRecord;
+                    
+                    if (currentRecord != null)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Window changed to: {_trackingService.CurrentRecord.ProcessName} - {_trackingService.CurrentRecord.WindowTitle}");
-                        
-                        // For now, we don't have CurrentAppTextBlock or CurrentDurationTextBlock in our UI
-                        // Instead, we'll update the chart and summary with the latest data
-                        UpdateUsageChart();
-                        UpdateSummaryTab(_usageRecords.ToList());
+                        System.Diagnostics.Debug.WriteLine($"Current active window: {currentRecord.ProcessName}");
                     }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error updating UI on window change: {ex.Message}");
-                }
-            });
+                    
+                    // Unfocus ALL records in the UI collection first
+                    bool anyChanges = false;
+                    foreach (var record in _usageRecords)
+                    {
+                        if (record.IsFocused)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Window Changed: Unfocusing {record.ProcessName}");
+                            record.SetFocus(false);
+                            anyChanges = true;
+                        }
+                    }
+                    
+                    // Now set focus on the current record if it exists in our collection
+                    if (currentRecord != null)
+                    {
+                        var uiRecord = _usageRecords.FirstOrDefault(r => 
+                            r.ProcessName.Equals(currentRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (uiRecord != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Window Changed: Setting focus on {uiRecord.ProcessName}");
+                            uiRecord.SetFocus(true);
+                            anyChanges = true;
+                        }
+                    }
+                    
+                    // Update UI if we made changes
+                    if (anyChanges)
+                    {
+                        UpdateSummaryTab(_usageRecords.ToList());
+                        UpdateUsageChart();
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in TrackingService_WindowChanged: {ex.Message}");
+            }
         }
 
         private int GetDayCountForTimePeriod(TimePeriod period, DateTime date)

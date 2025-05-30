@@ -1269,10 +1269,41 @@ namespace ScreenTimeTracker.Models
                 if (IsFocused)
                 {
                     var currentTime = DateTime.Now;
-                    var focusedDuration = currentTime - _lastFocusTime;
-                    baseDuration += focusedDuration;
-                    System.Diagnostics.Debug.WriteLine($"Duration for {ProcessName}: Accumulated={_accumulatedDuration.TotalSeconds:F1}s, Current={focusedDuration.TotalSeconds:F1}s, Total={baseDuration.TotalSeconds:F1}s");
+                    
+                    // Check if this is a stale session from a previous day
+                    if (_lastFocusTime.Date < currentTime.Date)
+                    {
+                        // If the session started on a previous day, cap it at end of that day
+                        var endOfDay = _lastFocusTime.Date.AddDays(1).AddTicks(-1);
+                        var focusedDuration = endOfDay - _lastFocusTime;
+                        baseDuration += focusedDuration;
+                        System.Diagnostics.Debug.WriteLine($"WARNING: Stale session detected for {ProcessName}. Capping duration at end of day.");
+                    }
+                    else
+                    {
+                        // Normal calculation for same-day sessions
+                        var focusedDuration = currentTime - _lastFocusTime;
+                        
+                        // Cap single session duration at 8 hours (reasonable maximum for continuous use)
+                        if (focusedDuration.TotalHours > 8)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"WARNING: Session duration exceeds 8 hours for {ProcessName}. Capping at 8 hours.");
+                            focusedDuration = TimeSpan.FromHours(8);
+                        }
+                        
+                        baseDuration += focusedDuration;
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"Duration for {ProcessName}: Accumulated={_accumulatedDuration.TotalSeconds:F1}s, Current session={baseDuration.TotalSeconds:F1}s");
                 }
+                
+                // Final safety check - cap total duration at 16 hours (allowing for multiple sessions)
+                if (baseDuration.TotalHours > 16)
+                {
+                    System.Diagnostics.Debug.WriteLine($"WARNING: Total duration exceeds 16 hours for {ProcessName}. Capping at 16 hours.");
+                    baseDuration = TimeSpan.FromHours(16);
+                }
+                
                 return baseDuration;
             }
         }
@@ -1312,10 +1343,10 @@ namespace ScreenTimeTracker.Models
 
         public void SetFocus(bool isFocused)
         {
-            System.Diagnostics.Debug.WriteLine($"Setting focus for {ProcessName} to {isFocused}");
+            System.Diagnostics.Debug.WriteLine($"SetFocus called for {ProcessName}: {IsFocused} -> {isFocused}");
             if (IsFocused != isFocused)
             {
-                if (isFocused)
+             if (isFocused)
                 {
                     _lastFocusTime = DateTime.Now;
                     System.Diagnostics.Debug.WriteLine($"Focus started for {ProcessName} at {_lastFocusTime}");
@@ -1324,8 +1355,17 @@ namespace ScreenTimeTracker.Models
                 {
                     // Accumulate the time spent focused
                     var focusedDuration = DateTime.Now - _lastFocusTime;
-                    _accumulatedDuration += focusedDuration;
-                    System.Diagnostics.Debug.WriteLine($"Focus ended for {ProcessName}, accumulated {focusedDuration.TotalSeconds:F1}s, total: {_accumulatedDuration.TotalSeconds:F1}s");
+                    
+                    // Only accumulate if duration is reasonable (less than 1 day)
+                    if (focusedDuration.TotalDays < 1 && focusedDuration.TotalSeconds > 0)
+                    {
+                        _accumulatedDuration += focusedDuration;
+                        System.Diagnostics.Debug.WriteLine($"Focus ended for {ProcessName}, accumulated {focusedDuration.TotalSeconds:F1}s, total: {_accumulatedDuration.TotalSeconds:F1}s");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"WARNING: Ignoring unreasonable focus duration for {ProcessName}: {focusedDuration.TotalDays} days");
+                    }
                 }
                 
                 IsFocused = isFocused;
