@@ -204,6 +204,12 @@ namespace ScreenTimeTracker.Helpers
                 // Set the XamlRoot property to connect the popup to the UI tree
                 _datePickerPopup.XamlRoot = _owner.Content.XamlRoot;
                 
+                // Enable light dismiss - allows closing by clicking outside
+                _datePickerPopup.IsLightDismissEnabled = true;
+                
+                // Handle the Closed event to notify when popup is dismissed
+                _datePickerPopup.Closed += (s, e) => PopupClosed?.Invoke(this, EventArgs.Empty);
+                
                 // Create the root grid for the popup content
                 var rootGrid = new Grid
                 {
