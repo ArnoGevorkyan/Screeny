@@ -239,7 +239,9 @@ namespace ScreenTimeTracker.Services
                         app_name TEXT,
                         start_time TEXT NOT NULL,
                         end_time TEXT,
-                        duration INTEGER
+                        duration INTEGER,
+                        is_focused INTEGER DEFAULT 0,
+                        last_updated TEXT 
                     );";
                     command.ExecuteNonQuery();
                 }
@@ -293,6 +295,12 @@ namespace ScreenTimeTracker.Services
                 {
                     // Migration to version 1 - Add date column if needed
                     MigrateToV1();
+                    currentVersion = GetDatabaseVersion(); // Re-fetch version after V1 migration
+                }
+
+                if (currentVersion < 2)
+                {
+                    MigrateToV2();
                 }
 
                 // Future migrations can be added here
@@ -419,6 +427,65 @@ namespace ScreenTimeTracker.Services
         }
 
         /// <summary>
+        /// Migrates database to version 2
+        /// Adds is_focused and last_updated columns
+        /// </summary>
+        private void MigrateToV2()
+        {
+            Debug.WriteLine("Performing migration to version 2");
+            try
+            {
+                // Begin transaction
+                using (var transaction = _connection.BeginTransaction())
+                {
+                    try
+                    {
+                        // Add is_focused column
+                        using (var command = _connection.CreateCommand())
+                        {
+                            command.CommandText = "ALTER TABLE app_usage ADD COLUMN is_focused INTEGER DEFAULT 0;";
+                            command.ExecuteNonQuery();
+                            Debug.WriteLine("Added is_focused column to app_usage table.");
+                        }
+
+                        // Add last_updated column
+                        using (var command = _connection.CreateCommand())
+                        {
+                            command.CommandText = "ALTER TABLE app_usage ADD COLUMN last_updated TEXT;";
+                            command.ExecuteNonQuery();
+                            Debug.WriteLine("Added last_updated column to app_usage table.");
+                        }
+
+                        // Commit the transaction
+                        transaction.Commit();
+                        Debug.WriteLine("Migration to V2 (columns) completed successfully.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // Rollback on error
+                        transaction.Rollback();
+                        Debug.WriteLine($"Migration to V2 (columns) failed: {ex.Message}");
+                        // Decide if to rethrow or not. For schema changes, it might be safer to inform and potentially stop.
+                        // For now, we log and continue, but this might leave the DB in an inconsistent state for V2.
+                        return; // Exit if column creation failed
+                    }
+                }
+
+                // Update version in database
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA user_version = 2;";
+                    command.ExecuteNonQuery();
+                    Debug.WriteLine("Database user_version set to 2.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error during migration to V2: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Validates a date to ensure it's not in the future
         /// </summary>
         private DateTime ValidateDate(DateTime date)
@@ -491,7 +558,7 @@ namespace ScreenTimeTracker.Services
                     }
                 }
 
-                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration); SELECT last_insert_rowid();";
+                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated); SELECT last_insert_rowid();";
 
                 using (var command = new SqliteCommand(insertSql, _connection, transaction)) // Assign transaction
                 {
@@ -501,6 +568,8 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
                     command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
                     command.Parameters.AddWithValue("@Duration", durationMs);
+                    command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
+                    command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
                     
                     System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: BEFORE ExecuteScalar...");
                     var result = command.ExecuteScalar();
@@ -511,6 +580,7 @@ namespace ScreenTimeTracker.Services
                         long id = Convert.ToInt64(result);
                         record.Id = (int)id;
                         System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Saved record {record.ProcessName} with ID {record.Id}");
+                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Date={record.Date:yyyy-MM-dd}, StartTime={record.StartTime:yyyy-MM-dd HH:mm:ss}, Duration={durationMs}ms");
                         success = true;
                     }
                     else
@@ -608,7 +678,7 @@ namespace ScreenTimeTracker.Services
                     }
                 }
 
-                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration WHERE id = @Id;";
+                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration, is_focused = @IsFocused, last_updated = @LastUpdated WHERE id = @Id;";
 
                 using (var command = new SqliteCommand(updateSql, _connection, transaction)) // Assign transaction
                 {
@@ -618,6 +688,8 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
                     command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
                     command.Parameters.AddWithValue("@Duration", durationMs);
+                    command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
+                    command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
                     
                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: BEFORE ExecuteNonQuery for ID {record.Id}...");
                     int rowsAffected = command.ExecuteNonQuery();
@@ -683,10 +755,10 @@ namespace ScreenTimeTracker.Services
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = @"
-                        SELECT id, process_name, app_name, start_time, end_time, duration
+                        SELECT id, process_name, app_name, start_time, end_time, duration, is_focused, last_updated
                         FROM app_usage
                         WHERE date = $date
-                        ORDER BY process_name, duration DESC;"; // Group by process_name to keep related entries together
+                        ORDER BY process_name, start_time;"; // Order by start_time as well
                     command.Parameters.AddWithValue("$date", dateString);
                     
                     using (var reader = command.ExecuteReader())
@@ -698,44 +770,66 @@ namespace ScreenTimeTracker.Services
                         {
                             try
                             {
-                                string processName = reader.GetString(1);
-                                var dbStartTime = DateTime.Parse(reader.GetString(3));
-                                long durationMs = !reader.IsDBNull(5) ? reader.GetInt64(5) : 0;
+                                string processName = reader.GetString(reader.GetOrdinal("process_name"));
+                                var dbStartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time")));
+                                long durationMs = !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0;
+                                bool isFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1;
+                                DateTime? lastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : null;
                                 
-                                // If we already have a record for this process, update it
+                                // If we already have a record for this process, update it (this logic might need review for non-aggregated view)
+                                // For now, GetRecordsForDate is used by the chart which shows aggregated bars per hour,
+                                // but the main list is usually a simple list of timed events.
+                                // The current aggregation here might be a leftover or for a specific purpose.
+                                // Let's assume for now it's intended. If this is for a raw list, aggregation should be removed.
                                 if (processGroups.TryGetValue(processName, out var existingRecord))
                                 {
                                     // Add the duration to the existing record
                                     existingRecord._accumulatedDuration += TimeSpan.FromMilliseconds(durationMs);
-                                    Debug.WriteLine($"Merged record: {processName}, total duration now: {existingRecord.Duration.TotalSeconds:F1}s");
+                                    // How to handle IsFocused and LastUpdated for merged records? Take the latest?
+                                    if (lastUpdated.HasValue && (!existingRecord.LastUpdated.HasValue || lastUpdated.Value > existingRecord.LastUpdated.Value))
+                                    {
+                                        existingRecord.LastUpdated = lastUpdated;
+                                        existingRecord.IsFocused = isFocused; // Assume focus state from the latest update within the group
+                                    }
+                                    if (dbStartTime < existingRecord.StartTime) existingRecord.StartTime = dbStartTime;
+                                    if (reader.IsDBNull(reader.GetOrdinal("end_time"))) existingRecord.EndTime = null; // If any segment is open, keep it open
+                                    else if (existingRecord.EndTime.HasValue && DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time"))) > existingRecord.EndTime.Value)
+                                    {
+                                        existingRecord.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
+                                    }
+
+
+                                    Debug.WriteLine($"Merged record: {processName}, total duration now: {existingRecord.Duration.TotalSeconds:F1}s, IsFocused: {existingRecord.IsFocused}");
                                 }
                                 else
                                 {
                                     // Create a new record
                                     var record = new AppUsageRecord
                                     {
-                                        Id = reader.GetInt32(0),
+                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
                                         ProcessName = processName,
-                                        ApplicationName = !reader.IsDBNull(2) ? reader.GetString(2) : processName,
+                                        ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
                                         Date = date, // Use date for the Date field
-                                        StartTime = dbStartTime // Use actual start time from database
+                                        StartTime = dbStartTime, // Use actual start time from database
+                                        IsFocused = isFocused,
+                                        LastUpdated = lastUpdated
                                     };
                                     
-                                    if (!reader.IsDBNull(4))
+                                    if (!reader.IsDBNull(reader.GetOrdinal("end_time")))
                                     {
-                                        record.EndTime = DateTime.Parse(reader.GetString(4));
+                                        record.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
                                     }
                                     
                                     record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
                                     
                                     // Add to our dictionary
                                     processGroups[processName] = record;
-                                    Debug.WriteLine($"Added new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s");
+                                    Debug.WriteLine($"Added new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}");
                                 }
                             }
                             catch (Exception parseEx)
                             {
-                                Debug.WriteLine($"Error parsing record: {parseEx.Message}");
+                                Debug.WriteLine($"Error parsing record in GetRecordsForDate: {parseEx.Message}");
                                 // Continue to next record
                             }
                         }
@@ -1139,13 +1233,14 @@ namespace ScreenTimeTracker.Services
 
                 // Create SQL to get all records for the date range
                 string sql = @"
-                    SELECT ProcessName, ApplicationName, Duration, StartHour, StartMinute, StartSecond, Date
-                    FROM AppUsage
-                    WHERE Date BETWEEN @StartDate AND @EndDate
-                    ORDER BY Date ASC, ProcessName ASC";
+                    SELECT id, process_name, app_name, start_time, end_time, duration, is_focused, last_updated, date
+                    FROM app_usage
+                    WHERE date >= @StartDate AND date <= @EndDate
+                    ORDER BY date ASC, start_time ASC, process_name ASC;";
 
                 List<AppUsageRecord> records = new List<AppUsageRecord>();
 
+                // Use a new connection for safety, though the class member _connection should be managed (opened/closed) per method.
                 using (var connection = new SqliteConnection(_connection.ConnectionString))
                 {
                     connection.Open();
@@ -1159,34 +1254,26 @@ namespace ScreenTimeTracker.Services
                         {
                             while (reader.Read())
                             {
-                                string processName = reader.GetString(0);
-                                string appName = reader.GetString(1);
-                                double durationSeconds = reader.GetDouble(2);
-                                int startHour = reader.GetInt32(3);
-                                int startMinute = reader.GetInt32(4);
-                                int startSecond = reader.GetInt32(5);
-                                string dateStr = reader.GetString(6);
-
-                                // Parse the date
-                                if (DateTime.TryParse(dateStr, out DateTime date))
+                                try
                                 {
-                                    // Create the start time
-                                    DateTime startTime = new DateTime(
-                                        date.Year, date.Month, date.Day,
-                                        startHour, startMinute, startSecond
-                                    );
-
-                                    // Create the app usage record
                                     var record = new AppUsageRecord
                                     {
-                                        ProcessName = processName,
-                                        ApplicationName = appName ?? processName,
-                                        Date = date,
-                                        StartTime = startTime,
-                                        _accumulatedDuration = TimeSpan.FromSeconds(durationSeconds)
+                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        ProcessName = reader.GetString(reader.GetOrdinal("process_name")),
+                                        ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : reader.GetString(reader.GetOrdinal("process_name")),
+                                        StartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time"))),
+                                        EndTime = !reader.IsDBNull(reader.GetOrdinal("end_time")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time"))) : (DateTime?)null,
+                                        _accumulatedDuration = TimeSpan.FromMilliseconds(!reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0),
+                                        IsFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1,
+                                        LastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : (DateTime?)null,
+                                        Date = DateTime.Parse(reader.GetString(reader.GetOrdinal("date")))
                                     };
-
                                     records.Add(record);
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Error parsing record in GetRawRecordsForDateRange: {ex.Message} on row ID {reader.GetInt32(reader.GetOrdinal("id"))}");
+                                    // Optionally skip this record and continue
                                 }
                             }
                         }

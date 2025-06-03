@@ -190,7 +190,7 @@ namespace ScreenTimeTracker.Services
             
             try
             {
-                System.Diagnostics.Debug.WriteLine("Timer_Elapsed - Checking active window");
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Timer_Elapsed at {DateTime.Now:HH:mm:ss.fff} - Checking active window");
                 CheckActiveWindow();
                 
                 // Periodic cleanup: Save and remove records that haven't been focused for > 5 minutes
