@@ -43,6 +43,9 @@ public partial class App : Application
 
     // Add static property to hold MainWindow instance
     public static Window? MainWindowInstance { get; private set; }
+    
+    // Add property to track if app started from Windows startup
+    public static bool StartedFromWindowsStartup { get; private set; } = false;
 
     /// <summary>
     /// Initializes the singleton application object.  This is the first line of authored code
@@ -52,6 +55,10 @@ public partial class App : Application
     {
         // Log the start of the application
         WriteToLog("Application starting...");
+
+        // Check if started from Windows startup
+        StartedFromWindowsStartup = IsStartedFromWindowsStartup();
+        WriteToLog($"Started from Windows startup: {StartedFromWindowsStartup}");
 
         try
         {
@@ -86,6 +93,90 @@ public partial class App : Application
         {
             WriteToLog($"CRITICAL ERROR during App constructor: {ex.Message}\n{ex.StackTrace}");
             ShowErrorAndExit("The application failed to initialize properly.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Detects if the application was started from Windows startup
+    /// </summary>
+    private static bool IsStartedFromWindowsStartup()
+    {
+        try
+        {
+            // Check command line arguments
+            string[] args = Environment.GetCommandLineArgs();
+            WriteToLog($"Command line arguments count: {args.Length}");
+            
+            for (int i = 0; i < args.Length; i++)
+            {
+                WriteToLog($"Arg[{i}]: {args[i]}");
+                
+                // Check for startup-related arguments
+                if (args[i].Contains("--startup", StringComparison.OrdinalIgnoreCase) ||
+                    args[i].Contains("/startup", StringComparison.OrdinalIgnoreCase) ||
+                    args[i].Contains("-startup", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            // Check if running from the startup folder
+            string startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+            string currentPath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            
+            if (!string.IsNullOrEmpty(currentPath) && currentPath.StartsWith(startupPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Check if started shortly after system boot (less than 2 minutes)
+            TimeSpan systemUptime = TimeSpan.FromMilliseconds(Environment.TickCount);
+            if (systemUptime.TotalMinutes < 2)
+            {
+                WriteToLog($"System uptime: {systemUptime.TotalMinutes:F1} minutes - likely startup");
+                return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            WriteToLog($"Error detecting startup mode: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Checks if this is the first time the app is being run
+    /// </summary>
+    private static bool IsFirstRun()
+    {
+        try
+        {
+            string firstRunMarkerPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Screeny",
+                ".firstrun"
+            );
+
+            if (File.Exists(firstRunMarkerPath))
+            {
+                WriteToLog("Not first run - marker file exists");
+                return false;
+            }
+            else
+            {
+                // Create the marker file
+                Directory.CreateDirectory(Path.GetDirectoryName(firstRunMarkerPath) ?? "");
+                File.WriteAllText(firstRunMarkerPath, DateTime.Now.ToString());
+                WriteToLog("First run detected - created marker file");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteToLog($"Error checking first run: {ex.Message}");
+            return false; // Assume not first run on error to avoid showing window unnecessarily
         }
     }
 
@@ -132,8 +223,28 @@ public partial class App : Application
                  WriteToLog("CRITICAL WARNING: m_window is not a MainWindow instance.");
             }
 
-            m_window.Activate();
-            WriteToLog("MainWindow activated");
+            // Determine whether to show the window
+            bool isFirstRun = IsFirstRun();
+            bool showWindow = !StartedFromWindowsStartup || isFirstRun;
+
+            if (showWindow)
+            {
+                m_window.Activate();
+                if (isFirstRun)
+                {
+                    WriteToLog("MainWindow activated (first run)");
+                }
+                else
+                {
+                    WriteToLog("MainWindow activated (normal launch)");
+                }
+            }
+            else
+            {
+                WriteToLog("MainWindow created but not activated (startup launch - running in background)");
+                // The window will remain hidden, and the tray icon will be available
+                // The tracking service will still start automatically in MainWindow_Loaded
+            }
         }
         catch (Exception ex)
         {

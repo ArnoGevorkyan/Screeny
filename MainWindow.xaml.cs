@@ -1888,11 +1888,24 @@ namespace ScreenTimeTracker
                 // Register for power notifications AFTER window handle is valid and before tracking starts
                 RegisterPowerNotifications();
 
-                // Add the tray icon
-                _trayIconHelper?.AddIcon("Screeny - Tracking");
+                // Add the tray icon with appropriate tooltip based on startup mode
+                string trayTooltip = App.StartedFromWindowsStartup ? 
+                    "Screeny - Running in background" : 
+                    "Screeny - Tracking";
+                _trayIconHelper?.AddIcon(trayTooltip);
 
                 // Start tracking automatically (assuming StartTracking handles its internal errors)
                 StartTracking();
+                
+                // Log the startup status
+                if (App.StartedFromWindowsStartup)
+                {
+                    System.Diagnostics.Debug.WriteLine("MainWindow loaded - Started from Windows startup, running in background");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("MainWindow loaded - Normal startup, window visible");
+                }
                 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
             }
@@ -3222,9 +3235,17 @@ namespace ScreenTimeTracker
                 {
                     if (_appWindow != null)
                     {
+                        // Show the window
                         _appWindow.Show();
-                        // Optionally bring to foreground/restore if minimized
-                        // P/Invoke for SetForegroundWindow might be needed
+                        
+                        // If the window was started hidden, we need to activate it to bring it to the foreground
+                        this.Activate();
+                        
+                        Debug.WriteLine("Window shown and activated from tray icon");
+                    }
+                    else
+                    {
+                        Debug.WriteLine("AppWindow is null, cannot show window from tray");
                     }
                 }
                 catch (Exception ex)
