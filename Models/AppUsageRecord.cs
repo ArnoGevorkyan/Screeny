@@ -182,7 +182,6 @@ namespace ScreenTimeTracker.Models
             // Windows tools and dialogs
             "SnippingTool",
             "EaseOfAccessDialog",
-            "Razer Synapse Service Process",
             "Magnify", // Windows Magnifier
             "Narrator", // Windows Narrator
             "Notepad", // Basic notepad for quick notes
@@ -190,6 +189,47 @@ namespace ScreenTimeTracker.Models
             "charmap", // Character Map
             "calc", // Windows Calculator
             "SoundVolumeView",
+            
+            // Razer and gaming hardware utilities
+            "RazerCortex.Shell",
+            "Razer Synapse Service Process",
+            "RazerCentralService",
+            "RzSDKService",
+            "RzChromaStreamServer",
+            "RazerIngameEngine",
+            "RzActionSvc",
+            "Razer Synapse 3 Host",
+            "RazerAppEngine",
+            
+            // Other gaming hardware utilities
+            "LogitechGHUB",
+            "LGHUB",
+            "LGHUBUpdater",
+            "CORSAIR iCUE 4 Software",
+            "iCUE",
+            "CorsairService",
+            "SteelSeriesEngine",
+            "SSEngine3",
+            "NvContainer",
+            "NVIDIA Web Helper Service",
+            "NVIDIA Display Driver Service",
+            "GeForceExperience",
+            "NvTelemetryContainer",
+            "MSI Afterburner",
+            "RTSSHooksLoader64",
+            "EVGA Precision X1",
+            "HWiNFO64",
+            "GPU-Z",
+            "CPU-Z",
+            
+            // RGB and peripheral software
+            "SignalRGB",
+            "OpenRGB",
+            "AuraService",
+            "AsusSystemControlInterface",
+            "ArmouryCrate.Service",
+            "ArmouryCrateService",
+            "LightingService",
             
             // Network and connectivity
             "NetworkManager",
@@ -582,41 +622,8 @@ namespace ScreenTimeTracker.Models
                     iconPath = knownPath;
                     System.Diagnostics.Debug.WriteLine($"Found known system path for {ProcessName}: {iconPath}");
                 }
-                // Handle paths with wildcard components
-                else if (processNameLower == "discord")
-                {
-                    // For Discord, try to find the version-specific folder
-                    string discordBaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Discord");
-                    if (Directory.Exists(discordBaseDir))
-                    {
-                        var versionDirs = Directory.GetDirectories(discordBaseDir, "app-*");
-                        if (versionDirs.Length > 0)
-                        {
-                            string possiblePath = Path.Combine(versionDirs[0], "Discord.exe");
-                            if (File.Exists(possiblePath))
-                            {
-                                iconPath = possiblePath;
-                            }
-                        }
-                    }
-                }
-                else if (processNameLower == "spotify")
-                {
-                    // For Spotify from Microsoft Store, try to find the version-specific folder
-                    string spotifyBaseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
-                    if (Directory.Exists(spotifyBaseDir))
-                    {
-                        var spotifyDirs = Directory.GetDirectories(spotifyBaseDir, "SpotifyAB.SpotifyMusic_*");
-                        if (spotifyDirs.Length > 0)
-                        {
-                            string possiblePath = Path.Combine(spotifyDirs[0], "Spotify.exe");
-                            if (File.Exists(possiblePath))
-                            {
-                                iconPath = possiblePath;
-                            }
-                        }
-                    }
-                }
+
+
                 
                 // If we found a path, try to load the icon
                 if (!string.IsNullOrEmpty(iconPath))
@@ -635,6 +642,82 @@ namespace ScreenTimeTracker.Models
                             success = await TryLoadIconWithExtractAssociatedIcon(iconPath);
                         }
                         return success;
+                    }
+                }
+
+                // General fallback: Search for any executable with the process name in common directories
+                if (string.IsNullOrEmpty(iconPath))
+                {
+                    try
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Trying general fallback search for {ProcessName}");
+                        
+                        // Common installation directories to search
+                        string[] searchDirectories = {
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps")
+                        };
+
+                        foreach (string baseDir in searchDirectories)
+                        {
+                            if (!Directory.Exists(baseDir)) continue;
+
+                            try
+                            {
+                                // Search for directories that contain the process name
+                                var matchingDirs = Directory.GetDirectories(baseDir, $"*{ProcessName}*", SearchOption.TopDirectoryOnly);
+                                
+                                foreach (string dir in matchingDirs)
+                                {
+                                    // Look for executable with same name as process
+                                    string[] possibleExePaths = {
+                                        Path.Combine(dir, $"{ProcessName}.exe"),
+                                        Path.Combine(dir, "app", $"{ProcessName}.exe"),
+                                        Path.Combine(dir, "bin", $"{ProcessName}.exe"),
+                                        Path.Combine(dir, "Application", $"{ProcessName}.exe")
+                                    };
+
+                                    foreach (string exePath in possibleExePaths)
+                                    {
+                                        if (File.Exists(exePath))
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"Found executable in fallback search: {exePath}");
+                                            bool success = await TryLoadIconWithSHGetFileInfo(exePath);
+                                            if (!success)
+                                            {
+                                                success = await TryLoadIconWithExtractAssociatedIcon(exePath);
+                                            }
+                                            if (success) return true;
+                                        }
+                                    }
+                                }
+
+                                // Also search for the executable directly in the base directory
+                                string directExePath = Path.Combine(baseDir, $"{ProcessName}.exe");
+                                if (File.Exists(directExePath))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Found executable directly in base dir: {directExePath}");
+                                    bool success = await TryLoadIconWithSHGetFileInfo(directExePath);
+                                    if (!success)
+                                    {
+                                        success = await TryLoadIconWithExtractAssociatedIcon(directExePath);
+                                    }
+                                    if (success) return true;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Error searching in {baseDir}: {ex.Message}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error in general fallback search for {ProcessName}: {ex.Message}");
                     }
                 }
                 
