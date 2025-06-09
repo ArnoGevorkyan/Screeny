@@ -190,28 +190,40 @@ namespace ScreenTimeTracker.Services
             
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Timer_Elapsed at {DateTime.Now:HH:mm:ss.fff} - Checking active window");
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ===== Timer_Elapsed at {DateTime.Now:HH:mm:ss.fff} =====");
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] IsTracking: {IsTracking}");
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Current records count: {_records.Count}");
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Current record: {(_currentRecord != null ? _currentRecord.ProcessName : "null")}");
+                
                 CheckActiveWindow();
                 
                 // Periodic cleanup: Save and remove records that haven't been focused for > 5 minutes
                 var now = DateTime.Now;
                 var recordsToRemove = new List<AppUsageRecord>();
                 
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Checking {_records.Count} records for cleanup...");
                 foreach (var record in _records)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Record: {record.ProcessName}, IsFocused: {record.IsFocused}, EndTime: {record.EndTime}, Duration: {record.Duration.TotalSeconds:F1}s");
+                    
                     // Skip the current record and focused records
                     if (record == _currentRecord || record.IsFocused)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Skipping {record.ProcessName} (current or focused)");
                         continue;
+                    }
                     
                     // If record has an end time and it's been more than 5 minutes, save and remove it
                     if (record.EndTime.HasValue && (now - record.EndTime.Value).TotalMinutes > 5)
                     {
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Marking {record.ProcessName} for removal (ended {(now - record.EndTime.Value).TotalMinutes:F1} minutes ago)");
                         recordsToRemove.Add(record);
                     }
                     // If record doesn't have end time but hasn't been updated in 5 minutes, close it
                     else if (!record.EndTime.HasValue && record.Duration.TotalSeconds > 0 && 
                              (now - record.StartTime - record.Duration).TotalMinutes > 5)
                     {
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Marking {record.ProcessName} for removal (inactive for {((now - record.StartTime - record.Duration).TotalMinutes):F1} minutes)");
                         record.EndTime = record.StartTime + record.Duration;
                         recordsToRemove.Add(record);
                     }
@@ -222,18 +234,21 @@ namespace ScreenTimeTracker.Services
                 {
                     try
                     {
-                        System.Diagnostics.Debug.WriteLine($"Saving and removing old record: {record.ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Saving and removing old record: {record.ProcessName} (Duration: {record.Duration.TotalSeconds:F1}s)");
                         lock (_databaseService)
                         {
                             _databaseService.SaveRecord(record);
                         }
                         _records.Remove(record);
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Successfully removed {record.ProcessName}");
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Error saving old record: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ERROR saving old record {record.ProcessName}: {ex.Message}");
                     }
                 }
+                
+                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ===== Timer_Elapsed complete, records count now: {_records.Count} =====");
             }
             catch (Exception ex)
             {

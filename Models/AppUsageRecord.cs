@@ -58,20 +58,26 @@ namespace ScreenTimeTracker.Models
             "ApplicationFrameHost",
             "SystemSettings",
             "TextInputHost",
+            "SearchUI",
+            "Cortana",
+            "SearchApp",
             
-            // Terminals
+            // Terminals and command line
             "WindowsTerminal",
             "cmd",
             "powershell",
             "pwsh",
             "conhost",
+            "wt",
             
             // Windows store and system apps
             "WinStore.App",
             "LockApp",
             "LogonUI",
+            "UserOOBEBroker",
+            "osk", // On-screen keyboard
             
-            // System processes
+            // Core system processes
             "fontdrvhost",
             "dwm",
             "csrss",
@@ -91,15 +97,43 @@ namespace ScreenTimeTracker.Models
             "spoolsv",
             "TabTip",
             "TabTip32",
+            "winlogon",
+            "wlanext",
+            "wuauclt",
+            "lsaiso",
+            "csrss",
+            "wininit",
+            "runtimebroker",
+            "backgroundTaskHost",
             
-            // Background services
+            // Windows Defender and Security
+            "MsMpEng",
+            "SecurityHealthService",
+            "SecurityHealthSystray",
+            "smartscreen",
+            "MpCmdRun",
+            "NisSrv",
+            "MpSigStub",
+            
+            // Windows Update and Maintenance
+            "TiWorker",
+            "UsoClient",
+            "WaasMedicAgent",
+            "SIHClient",
+            "UpdateAssistant",
+            "MediaCreationTool",
+            "WindowsUpdateBox",
+            
+            // Background services and drivers
             "igfxEM",
             "igfxHK",
             "igfxTray",
+            "igfxCUIService",
             "audiodg",
             "smss",
             "lsass",
             "NVDisplay.Container",
+            "nvcontainer",
             "ONENOTEM",
             "SettingSyncHost",
             "uhssvc",
@@ -109,15 +143,77 @@ namespace ScreenTimeTracker.Models
             "PresentationFontCache",
             "SearchIndexer",
             "SgrmBroker",
-            "ShellExperienceHost",
-            "smartscreen",
             "SpeechRuntime",
             "startup",
             "System",
             "SystemSettingsBroker",
-            "winlogon",
-            "wlanext",
-            "wuauclt"
+            
+            // Graphics and Hardware
+            "nvtray",
+            "nvdisplay.container",
+            "RtkAuUService64",
+            "RtkAudioService",
+            "IAStorIcon",
+            "IntelAudioService",
+            "AdobeUpdateService",
+            
+            // Cloud and Sync Services (background only)
+            "OneDrive",
+            "GoogleDriveFS",
+            "Dropbox",
+            "iCloudServices",
+            "SkypeHost",
+            
+            // Microsoft Office background services
+            "OfficeClickToRun",
+            "msoia",
+            "MSOSYNC",
+            "MicrosoftEdgeUpdate",
+            
+            // Antivirus background processes (common ones)
+            "AvastSvc",
+            "avp",
+            "avgnt",
+            "McShield",
+            "nortonsecurity",
+            "SentinelAgent",
+            "CarbonBlack",
+            
+            // Windows tools and dialogs
+            "SnippingTool",
+            "EaseOfAccessDialog",
+            "Razer Synapse Service Process",
+            "Magnify", // Windows Magnifier
+            "Narrator", // Windows Narrator
+            "Notepad", // Basic notepad for quick notes
+            "mspaint", // MS Paint
+            "charmap", // Character Map
+            "calc", // Windows Calculator
+            "SoundVolumeView",
+            
+            // Network and connectivity
+            "NetworkManager",
+            "WifiManager",
+            "BluetoothUserService",
+            "PhoneExperienceHost",
+            
+            // Gaming platform launchers/background services
+            "VimeWorld",
+            "Steam", // Steam when just running in background
+            "EpicGamesLauncher",
+            "Origin",
+            "Battle.net",
+            "RiotClientServices",
+            
+            // System utilities that run briefly
+            "msiexec",
+            "InstallUtil",
+            "MicrosoftEdgeCP",
+            "WWAHost",
+            "Video.UI",
+            "Photos",
+            "Movies & TV",
+            "Groove Music"
         };
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -1354,7 +1450,34 @@ namespace ScreenTimeTracker.Models
             return StartTime.Date == date.Date;
         }
 
-        public bool ShouldTrack => !_ignoredProcesses.Contains(ProcessName.ToLower());
+        public bool ShouldTrack => !_ignoredProcesses.Contains(ProcessName.ToLower()) && !IsTemporaryProcess(ProcessName);
+
+        /// <summary>
+        /// Checks if a process name appears to be a temporary file or installer
+        /// </summary>
+        private static bool IsTemporaryProcess(string processName)
+        {
+            if (string.IsNullOrEmpty(processName))
+                return false;
+
+            // Convert to lowercase for comparison
+            string lowerName = processName.ToLower();
+
+            // Check for patterns that indicate temporary processes
+            return
+                // Random hex/numeric names (like "1747797458F8MB2zabRaze...")
+                (lowerName.Length > 15 && System.Text.RegularExpressions.Regex.IsMatch(lowerName, @"^[0-9a-f]{8,}")) ||
+                
+                // Files ending with .tmp
+                lowerName.EndsWith(".tmp") ||
+                
+                // Process names starting with numbers and containing random characters
+                (lowerName.Length > 20 && System.Text.RegularExpressions.Regex.IsMatch(lowerName, @"^[0-9]{5,}.*[a-z0-9]{5,}")) ||
+                
+                // Setup/installer temporary files
+                (lowerName.Contains("setup") && lowerName.Contains(".tmp")) ||
+                (lowerName.Contains("install") && lowerName.Length > 25);
+        }
 
         public void SetFocus(bool isFocused)
         {

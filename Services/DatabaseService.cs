@@ -163,6 +163,7 @@ namespace ScreenTimeTracker.Services
         private void InitializeInMemoryDatabase()
         {
             // Create basic schema for in-memory database
+            _connection.Open();
             using var command = _connection.CreateCommand();
             command.CommandText = @"
                 CREATE TABLE IF NOT EXISTS app_usage (
@@ -172,9 +173,12 @@ namespace ScreenTimeTracker.Services
                     app_name TEXT,
                     start_time TEXT NOT NULL,
                     end_time TEXT,
-                    duration INTEGER
+                    duration INTEGER,
+                    is_focused INTEGER DEFAULT 0,
+                    last_updated TEXT
                 );";
             command.ExecuteNonQuery();
+            _connection.Close();
             Debug.WriteLine("In-memory database initialized with basic schema");
         }
 
@@ -861,67 +865,132 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetAggregatedRecordsForDate(DateTime date)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ===== GetAggregatedRecordsForDate called for {date:yyyy-MM-dd} =====");
+            
+            var processGroups = new Dictionary<string, AppUsageRecord>();
+
+            if (_useInMemoryFallback)
             {
-                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get aggregated records operation");
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Using in-memory fallback");
+                var records = _memoryFallbackRecords.Where(r => r.Date.Date == date.Date).ToList();
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Found {records.Count} records in memory fallback");
+                return records;
+            }
+
+            if (!_initializedSuccessfully)
+            {
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Database not initialized successfully");
                 return new List<AppUsageRecord>();
             }
-                
-            var records = new List<AppUsageRecord>();
-            
+
             try
             {
-                var dateString = date.ToString("yyyy-MM-dd");
+                var query = @"
+                    SELECT 
+                        id,
+                        process_name, 
+                        app_name,
+                        start_time, 
+                        end_time, 
+                        duration_ms,
+                        is_focused,
+                        last_updated
+                    FROM usage_records 
+                    WHERE DATE(start_time) = DATE(?) 
+                    ORDER BY process_name, start_time";
+
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Executing query: {query}");
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Query parameter: {date:yyyy-MM-dd}");
+
+                using var command = new SqliteCommand(query, _connection);
+                command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+
+                using var reader = command.ExecuteReader();
+                int recordCount = 0;
                 
-                // Open connection
-                _connection.Open();
-                
-                using (var command = _connection.CreateCommand())
+                while (reader.Read())
                 {
-                    command.CommandText = @"
-                        SELECT process_name, app_name, SUM(duration)
-                        FROM app_usage
-                        WHERE date = $date
-                        GROUP BY process_name
-                        ORDER BY SUM(duration) DESC;";
-                    command.Parameters.AddWithValue("$date", dateString);
-                    
-                    using (var reader = command.ExecuteReader())
+                    recordCount++;
+                    try
                     {
-                        while (reader.Read())
+                        var processName = reader.GetString(reader.GetOrdinal("process_name"));
+                        var startTimeStr = reader.GetString(reader.GetOrdinal("start_time"));
+                        var dbStartTime = DateTime.Parse(startTimeStr);
+                        var durationMs = reader.GetInt64(reader.GetOrdinal("duration_ms"));
+                        var isFocused = reader.GetBoolean(reader.GetOrdinal("is_focused"));
+                        var lastUpdatedStr = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? reader.GetString(reader.GetOrdinal("last_updated")) : null;
+                        var lastUpdated = lastUpdatedStr != null ? DateTime.Parse(lastUpdatedStr) : (DateTime?)null;
+
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Processing DB record #{recordCount}:");
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - ProcessName: {processName}");
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - StartTime: {dbStartTime:yyyy-MM-dd HH:mm:ss}");
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Duration (ms): {durationMs}");
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - IsFocused: {isFocused}");
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - LastUpdated: {lastUpdated}");
+
+                        if (processGroups.ContainsKey(processName))
                         {
+                            // Aggregate with existing record
+                            var existingRecord = processGroups[processName];
+                            var additionalDuration = TimeSpan.FromMilliseconds(durationMs);
+                            existingRecord._accumulatedDuration += additionalDuration;
+                            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Added to existing record, new total: {existingRecord._accumulatedDuration.TotalSeconds:F1}s");
+                        }
+                        else
+                        {
+                            // Create a new record
                             var record = new AppUsageRecord
                             {
-                                ProcessName = reader.GetString(0),
-                                ApplicationName = !reader.IsDBNull(1) ? reader.GetString(1) : reader.GetString(0),
-                                Date = date
+                                Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                ProcessName = processName,
+                                ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
+                                Date = date, // Use date for the Date field
+                                StartTime = dbStartTime, // Use actual start time from database
+                                IsFocused = isFocused,
+                                LastUpdated = lastUpdated
                             };
                             
-                            if (!reader.IsDBNull(2))
+                            if (!reader.IsDBNull(reader.GetOrdinal("end_time")))
                             {
-                                // Convert milliseconds to TimeSpan
-                                record._accumulatedDuration = TimeSpan.FromMilliseconds(reader.GetInt64(2));
+                                record.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
                             }
                             
-                            records.Add(record);
+                            record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
+                            
+                            // CRITICAL: Historical records should NEVER be marked as focused
+                            if (date.Date < DateTime.Today && record.IsFocused)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] WARNING: Historical record {processName} was marked as focused, correcting to unfocused");
+                                record.IsFocused = false;
+                            }
+                            
+                            // Add to our dictionary
+                            processGroups[processName] = record;
+                            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Created new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}");
                         }
                     }
+                    catch (Exception parseEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ERROR parsing record #{recordCount}: {parseEx.Message}");
+                    }
                 }
+
+                var result = processGroups.Values.ToList();
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ===== Query complete: processed {recordCount} DB records, returning {result.Count} aggregated records =====");
+                
+                foreach (var record in result)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Final record: {record.ProcessName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}, Date: {record.Date:yyyy-MM-dd}");
+                }
+                
+                return result;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error getting aggregated records: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ERROR in GetAggregatedRecordsForDate: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Stack trace: {ex.StackTrace}");
+                return new List<AppUsageRecord>();
             }
-            finally
-            {
-                // Make sure connection is closed
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
-            }
-            
-            return records;
         }
 
         /// <summary>

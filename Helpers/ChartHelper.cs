@@ -193,9 +193,23 @@ namespace ScreenTimeTracker.Helpers
                 }
                 
                 System.Diagnostics.Debug.WriteLine($"Filtered to hours {filteredStartHour}-{filteredEndHour} based on usage");
-                // Do not include future hours beyond now
-                int nowHour = DateTime.Now.Hour;
-                if (filteredEndHour > nowHour) filteredEndHour = nowHour;
+                
+                // Only limit to current hour if we're viewing TODAY's data
+                // For historical dates, show all hours that have data
+                if (selectedDate.Date == DateTime.Today)
+                {
+                    // Do not include future hours beyond now (only for today)
+                    int nowHour = DateTime.Now.Hour;
+                    if (filteredEndHour > nowHour) 
+                    {
+                        filteredEndHour = nowHour;
+                        System.Diagnostics.Debug.WriteLine($"Limited end hour to current hour {nowHour} for today's data");
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"Showing full day for historical date {selectedDate:yyyy-MM-dd}");
+                }
 
                 // Set up series and labels for the chart
                 var values = new List<double>();

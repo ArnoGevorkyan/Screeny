@@ -436,41 +436,39 @@ namespace ScreenTimeTracker
                     return;
                 }
 
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] UpdateTimer_Tick at {DateTime.Now:HH:mm:ss.fff} - updating durations");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== UpdateTimer_Tick at {DateTime.Now:HH:mm:ss.fff} =====");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current view state:");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Selected Date: {_selectedDate:yyyy-MM-dd}");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Today's Date: {DateTime.Today:yyyy-MM-dd}");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Is Date Range: {_isDateRangeSelected}");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - End Date: {(_selectedEndDate?.ToString("yyyy-MM-dd") ?? "null")}");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - UI Records Count: {_usageRecords.Count}");
         
                 // Use a local variable for safer thread interaction
                 _timerTickCounter++;
                 int localTickCounter = _timerTickCounter;
         
                 // Debug: Show all current records and their focus states
-                System.Diagnostics.Debug.WriteLine($"Current UI records (count={_usageRecords.Count}):");
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current UI records:");
                 foreach (var rec in _usageRecords)
                 {
-                    System.Diagnostics.Debug.WriteLine($"  - {rec.ProcessName}: IsFocused={rec.IsFocused}, Duration={rec.Duration.TotalSeconds:F1}s");
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - {rec.ProcessName}: IsFocused={rec.IsFocused}, Duration={rec.Duration.TotalSeconds:F1}s, Date={rec.Date:yyyy-MM-dd}, StartTime={rec.StartTime:yyyy-MM-dd HH:mm:ss}");
                 }
-        
-                // Get the LIVE focused application from the tracking service
+                
+                // Get the current focused app from the tracking service
                 var liveFocusedApp = _trackingService?.CurrentRecord;
-                AppUsageRecord? recordToUpdate = null;
-
                 if (liveFocusedApp != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Live focused app from tracking service: {liveFocusedApp.ProcessName}, IsFocused={liveFocusedApp.IsFocused}");
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Live focused app from service: {liveFocusedApp.ProcessName} (Date: {liveFocusedApp.Date:yyyy-MM-dd}, StartTime: {liveFocusedApp.StartTime:yyyy-MM-dd HH:mm:ss})");
                     
-                    // VALIDATION LOGGING: Show ALL records before searching
-                    System.Diagnostics.Debug.WriteLine($"[VALIDATION] Searching for '{liveFocusedApp.ProcessName}' in _usageRecords (count={_usageRecords.Count}):");
-                    foreach (var rec in _usageRecords)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[VALIDATION]   - {rec.ProcessName}: Date={rec.Date:yyyy-MM-dd}, StartTime={rec.StartTime:yyyy-MM-dd HH:mm:ss}, Duration={rec.Duration.TotalSeconds:F1}s");
-                    }
-                    
-                    // Safely access collection - check if disposed first
-                    if (_disposed || _usageRecords == null) return;
+                    AppUsageRecord? recordToUpdate = null;
                     
                     // Find if this app exists in the currently displayed list (_usageRecords)
                     // Match based on ProcessName for simplicity in aggregated views
                     // Use ToList to get a snapshot to avoid collection modified exception
                     var snapshot = _usageRecords.ToList();
+                    
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Searching for matching record in {snapshot.Count} UI records...");
                     
                     // CRITICAL FIX: Only match records that are from TODAY
                     // This prevents updating historical records when viewing past dates
@@ -478,27 +476,29 @@ namespace ScreenTimeTracker
                         .FirstOrDefault(r => r.ProcessName.Equals(liveFocusedApp.ProcessName, StringComparison.OrdinalIgnoreCase) 
                                           && r.IsFromDate(DateTime.Today));
                     
-                    System.Diagnostics.Debug.WriteLine($"[VALIDATION] Record lookup result: {(recordToUpdate != null ? $"Found {recordToUpdate.ProcessName} from {recordToUpdate.Date:yyyy-MM-dd}" : "No matching record from today")}");
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Record lookup result: {(recordToUpdate != null ? $"Found {recordToUpdate.ProcessName} from {recordToUpdate.Date:yyyy-MM-dd}" : "No matching record from today")}");
 
                     if (recordToUpdate != null && !_disposed)
                     {
                         // COMPREHENSIVE LOGGING TO TRACE THE ISSUE
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] ===== FOUND MATCHING RECORD =====");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] Current view date: {_selectedDate:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] Today's date: {DateTime.Today:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] Record details:");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - ProcessName: {recordToUpdate.ProcessName}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - Record.Date: {recordToUpdate.Date:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - Record.StartTime: {recordToUpdate.StartTime:yyyy-MM-dd HH:mm:ss}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - Record.ID: {recordToUpdate.Id}");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - Record.Duration: {recordToUpdate.Duration.TotalSeconds:F1}s");
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG]   - IsFromDate(Today): {recordToUpdate.IsFromDate(DateTime.Today)}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== FOUND MATCHING RECORD =====");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current view date: {_selectedDate:yyyy-MM-dd}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Today's date: {DateTime.Today:yyyy-MM-dd}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Record details:");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - ProcessName: {recordToUpdate.ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.Date: {recordToUpdate.Date:yyyy-MM-dd}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.StartTime: {recordToUpdate.StartTime:yyyy-MM-dd HH:mm:ss}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.ID: {recordToUpdate.Id}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.Duration: {recordToUpdate.Duration.TotalSeconds:F1}s");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.IsFocused: {recordToUpdate.IsFocused}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record._accumulatedDuration: {recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - IsFromDate(Today): {recordToUpdate.IsFromDate(DateTime.Today)}");
                         
                         // CRITICAL FIX: Only update duration if the record is from TODAY
                         // This prevents past date records from being incremented
                         if (!recordToUpdate.IsFromDate(DateTime.Today))
                         {
-                            System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] BLOCKING UPDATE - Record is from {recordToUpdate.Date:yyyy-MM-dd}, not today");
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] BLOCKING UPDATE - Record is from {recordToUpdate.Date:yyyy-MM-dd}, not today");
                             return; // Exit the entire method, not just this iteration
                         }
                         
@@ -507,54 +507,63 @@ namespace ScreenTimeTracker
                         bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
                                                           DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
                         
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] View validation:");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - isViewingToday: {isViewingToday}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - isViewingRangeIncludingToday: {isViewingRangeIncludingToday}");
+                        
                         if (!isViewingToday && !isViewingRangeIncludingToday)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] BLOCKING UPDATE - Not viewing today (viewing {_selectedDate:yyyy-MM-dd})");
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] BLOCKING UPDATE - Not viewing today (viewing {_selectedDate:yyyy-MM-dd})");
                             return; // Exit the entire method
                         }
                         
-                        System.Diagnostics.Debug.WriteLine($"[TIMER_DEBUG] ALLOWING UPDATE - All checks passed");
-                        
-                        // Log the process name and focus state for debugging
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] UpdateTimer_Tick at {DateTime.Now:HH:mm:ss.fff} - updating durations");
-                        System.Diagnostics.Debug.WriteLine($"  - Live focused app: {liveFocusedApp.ProcessName}");
-                        System.Diagnostics.Debug.WriteLine($"  - Matching record: {recordToUpdate.ProcessName}, Date: {recordToUpdate.Date:yyyy-MM-dd}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ALLOWING UPDATE - All checks passed");
                         
                         // IMPORTANT: Check if this record matches the CURRENTLY focused app
                         bool isActuallyFocused = liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
                         
-                        System.Diagnostics.Debug.WriteLine($"Is {recordToUpdate.ProcessName} actually focused? {isActuallyFocused}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Focus comparison:");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Live focused app: {liveFocusedApp.ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Matching record: {recordToUpdate.ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Is actually focused: {isActuallyFocused}");
                         
                         if (isActuallyFocused)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Incrementing duration for ACTUALLY FOCUSED record: {recordToUpdate.ProcessName}");
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] INCREMENTING duration for ACTUALLY FOCUSED record: {recordToUpdate.ProcessName}");
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Before increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
                         
                             // Increment duration every second for accuracy
                             recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
+                            
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] After increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
                         }
                         else
                         {
-                            System.Diagnostics.Debug.WriteLine($"NOT incrementing duration for {recordToUpdate.ProcessName} - it's not the current focused app!");
+                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] NOT incrementing duration for {recordToUpdate.ProcessName} - it's not the current focused app!");
                             
                             // Make sure it's marked as unfocused in the UI collection
                             if (recordToUpdate.IsFocused)
                             {
-                                System.Diagnostics.Debug.WriteLine($"Correcting focus state for {recordToUpdate.ProcessName} - setting to unfocused");
+                                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Correcting focus state for {recordToUpdate.ProcessName} - setting to unfocused");
                                 recordToUpdate.SetFocus(false);
                             }
                         }
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine($"Live focused app {liveFocusedApp.ProcessName} not found in current view or window disposed");
+                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Live focused app {liveFocusedApp.ProcessName} not found in current view or window disposed");
                     }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] No live focused app from tracking service");
                 }
                 
                 // --- CHANGE: Only update UI based on timer interval, not duration increment --- 
                 // Periodically force UI refresh to ensure chart updates correctly.
                 if (localTickCounter >= 10 && !_disposed) // Reduced from 15 to 10 seconds for more frequent updates
                 {
-                    System.Diagnostics.Debug.WriteLine($"Periodic UI Update Triggered (tickCounter={localTickCounter})");
+                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Periodic UI Update Triggered (tickCounter={localTickCounter})");
                     _timerTickCounter = 0; // Reset counter
                     
                     // Update UI using dispatcher to ensure we're on the UI thread
@@ -576,6 +585,8 @@ namespace ScreenTimeTracker
                         }
                     });
                 }
+                
+                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== UpdateTimer_Tick complete =====");
             }
             catch (Exception ex)
             {
@@ -642,10 +653,10 @@ namespace ScreenTimeTracker
                             // CRITICAL: Only update focus if the record is from TODAY
                             // This prevents historical records from tracking real-time duration
                             if (existingRecord.IsFromDate(DateTime.Today))
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Focus state changed for {existingRecord.ProcessName}: {existingRecord.IsFocused} -> {record.IsFocused}");
-                                existingRecord.SetFocus(record.IsFocused);
-                                recordsChanged = true;
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Focus state changed for {existingRecord.ProcessName}: {existingRecord.IsFocused} -> {record.IsFocused}");
+                            existingRecord.SetFocus(record.IsFocused);
+                            recordsChanged = true;
                             }
                             else
                             {
@@ -2002,10 +2013,10 @@ namespace ScreenTimeTracker
                             // CRITICAL: Only set focus if the record is from TODAY
                             // This prevents historical records from tracking real-time duration
                             if (uiRecord.IsFromDate(DateTime.Today))
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Window Changed: Setting focus on {uiRecord.ProcessName}");
-                                uiRecord.SetFocus(true);
-                                anyChanges = true;
+                    {
+                            System.Diagnostics.Debug.WriteLine($"Window Changed: Setting focus on {uiRecord.ProcessName}");
+                            uiRecord.SetFocus(true);
+                            anyChanges = true;
                             }
                             else
                             {
