@@ -21,6 +21,9 @@ using Windows.Foundation.Collections;
 using ScreenTimeTracker.Services; // Assuming WindowTrackingService is here
 using System.Threading.Tasks;
 using System.Threading;
+using Windows.ApplicationModel;
+using Microsoft.Windows.AppLifecycle;
+using Windows.Services.Store;
 
 namespace ScreenTimeTracker;
 
@@ -184,10 +187,32 @@ public partial class App : Application
     /// Invoked when the application is launched.
     /// </summary>
     /// <param name="args">Details about the launch request and process.</param>
-    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
         try
         {
+            // --- Automatic Microsoft Store update check ---
+            try
+            {
+                // Skip update logic when running a side-loaded/dev build
+                if (!Windows.ApplicationModel.Package.Current.IsDevelopmentMode)
+                {
+                    bool updateInstalled = await Services.StoreUpdateService.CheckAndApplyUpdatesAsync();
+
+                    if (updateInstalled)
+                    {
+                        WriteToLog("A newer version was installed. Restarting application …");
+                        Microsoft.Windows.AppLifecycle.AppInstance.Restart("");
+                        return; // Terminate further launch actions; the process will exit shortly
+                    }
+                }
+            }
+            catch (Exception updEx)
+            {
+                WriteToLog($"Store update check failed: {updEx.Message}");
+                // Continue normal launch so the app is still usable
+            }
+
             WriteToLog("OnLaunched method called - attempting to create the main window");
             
             // Add handler for unobserved task exceptions
@@ -441,4 +466,5 @@ public partial class App : Application
         }
     }
 }
+
 

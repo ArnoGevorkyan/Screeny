@@ -360,6 +360,17 @@ namespace ScreenTimeTracker.Models
                     return;
                 }
 
+                // Special case: Spotify's Store package assets are a stylised note; prefer window-handle icon (curved bars)
+                if (ProcessName.Equals("Spotify", StringComparison.OrdinalIgnoreCase))
+                {
+                    iconLoaded = await TryLoadIconFromWindowHandle();
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Loaded Spotify icon from window handle (preferred). Returning early.");
+                        return;
+                    }
+                }
+
                 // 4) Start-menu shortcut (.lnk) fallback
                 iconLoaded = await TryLoadIconFromStartMenuShortcut();
                 if (iconLoaded)
