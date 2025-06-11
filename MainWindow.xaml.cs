@@ -114,6 +114,8 @@ namespace ScreenTimeTracker
 
         private TrayIconHelper? _trayIconHelper; // Add field for TrayIconHelper
 
+        private bool _iconsRefreshedOnce = false; // flag to ensure refresh runs only once
+
         public MainWindow()
         {
             _disposed = false;
@@ -1923,6 +1925,26 @@ namespace ScreenTimeTracker
                 }
                 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
+
+                // Schedule a one-time icon refresh so updated pipeline can replace old cached icons
+                if (!_iconsRefreshedOnce)
+                {
+                    _iconsRefreshedOnce = true;
+                    // Delay slightly to let initial icons finish binding and avoid UI jank
+                    await Task.Delay(2000);
+                    try
+                    {
+                        foreach (var rec in _usageRecords)
+                        {
+                            rec.ClearIcon();
+                            rec.LoadAppIconIfNeeded();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Icon auto-refresh error: {ex.Message}");
+                    }
+                }
             }
             catch (ObjectDisposedException odEx) // Catch specific expected exceptions first
             {

@@ -334,55 +334,70 @@ namespace ScreenTimeTracker.Models
             try
             {
                 System.Diagnostics.Debug.WriteLine($"Loading icon for {ProcessName}");
-                
+
                 bool iconLoaded = false;
-                
-                // 1) UWP / Store apps that may be hosted in ApplicationFrameHost etc.
-                iconLoaded = await TryLoadUwpAppIcon();
-                if (iconLoaded)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Successfully loaded UWP app icon for {ProcessName}");
-                    return;
-                }
-                
-                // 2) Try to resolve MSIX/Store package via GetPackageFullName API (static logo assets)
+
+                // 1) Package assets (MSIX / UWP). Prefer logo assets to avoid notification overlays.
                 iconLoaded = await TryLoadIconFromPackage();
                 if (iconLoaded)
                 {
                     System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from package for {ProcessName}");
                     return;
                 }
-                
-                // 3) Well-known hard-coded system app locations
+
+                iconLoaded = await TryLoadUwpAppIcon();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded UWP app icon for {ProcessName}");
+                    return;
+                }
+
+                // 2) WindowsApps directory heuristic scan (covers most Store-installed Win32 apps)
+                iconLoaded = await TryLoadIconFromWindowsApps();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from WindowsApps for {ProcessName}");
+                    return;
+                }
+
+                // 4) Start-menu shortcut (.lnk) fallback
+                iconLoaded = await TryLoadIconFromStartMenuShortcut();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon via start-menu shortcut for {ProcessName}");
+                    return;
+                }
+
+                // 5) Well-known system/external path fallback (classic Notepad, etc.)
                 iconLoaded = await TryGetWellKnownSystemIcon();
                 if (iconLoaded)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Successfully loaded well-known system icon for {ProcessName}");
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded well-known fallback icon for {ProcessName}");
                     return;
                 }
-                
-                // 4) Executable-path icon extraction for classic Win32 apps
+
+                // 6) Executable-resource extraction (SHGetFileInfo / ExtractAssociatedIcon)
                 string? exePath = GetExecutablePath();
                 if (!string.IsNullOrEmpty(exePath))
                 {
                     System.Diagnostics.Debug.WriteLine($"Found executable path: {exePath}");
-                    
-                    // Try standard icon extraction methods
+
+                    // Prefer SHGetFileInfo first (small performance win)
                     iconLoaded = await TryLoadIconWithSHGetFileInfo(exePath);
                     if (iconLoaded)
                     {
                         System.Diagnostics.Debug.WriteLine($"Successfully loaded icon with SHGetFileInfo for {ProcessName}");
                         return;
                     }
-                    
+
+                    // Then ExtractAssociatedIcon for richer icons
                     iconLoaded = await TryLoadIconWithExtractAssociatedIcon(exePath);
                     if (iconLoaded)
                     {
                         System.Diagnostics.Debug.WriteLine($"Successfully loaded icon with ExtractAssociatedIcon for {ProcessName}");
                         return;
                     }
-                    
-                    // If the file is a DLL, try the DLL icon extractor
+
                     if (exePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                     {
                         iconLoaded = await TryLoadIconFromDll(exePath);
@@ -393,44 +408,16 @@ namespace ScreenTimeTracker.Models
                         }
                     }
                 }
-                
-                // 5) Start-menu shortcut (.lnk) fallback (fast and usually available for MSIX apps)
-                if (!iconLoaded)
+
+                // 7) Window-handle icon (very last, may include overlays)
+                iconLoaded = await TryLoadIconFromWindowHandle();
+                if (iconLoaded)
                 {
-                    iconLoaded = await TryLoadIconFromStartMenuShortcut();
-                    if (iconLoaded)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon via start-menu shortcut for {ProcessName}");
-                        return;
-                    }
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from window handle for {ProcessName}");
+                    return;
                 }
-                
-                // 6) Generic search inside WindowsApps directory (in case package API or start-menu lookup failed)
-                if (!iconLoaded)
-                {
-                    iconLoaded = await TryLoadIconFromWindowsApps();
-                    if (iconLoaded)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from WindowsApps for {ProcessName}");
-                        return;
-                    }
-                }
-                
-                // 7) LAST RESORT: dynamic window-handle icon (may include badges)
-                if (!iconLoaded)
-                {
-                    iconLoaded = await TryLoadIconFromWindowHandle();
-                    if (iconLoaded)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from window handle for {ProcessName}");
-                        return;
-                    }
-                }
-                
-                if (!iconLoaded)
-                {
-                    System.Diagnostics.Debug.WriteLine($"All icon loading methods failed for {ProcessName}");
-                }
+
+                System.Diagnostics.Debug.WriteLine($"All icon loading methods failed for {ProcessName}");
             }
             catch (Exception ex)
             {
@@ -970,6 +957,13 @@ namespace ScreenTimeTracker.Models
                     ref shfi,
                     (uint)Marshal.SizeOf(shfi),
                     smallFlags);
+
+                // Early rejection of generic placeholder (system default icon index 0)
+                if (result != IntPtr.Zero && shfi.iIcon == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Generic placeholder icon detected for {ProcessName}; continuing fallback chain");
+                    return false; // treat as failure so pipeline continues
+                }
 
                 // retry with large icon if no small icon returned
                 if (result == IntPtr.Zero || shfi.hIcon == IntPtr.Zero)
@@ -2043,7 +2037,7 @@ namespace ScreenTimeTracker.Models
                     if (!keywords.Any(k => dirNameLower.Contains(k)))
                         continue;
 
-                    string[] assetPatterns = { "*scale-100*.png", "*scale-200*.png", "*logo*.png", "*tile*.png", "*.ico", "*.exe" };
+                    string[] assetPatterns = { "*.exe", "*.ico", "*scale-400*.png", "*scale-300*.png", "*scale-200*.png", "*scale-100*.png", "*logo*.png", "*tile*.png" };
 
                     foreach (var pattern in assetPatterns)
                     {
@@ -2274,5 +2268,16 @@ namespace ScreenTimeTracker.Models
         }
 
         #endregion
+
+        public void ClearIcon()
+        {
+            // Reset the cached icon so that a fresh load can occur
+            if (_appIcon != null)
+            {
+                _appIcon = null;
+                NotifyPropertyChanged(nameof(AppIcon));
+            }
+            _isLoadingIcon = false;
+        }
     }
 } 
