@@ -36,6 +36,31 @@ namespace ScreenTimeTracker.Models
         private const uint SHGFI_USEFILEATTRIBUTES = 0x10;
         private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
+        // --- Window-handle icon extraction constants ---
+        private const int WM_GETICON = 0x007F;
+        private const int ICON_SMALL = 0;
+        private const int ICON_BIG = 1;
+        private const int ICON_SMALL2 = 2;
+
+        private const int GCL_HICON = -14;
+        private const int GCL_HICONSM = -34;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+        // 64-bit version
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW", SetLastError = true)]
+        private static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+
+        // 32-bit version
+        [DllImport("user32.dll", EntryPoint = "GetClassLongW", SetLastError = true)]
+        private static extern uint GetClassLongPtr32(IntPtr hWnd, int nIndex);
+
+        private static IntPtr GetClassLongPtrSafe(IntPtr hWnd, int nIndex)
+        {
+            return IntPtr.Size == 8 ? GetClassLongPtr64(hWnd, nIndex) : new IntPtr((long)GetClassLongPtr32(hWnd, nIndex));
+        }
+
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         private struct SHFILEINFO
         {
@@ -312,6 +337,14 @@ namespace ScreenTimeTracker.Models
                 
                 bool iconLoaded = false;
                 
+                // 0) Attempt to load the icon directly from the window handle
+                iconLoaded = await TryLoadIconFromWindowHandle();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from window handle for {ProcessName}");
+                    return;
+                }
+                
                 // First, check for UWP apps which need special handling
                 iconLoaded = await TryLoadUwpAppIcon();
                 if (iconLoaded)
@@ -361,18 +394,24 @@ namespace ScreenTimeTracker.Models
                     }
                 }
                 
-                // As a last resort, try to load a generic icon from shell32.dll
+                // 4) Generic search in WindowsApps directory for packaged apps (Spotify, Arc, etc.)
                 if (!iconLoaded)
                 {
-                    string shell32Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shell32.dll");
-                    if (File.Exists(shell32Path))
-                    {
-                        iconLoaded = await TryLoadIconFromDll(shell32Path);
+                    iconLoaded = await TryLoadIconFromWindowsApps();
                         if (iconLoaded)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Used generic shell32.dll icon for {ProcessName}");
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from WindowsApps for {ProcessName}");
                             return;
                         }
+                }
+                
+                if (!iconLoaded)
+                {
+                    iconLoaded = await TryLoadIconFromStartMenuShortcut();
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon via start-menu shortcut for {ProcessName}");
+                        return;
                     }
                 }
                 
@@ -894,6 +933,23 @@ namespace ScreenTimeTracker.Models
         {
             try
             {
+                // Determine appropriate flags – we need to omit SHGFI_USEFILEATTRIBUTES when the
+                // path is a shortcut (.lnk) so that the shell resolves the link target and gives us
+                // the real application icon (instead of the generic "blank file" icon).
+
+                bool isShortcut = exePath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase);
+
+                uint smallFlags = SHGFI_ICON | SHGFI_SMALLICON;
+                uint largeFlags = SHGFI_ICON | SHGFI_LARGEICON;
+
+                if (!isShortcut)
+                {
+                    // For executables/DLLs we can request by file-type only – this avoids needing
+                    // full read permission to the file (important inside %ProgramFiles%\WindowsApps).
+                    smallFlags |= SHGFI_USEFILEATTRIBUTES;
+                    largeFlags |= SHGFI_USEFILEATTRIBUTES;
+                }
+
                 // Use SHGetFileInfo to get the icon
                 SHFILEINFO shfi = new SHFILEINFO();
                 IntPtr result = SHGetFileInfo(
@@ -901,7 +957,7 @@ namespace ScreenTimeTracker.Models
                     FILE_ATTRIBUTE_NORMAL,
                     ref shfi,
                     (uint)Marshal.SizeOf(shfi),
-                    SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+                    smallFlags);
 
                 // retry with large icon if no small icon returned
                 if (result == IntPtr.Zero || shfi.hIcon == IntPtr.Zero)
@@ -912,12 +968,42 @@ namespace ScreenTimeTracker.Models
                         FILE_ATTRIBUTE_NORMAL,
                         ref shfi,
                         (uint)Marshal.SizeOf(shfi),
-                        SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES);
+                        largeFlags);
                 }
 
                 if (result == IntPtr.Zero || shfi.hIcon == IntPtr.Zero)
                 {
                     System.Diagnostics.Debug.WriteLine($"SHGetFileInfo failed for {ProcessName}");
+                    // As a last attempt enumerate all icon resources in the exe (max 20)
+                    int iconCount = ExtractIconEx(exePath, -1, null!, null!, 0);
+                    iconCount = Math.Min(iconCount, 20);
+                    if (iconCount > 0)
+                    {
+                        IntPtr[] largeArr = new IntPtr[1];
+                        IntPtr[] smallArr = new IntPtr[1];
+                        for (int i = 0; i < iconCount; i++)
+                        {
+                            int ret = ExtractIconEx(exePath, i, largeArr, smallArr, 1);
+                            IntPtr hIconTry = smallArr[0] != IntPtr.Zero ? smallArr[0] : largeArr[0];
+                            if (ret > 0 && hIconTry != IntPtr.Zero)
+                            {
+                                using (var ic = Icon.FromHandle(hIconTry))
+                                using (var bmp2 = ic.ToBitmap())
+                                {
+                                    var img2 = await ConvertBitmapToBitmapImageAsync(bmp2);
+                                    if (img2 != null)
+                                    {
+                                        AppIcon = img2;
+                                        if (largeArr[0] != IntPtr.Zero) DestroyIcon(largeArr[0]);
+                                        if (smallArr[0] != IntPtr.Zero) DestroyIcon(smallArr[0]);
+                                        return true;
+                                    }
+                                }
+                            }
+                            if (largeArr[0] != IntPtr.Zero) DestroyIcon(largeArr[0]);
+                            if (smallArr[0] != IntPtr.Zero) DestroyIcon(smallArr[0]);
+                        }
+                    }
                     return false;
                 }
                 
@@ -1335,6 +1421,14 @@ namespace ScreenTimeTracker.Models
                     catch (Exception ex)
                     {
                         System.Diagnostics.Debug.WriteLine($"Could not get process by ID {ProcessId}: {ex.Message}");
+
+                        // Try limited information query instead
+                        var altPath = GetProcessPathViaQueryImage(ProcessId);
+                        if (!string.IsNullOrEmpty(altPath))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Retrieved path via QueryFullProcessImageName: {altPath}");
+                            return altPath;
+                        }
                     }
                 }
                 
@@ -1896,61 +1990,259 @@ namespace ScreenTimeTracker.Models
             return false;
         }
 
-        #region Window-handle icon extraction (generic fallback)
+        #region WindowsApps packaged-app icon lookup
 
-        private const int WM_GETICON   = 0x007F;
-        private const int ICON_SMALL   = 0;
-        private const int ICON_BIG     = 1;
-        private const int ICON_SMALL2  = 2;
-        private const int GCL_HICON    = -14;
-        private const int GCL_HICONSM  = -34;
+        private async Task<bool> TryLoadIconFromWindowsApps()
+        {
+            try
+            {
+                string windowsAppsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps");
+                if (!Directory.Exists(windowsAppsDir))
+                    return false;
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+                // build candidate keywords (process name without extension + words from window title)
+                var keywords = new List<string>();
+                if (!string.IsNullOrEmpty(ProcessName))
+                    keywords.Add(Path.GetFileNameWithoutExtension(ProcessName).ToLowerInvariant());
+                if (!string.IsNullOrEmpty(WindowTitle))
+                {
+                    foreach (var part in WindowTitle.Split(' ', '-', '|'))
+                    {
+                        var token = part.Trim().ToLowerInvariant();
+                        if (token.Length >= 3 && !keywords.Contains(token))
+                            keywords.Add(token);
+                    }
+                }
 
-#if NET6_0_OR_GREATER
-        // GetClassLongPtr is pointer-size dependent. In WinUI 3/.NET 6+ we can map to
-        // GetClassLongPtrW which automatically handles 64-bit.
-        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW", SetLastError = true)]
-        private static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
-#else
-        [DllImport("user32.dll", EntryPoint = "GetClassLongW", SetLastError = true)]
-        private static extern uint GetClassLongPtr(IntPtr hWnd, int nIndex);
-#endif
+                // scan packages – be defensive around UnauthorizedAccess
+                foreach (var dir in Directory.EnumerateDirectories(windowsAppsDir))
+                {
+                    string dirNameLower = Path.GetFileName(dir).ToLowerInvariant();
+                    if (!keywords.Any(k => dirNameLower.Contains(k)))
+                        continue;
+
+                    string[] assetPatterns = {
+                        "*scale-100*.png", "*scale-200*.png", "*logo*.png", "*tile*.png", "*.ico", "*.exe" };
+
+                    foreach (var pattern in assetPatterns)
+                    {
+                        try
+                        {
+                            var files = Directory.GetFiles(dir, pattern, SearchOption.AllDirectories);
+                            foreach (var file in files)
+                            {
+                                if (file.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (await LoadImageFromFile(file))
+                                        return true;
+                                }
+                                else if (file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (await TryLoadIconWithSHGetFileInfo(file) || await TryLoadIconWithExtractAssociatedIcon(file))
+                                        return true;
+                                }
+                            }
+                        }
+                        catch (UnauthorizedAccessException) { /* skip */ }
+                        catch (PathTooLongException) { /* skip */ }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TryLoadIconFromWindowsApps failed for {ProcessName}: {ex.Message}");
+            }
+            return false;
+        }
+
+        #endregion
+
+        #region Safe process path helper
+
+        private const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private static string? GetProcessPathViaQueryImage(int pid)
+        {
+            IntPtr hProcess = IntPtr.Zero;
+            try
+            {
+                hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (hProcess == IntPtr.Zero)
+                    return null;
+
+                int capacity = 260;
+                var sb = new StringBuilder(capacity);
+                if (QueryFullProcessImageName(hProcess, 0, sb, ref capacity))
+                {
+                    return sb.ToString();
+                }
+            }
+            catch { /* ignore */ }
+            finally
+            {
+                if (hProcess != IntPtr.Zero)
+                    CloseHandle(hProcess);
+            }
+            return null;
+        }
+
+        #endregion
+
+        #region Start Menu shortcut fallback
+
+        private async Task<bool> TryLoadIconFromStartMenuShortcut()
+        {
+            try
+            {
+                string[] startMenuDirs = {
+                    Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)
+                };
+
+                foreach (var dir in startMenuDirs)
+                {
+                    if (!Directory.Exists(dir)) continue;
+
+                    var lnkFiles = Directory.GetFiles(dir, "*.lnk", SearchOption.AllDirectories)
+                                             .Where(f => Path.GetFileNameWithoutExtension(f).Contains(ProcessName, StringComparison.OrdinalIgnoreCase));
+                    foreach (var lnk in lnkFiles)
+                    {
+                        if (await TryLoadIconWithSHGetFileInfo(lnk))
+                            return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TryLoadIconFromStartMenuShortcut failed for {ProcessName}: {ex.Message}");
+            }
+            return false;
+        }
+
+        #endregion
+
+        #region Package-based icon lookup (MSIX / Store fallback)
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetPackageFullName(IntPtr hProcess, ref uint packageFullNameLength, StringBuilder packageFullName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetPackagePathByFullName(string packageFullName, ref uint pathLength, StringBuilder path);
+
+        private async Task<bool> TryLoadIconFromPackage()
+        {
+            try
+            {
+                // Open the process with limited rights
+                IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, ProcessId);
+                if (hProcess == IntPtr.Zero)
+                    return false;
+
+                uint len = 0;
+                // First call to get required buffer length
+                int rc = GetPackageFullName(hProcess, ref len, null!);
+                if (rc != 122 /* ERROR_INSUFFICIENT_BUFFER */)
+                {
+                    CloseHandle(hProcess);
+                    return false;
+                }
+
+                var sbFullName = new StringBuilder((int)len);
+                rc = GetPackageFullName(hProcess, ref len, sbFullName);
+                CloseHandle(hProcess);
+                if (rc != 0)
+                    return false;
+
+                string packageFullName = sbFullName.ToString();
+
+                uint pathLen = 0;
+                rc = GetPackagePathByFullName(packageFullName, ref pathLen, null!);
+                if (rc != 122)
+                    return false;
+
+                var sbPath = new StringBuilder((int)pathLen);
+                rc = GetPackagePathByFullName(packageFullName, ref pathLen, sbPath);
+                if (rc != 0)
+                    return false;
+
+                string packagePath = sbPath.ToString();
+
+                // Compose executable path (most packages put main exe at root)
+                string exePathCandidate = Path.Combine(packagePath, ProcessName + ".exe");
+
+                if (await TryLoadIconWithSHGetFileInfo(exePathCandidate) || await TryLoadIconWithExtractAssociatedIcon(exePathCandidate))
+                    return true;
+
+                // If the direct exe didn't work, scan for largest square PNG logo in Assets folder
+                string assetsDir = Path.Combine(packagePath, "Assets");
+                if (Directory.Exists(assetsDir))
+                {
+                    var logoFiles = Directory.GetFiles(assetsDir, "*logo*.png", SearchOption.TopDirectoryOnly)
+                                              .Concat(Directory.GetFiles(assetsDir, "*scale-200*.png", SearchOption.TopDirectoryOnly))
+                                              .OrderByDescending(f => f.Length);
+                    foreach (var file in logoFiles)
+                    {
+                        if (await LoadImageFromFile(file))
+                            return true;
+                    }
+                }
+            }
+            catch { /* swallow – last-chance fallback */ }
+            return false;
+        }
+
+        #endregion
+
+        #region Window-handle icon extraction (generic first-line attempt)
 
         private async Task<bool> TryLoadIconFromWindowHandle()
         {
-            if (WindowHandle == IntPtr.Zero)
-                return false;
-
             try
             {
-                // 1) Ask the window for its small icon
-                IntPtr hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_SMALL2, 0);
-                if (hIcon == IntPtr.Zero)
-                    hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_SMALL, 0);
-                if (hIcon == IntPtr.Zero)
-                    hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_BIG, 0);
-
-                // 2) If not provided, try the class icon
-                if (hIcon == IntPtr.Zero)
-                    hIcon = GetClassLongPtr(WindowHandle, GCL_HICONSM);
-                if (hIcon == IntPtr.Zero)
-                    hIcon = GetClassLongPtr(WindowHandle, GCL_HICON);
-
-                if (hIcon == IntPtr.Zero)
-                    return false;
-
-                using (var icon = Icon.FromHandle(hIcon))
-                using (var bmp  = icon.ToBitmap())
+                if (WindowHandle == IntPtr.Zero)
                 {
-                    var bmpImg = await ConvertBitmapToBitmapImageAsync(bmp);
-                    if (bmpImg != null)
+                    return false;
+                }
+
+                IntPtr hIcon = SendMessage(WindowHandle, WM_GETICON, (IntPtr)ICON_SMALL2, IntPtr.Zero);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = SendMessage(WindowHandle, WM_GETICON, (IntPtr)ICON_SMALL, IntPtr.Zero);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = SendMessage(WindowHandle, WM_GETICON, (IntPtr)ICON_BIG, IntPtr.Zero);
+
+                if (hIcon == IntPtr.Zero)
+                    hIcon = GetClassLongPtrSafe(WindowHandle, GCL_HICON);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = GetClassLongPtrSafe(WindowHandle, GCL_HICONSM);
+
+                if (hIcon == IntPtr.Zero)
+                {
+                    return false; // No icon available
+                }
+
+                using (var icon = System.Drawing.Icon.FromHandle(hIcon))
+                {
+                    var bmp = icon.ToBitmap();
+                    var bmpImage = await ConvertBitmapToBitmapImageAsync(bmp);
+                    if (bmpImage != null)
                     {
-                        AppIcon = bmpImg;
+                        AppIcon = bmpImage;
                         return true;
                     }
                 }
+
+                // Clean up even if conversion failed
+                DestroyIcon(hIcon);
             }
             catch (Exception ex)
             {
