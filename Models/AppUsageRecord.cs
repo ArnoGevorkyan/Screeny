@@ -337,15 +337,7 @@ namespace ScreenTimeTracker.Models
                 
                 bool iconLoaded = false;
                 
-                // 0) Attempt to load the icon directly from the window handle
-                iconLoaded = await TryLoadIconFromWindowHandle();
-                if (iconLoaded)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from window handle for {ProcessName}");
-                    return;
-                }
-                
-                // First, check for UWP apps which need special handling
+                // 1) UWP / Store apps that may be hosted in ApplicationFrameHost etc.
                 iconLoaded = await TryLoadUwpAppIcon();
                 if (iconLoaded)
                 {
@@ -353,7 +345,15 @@ namespace ScreenTimeTracker.Models
                     return;
                 }
                 
-                // Next, try well-known system apps
+                // 2) Try to resolve MSIX/Store package via GetPackageFullName API (static logo assets)
+                iconLoaded = await TryLoadIconFromPackage();
+                if (iconLoaded)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from package for {ProcessName}");
+                    return;
+                }
+                
+                // 3) Well-known hard-coded system app locations
                 iconLoaded = await TryGetWellKnownSystemIcon();
                 if (iconLoaded)
                 {
@@ -361,7 +361,7 @@ namespace ScreenTimeTracker.Models
                     return;
                 }
                 
-                // Then try to get executable path for standard apps
+                // 4) Executable-path icon extraction for classic Win32 apps
                 string? exePath = GetExecutablePath();
                 if (!string.IsNullOrEmpty(exePath))
                 {
@@ -394,23 +394,35 @@ namespace ScreenTimeTracker.Models
                     }
                 }
                 
-                // 4) Generic search in WindowsApps directory for packaged apps (Spotify, Arc, etc.)
-                if (!iconLoaded)
-                {
-                    iconLoaded = await TryLoadIconFromWindowsApps();
-                        if (iconLoaded)
-                        {
-                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from WindowsApps for {ProcessName}");
-                            return;
-                        }
-                }
-                
+                // 5) Start-menu shortcut (.lnk) fallback (fast and usually available for MSIX apps)
                 if (!iconLoaded)
                 {
                     iconLoaded = await TryLoadIconFromStartMenuShortcut();
                     if (iconLoaded)
                     {
                         System.Diagnostics.Debug.WriteLine($"Successfully loaded icon via start-menu shortcut for {ProcessName}");
+                        return;
+                    }
+                }
+                
+                // 6) Generic search inside WindowsApps directory (in case package API or start-menu lookup failed)
+                if (!iconLoaded)
+                {
+                    iconLoaded = await TryLoadIconFromWindowsApps();
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from WindowsApps for {ProcessName}");
+                        return;
+                    }
+                }
+                
+                // 7) LAST RESORT: dynamic window-handle icon (may include badges)
+                if (!iconLoaded)
+                {
+                    iconLoaded = await TryLoadIconFromWindowHandle();
+                    if (iconLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Successfully loaded icon from window handle for {ProcessName}");
                         return;
                     }
                 }
@@ -2015,14 +2027,23 @@ namespace ScreenTimeTracker.Models
                 }
 
                 // scan packages – be defensive around UnauthorizedAccess
-                foreach (var dir in Directory.EnumerateDirectories(windowsAppsDir))
+                IEnumerable<string> packageDirs;
+                try
+                {
+                    packageDirs = Directory.EnumerateDirectories(windowsAppsDir);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return false; // cannot enumerate packages
+                }
+
+                foreach (var dir in packageDirs)
                 {
                     string dirNameLower = Path.GetFileName(dir).ToLowerInvariant();
                     if (!keywords.Any(k => dirNameLower.Contains(k)))
                         continue;
 
-                    string[] assetPatterns = {
-                        "*scale-100*.png", "*scale-200*.png", "*logo*.png", "*tile*.png", "*.ico", "*.exe" };
+                    string[] assetPatterns = { "*scale-100*.png", "*scale-200*.png", "*logo*.png", "*tile*.png", "*.ico", "*.exe" };
 
                     foreach (var pattern in assetPatterns)
                     {
