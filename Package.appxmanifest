@@ -4,13 +4,12 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  xmlns:rescap5="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities/5"
-  IgnorableNamespaces="uap desktop rescap rescap5">
+  IgnorableNamespaces="uap desktop rescap">
 
-	<Identity
-	  Name="ArnoGevorkyan.ScreenyScreenTime"
-	  Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
-	  Version="1.4.8.0" />
+	  	<Identity
+  	  Name="ArnoGevorkyan.ScreenyScreenTime"
+  	  Publisher="CN=68946438-19C3-48BF-A76C-3CED272FBD27"
+ 	  Version="1.5.0.0" />
 
 	<Properties>
 		<DisplayName>Screeny – Screen Time</DisplayName>
@@ -44,7 +43,7 @@
 			<Extensions>
 				<desktop:Extension Category="windows.fullTrustProcess" Executable="Screeny.exe" EntryPoint="Windows.FullTrustApplication" />
 				<desktop:Extension Category="windows.startupTask" Executable="Screeny.exe" EntryPoint="Windows.FullTrustApplication">
-					<desktop:StartupTask TaskId="ScreenyStartupTask" Enabled="true" DisplayName="Screeny Screen Time Tracker" Arguments="--startup" rescap5:ImmediateRegistration="true" />
+					<desktop:StartupTask TaskId="ScreenyStartupTask" Enabled="true" DisplayName="Screeny Screen Time Tracker" />
 				</desktop:Extension>
 			</Extensions>
 
@@ -54,6 +53,5 @@
 	<Capabilities>
 		<Capability Name="internetClient" />
 		<rescap:Capability Name="runFullTrust" />
-		<rescap5:Capability Name="Microsoft.nonUserConfigurableStartupTasks_8wekyb3d8bbwe" />
 	</Capabilities>
 </Package>

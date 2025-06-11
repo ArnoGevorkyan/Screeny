@@ -88,41 +88,53 @@ namespace ScreenTimeTracker.Helpers
             {
                 System.Diagnostics.Debug.WriteLine("Building HOURLY chart");
                 
-                // Create a dictionary to store hourly usage
-                var hourlyUsage = new Dictionary<int, double>();
+                // We keep two data structures:
+                // 1) hourlyIntervals  : list of all [start, end] fragments for each hour
+                // 2) hourlyUsage      : final merged, non-overlapping total in hours for each hour
+
+                var hourlyIntervals = new Dictionary<int, List<(DateTime Start, DateTime End)>>();
+                var hourlyUsage     = new Dictionary<int, double>();
                 
-                // Initialize all hours to 0
-                for (int i = 0; i < 24; i++)
+                // Initialise
+                for (int h = 0; h < 24; h++)
                 {
-                    hourlyUsage[i] = 0;
+                    hourlyIntervals[h] = new List<(DateTime, DateTime)>();
+                    hourlyUsage[h]     = 0;
                 }
 
-                // Process all usage records and distribute time by hourly slots
-                System.Diagnostics.Debug.WriteLine($"Processing {usageRecords.Count} records for hourly chart with precise slicing");
+                // Collect fragments per hour without summing yet (avoids double counting)
+                System.Diagnostics.Debug.WriteLine($"Processing {usageRecords.Count} records for hourly chart with overlap merging");
                 foreach (var record in usageRecords)
                 {
                     var start = record.StartTime;
-                    var end = start + record.Duration;
-                    // Distribute duration across each hour bucket intersecting the record
+                    var end   = start + record.Duration;
+
                     for (int hr = start.Hour; hr <= end.Hour; hr++)
                     {
-                        var slotStart = start.Date.AddHours(hr);
-                        var slotEnd = slotStart.AddHours(1);
-                        var overlapStart = start > slotStart ? start : slotStart;
-                        var overlapEnd = end < slotEnd ? end : slotEnd;
-                        var overlap = (overlapEnd - overlapStart).TotalHours;
-                        if (overlap > 0)
+                        var slotStart      = start.Date.AddHours(hr);
+                        var slotEnd        = slotStart.AddHours(1);
+                        var overlapStart   = start > slotStart ? start : slotStart;
+                        var overlapEnd     = end   < slotEnd   ? end   : slotEnd;
+
+                        if (overlapEnd > overlapStart)
                         {
-                            hourlyUsage[hr] += overlap;
-                            System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, SlotHour: {hr}, Overlap: {overlap:F4} hours");
+                            hourlyIntervals[hr].Add((overlapStart, overlapEnd));
+                            System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, Hour: {hr}, Fragment: {(overlapEnd - overlapStart).TotalMinutes:F1}m");
                         }
                     }
                 }
 
-                // After slicing distributions, ensure values do not exceed 1h per slot
-                foreach (var hrKey in hourlyUsage.Keys.ToList())
+                // Merge overlaps inside each hour and compute the total unique time
+                for (int hr = 0; hr < 24; hr++)
                 {
-                    hourlyUsage[hrKey] = Math.Min(hourlyUsage[hrKey], 1.0);
+                    var merged = MergeIntervals(hourlyIntervals[hr]);
+                    double totalHr = 0;
+                    foreach (var iv in merged)
+                    {
+                        totalHr += (iv.End - iv.Start).TotalHours;
+                    }
+
+                    hourlyUsage[hr] = Math.Clamp(totalHr, 0, 1); // cannot exceed one full hour
                 }
 
                 // Check if all values are zero
@@ -666,6 +678,34 @@ namespace ScreenTimeTracker.Helpers
             {
                 return $"{seconds}s"; // Show s for seconds only
             }
+        }
+
+        /// <summary>
+        /// Merges a list of time intervals and returns a new list without overlaps.
+        /// </summary>
+        private static List<(DateTime Start, DateTime End)> MergeIntervals(List<(DateTime Start, DateTime End)> intervals)
+        {
+            if (intervals == null || intervals.Count == 0) return new List<(DateTime, DateTime)>();
+
+            var ordered = intervals.OrderBy(iv => iv.Start).ToList();
+            var merged  = new List<(DateTime Start, DateTime End)> { ordered[0] };
+
+            for (int i = 1; i < ordered.Count; i++)
+            {
+                var current = ordered[i];
+                var last    = merged[^1];
+
+                if (current.Start <= last.End) // overlap
+                {
+                    merged[^1] = (last.Start, current.End > last.End ? current.End : last.End);
+                }
+                else
+                {
+                    merged.Add(current);
+                }
+            }
+
+            return merged;
         }
     }
 } 

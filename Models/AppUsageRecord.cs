@@ -903,6 +903,18 @@ namespace ScreenTimeTracker.Models
                     (uint)Marshal.SizeOf(shfi),
                     SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
 
+                // retry with large icon if no small icon returned
+                if (result == IntPtr.Zero || shfi.hIcon == IntPtr.Zero)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Small icon not found, trying large icon for {ProcessName}");
+                    result = SHGetFileInfo(
+                        exePath,
+                        FILE_ATTRIBUTE_NORMAL,
+                        ref shfi,
+                        (uint)Marshal.SizeOf(shfi),
+                        SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES);
+                }
+
                 if (result == IntPtr.Zero || shfi.hIcon == IntPtr.Zero)
                 {
                     System.Diagnostics.Debug.WriteLine($"SHGetFileInfo failed for {ProcessName}");
@@ -1148,9 +1160,15 @@ namespace ScreenTimeTracker.Models
                     {
                         // Common Arc browser paths
                         string[] arcPaths = {
+                            // Typical installer location
                             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc", "Arc.exe"),
+                            // Newer builds renamed to "Arc Browser"
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc Browser", "Arc.exe"),
+                            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Arc Browser", "Arc Browser.exe"),
+                            // Program Files fall-back
                             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Arc", "Arc.exe"),
                             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Arc", "Arc.exe"),
+                            // Legacy electron-style directory layout
                             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Arc", "app", "Arc.exe"),
                             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Arc", "Arc.exe")
                         };
@@ -1877,5 +1895,71 @@ namespace ScreenTimeTracker.Models
             
             return false;
         }
+
+        #region Window-handle icon extraction (generic fallback)
+
+        private const int WM_GETICON   = 0x007F;
+        private const int ICON_SMALL   = 0;
+        private const int ICON_BIG     = 1;
+        private const int ICON_SMALL2  = 2;
+        private const int GCL_HICON    = -14;
+        private const int GCL_HICONSM  = -34;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+
+#if NET6_0_OR_GREATER
+        // GetClassLongPtr is pointer-size dependent. In WinUI 3/.NET 6+ we can map to
+        // GetClassLongPtrW which automatically handles 64-bit.
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW", SetLastError = true)]
+        private static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
+#else
+        [DllImport("user32.dll", EntryPoint = "GetClassLongW", SetLastError = true)]
+        private static extern uint GetClassLongPtr(IntPtr hWnd, int nIndex);
+#endif
+
+        private async Task<bool> TryLoadIconFromWindowHandle()
+        {
+            if (WindowHandle == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                // 1) Ask the window for its small icon
+                IntPtr hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_SMALL2, 0);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_SMALL, 0);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = SendMessage(WindowHandle, WM_GETICON, ICON_BIG, 0);
+
+                // 2) If not provided, try the class icon
+                if (hIcon == IntPtr.Zero)
+                    hIcon = GetClassLongPtr(WindowHandle, GCL_HICONSM);
+                if (hIcon == IntPtr.Zero)
+                    hIcon = GetClassLongPtr(WindowHandle, GCL_HICON);
+
+                if (hIcon == IntPtr.Zero)
+                    return false;
+
+                using (var icon = Icon.FromHandle(hIcon))
+                using (var bmp  = icon.ToBitmap())
+                {
+                    var bmpImg = await ConvertBitmapToBitmapImageAsync(bmp);
+                    if (bmpImg != null)
+                    {
+                        AppIcon = bmpImg;
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TryLoadIconFromWindowHandle failed for {ProcessName}: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        #endregion
     }
 } 

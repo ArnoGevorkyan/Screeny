@@ -26,6 +26,7 @@ using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 using ScreenTimeTracker.Helpers;
 using Microsoft.UI.Dispatching;
 using System.Diagnostics; // Add for Debug.WriteLine
+using System.ComponentModel;
 
 namespace ScreenTimeTracker
 {
@@ -1521,6 +1522,16 @@ namespace ScreenTimeTracker
 
         private void UsageListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
         {
+            // Handle recycle to avoid memory leaks and stale handlers
+            if (args.InRecycleQueue && args.ItemContainer?.ContentTemplateRoot is Grid oldGrid && args.ItemContainer.Tag is PropertyChangedEventHandler oldHandler)
+            {
+                if (args.Item is AppUsageRecord oldRecord)
+                {
+                    oldRecord.PropertyChanged -= oldHandler;
+                }
+                args.ItemContainer.Tag = null;
+            }
+
             if (args.Item is AppUsageRecord record)
             {
                 System.Diagnostics.Debug.WriteLine($"Container changing for {record.ProcessName}, has icon: {record.AppIcon != null}");
@@ -1542,7 +1553,7 @@ namespace ScreenTimeTracker
                             // Only add the event handler once
                             args.ItemContainer.Tag = true;
 
-                            record.PropertyChanged += (s, e) =>
+                            PropertyChangedEventHandler handler = (s, e) =>
                             {
                                 if (e.PropertyName == nameof(AppUsageRecord.AppIcon))
                                 {
@@ -1556,6 +1567,10 @@ namespace ScreenTimeTracker
                                     });
                                 }
                             };
+
+                            record.PropertyChanged += handler;
+                            // store handler so we can detach later on recycle
+                            args.ItemContainer.Tag = handler;
                         }
                     }
                 }
