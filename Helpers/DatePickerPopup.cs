@@ -144,8 +144,8 @@ namespace ScreenTimeTracker.Helpers
                 // Get the button position
                 var transform = button.TransformToVisual(null);
                 var pointBelow = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
-                // Start a bit below the button (24 px)
-                double verticalOffset = pointBelow.Y + 24;
+                // Start slightly below the button (12 px gap)
+                double verticalOffset = pointBelow.Y + 12;
 
                 // Popup width for horizontal boundary checks
                 const double popupWidth = 550;
@@ -232,7 +232,7 @@ namespace ScreenTimeTracker.Helpers
                 Grid.SetColumn(contentGrid, 0); // calendar on the left column
                 // Define rows so caption and action buttons can span both columns
                 rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // main content (columns)
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) }); // tighter spacing between content and caption
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // spacing between calendar and caption
                 rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // date caption
                 rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // consistent spacing before actions
                 rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // action buttons
