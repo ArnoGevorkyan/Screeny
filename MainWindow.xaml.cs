@@ -244,6 +244,10 @@ namespace ScreenTimeTracker
         // The new window procedure
         private IntPtr NewWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
+            const int WM_GETMINMAXINFO = 0x0024;
+            const int MIN_WIDTH = 800;   // pixels
+            const int MIN_HEIGHT = 600;  // pixels
+
             // Handle Tray Icon Messages first
             _trayIconHelper?.HandleWindowMessage(msg, wParam, lParam);
 
@@ -260,6 +264,22 @@ namespace ScreenTimeTracker
                 }
                 // Note: Other PBT_ events exist (like PBT_APMSUSPEND, PBT_APMRESUMEAUTOMATIC) 
                 // but PBT_POWERSETTINGCHANGE is generally preferred for modern apps.
+            }
+
+            // Enforce minimum window size
+            if (msg == WM_GETMINMAXINFO)
+            {
+                try
+                {
+                    MINMAXINFO mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+                    if (mmi.ptMinTrackSize.x < MIN_WIDTH)
+                        mmi.ptMinTrackSize.x = MIN_WIDTH;
+                    if (mmi.ptMinTrackSize.y < MIN_HEIGHT)
+                        mmi.ptMinTrackSize.y = MIN_HEIGHT;
+                    Marshal.StructureToPtr(mmi, lParam, true);
+                    return IntPtr.Zero; // handled
+                }
+                catch { /* ignore marshal errors */ }
             }
 
             // Call the original window procedure for all other messages
@@ -3371,6 +3391,24 @@ namespace ScreenTimeTracker
                     Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
                 }
             });
+        }
+
+        // Structures for WM_GETMINMAXINFO
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT_WIN32
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MINMAXINFO
+        {
+            public POINT_WIN32 ptReserved;
+            public POINT_WIN32 ptMaxSize;
+            public POINT_WIN32 ptMaxPosition;
+            public POINT_WIN32 ptMinTrackSize;
+            public POINT_WIN32 ptMaxTrackSize;
         }
     }
 }
