@@ -202,6 +202,9 @@ namespace ScreenTimeTracker
             // Get the AppWindow and subscribe to Closing event
             _appWindow = GetAppWindowForCurrentWindow();
             _appWindow.Closing += AppWindow_Closing;
+
+            // Set initial indicator state
+            UpdateTrackingIndicator();
         }
 
         private void SubclassWindow()
@@ -459,6 +462,13 @@ namespace ScreenTimeTracker
                     return;
                 }
 
+                // Stop any duration increments when tracking is paused
+                if (_trackingService == null || !_trackingService.IsTracking)
+                {
+                    System.Diagnostics.Debug.WriteLine("UpdateTimer_Tick: Tracking is paused – skipping updates");
+                    return;
+                }
+
                 System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== UpdateTimer_Tick at {DateTime.Now:HH:mm:ss.fff} =====");
                 System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current view state:");
                 System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Selected Date: {_selectedDate:yyyy-MM-dd}");
@@ -542,8 +552,13 @@ namespace ScreenTimeTracker
                         
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ALLOWING UPDATE - All checks passed");
                         
-                        // IMPORTANT: Check if this record matches the CURRENTLY focused app
-                        bool isActuallyFocused = liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
+                        // IMPORTANT: Check if this ListView record truly represents the CURRENT live focused app.
+                        // We require either object identity (same reference) OR a strict match on window handle
+                        // *and* focus state, so that a stale record from before a pause isn't mistaken for the
+                        // active one after we resume.
+                        bool isActuallyFocused = object.ReferenceEquals(recordToUpdate, liveFocusedApp) ||
+                                                (recordToUpdate.IsFocused &&
+                                                 recordToUpdate.WindowHandle == liveFocusedApp.WindowHandle);
                         
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Focus comparison:");
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Live focused app: {liveFocusedApp.ProcessName}");
@@ -903,6 +918,13 @@ namespace ScreenTimeTracker
                 dialog.XamlRoot = this.Content.XamlRoot;
                 _ = dialog.ShowAsync();
             }
+
+            // Update UI state
+            StartButton.IsEnabled = false;
+            StopButton.IsEnabled = true;
+
+            // Update tracking indicator
+            UpdateTrackingIndicator();
         }
 
         private void LoadRecordsForDate(DateTime date)
@@ -1436,6 +1458,13 @@ namespace ScreenTimeTracker
                 dialog.XamlRoot = this.Content.XamlRoot;
                 _ = dialog.ShowAsync();
             }
+
+            // Update UI state
+            StartButton.IsEnabled = true;
+            StopButton.IsEnabled = false;
+
+            // Update tracking indicator
+            UpdateTrackingIndicator();
         }
 
         private void SaveRecordsToDatabase()
@@ -1965,6 +1994,9 @@ namespace ScreenTimeTracker
                         System.Diagnostics.Debug.WriteLine($"Icon auto-refresh error: {ex.Message}");
                     }
                 }
+
+                // Set initial indicator state
+                UpdateTrackingIndicator();
             }
             catch (ObjectDisposedException odEx) // Catch specific expected exceptions first
             {
@@ -3409,6 +3441,42 @@ namespace ScreenTimeTracker
             public POINT_WIN32 ptMaxPosition;
             public POINT_WIN32 ptMinTrackSize;
             public POINT_WIN32 ptMaxTrackSize;
+        }
+
+        // --- Tracking status indicator helper ---
+        private void UpdateTrackingIndicator()
+        {
+            // Ensure XAML elements exist (could be null during early constructor)
+            if (TrackingStatusText == null || PulseStoryboard == null)
+                return;
+
+            bool isActive = _trackingService != null && _trackingService.IsTracking;
+
+            if (isActive)
+            {
+                TrackingStatusText.Text = "Active";
+                PulseDot.Fill = Application.Current.Resources["AccentFillColorDefaultBrush"] as Brush;
+                PulseStoryboard.Begin();
+            }
+            else
+            {
+                TrackingStatusText.Text = "Paused";
+                PulseDot.Fill = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
+                PulseStoryboard.Stop();
+            }
+        }
+
+        private void TrackingStatusButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Toggle tracking by forwarding to existing button handlers
+            if (_trackingService != null && _trackingService.IsTracking)
+            {
+                StopButton_Click(StopButton, new RoutedEventArgs());
+            }
+            else
+            {
+                StartButton_Click(StartButton, new RoutedEventArgs());
+            }
         }
     }
 }

@@ -74,19 +74,55 @@
                        Click="DatePickerButton_Click"/>
             </StackPanel>
 
-            <!-- Control Buttons (Right) -->
-            <StackPanel Grid.Column="2" 
-                        Orientation="Horizontal" 
+            <!-- Tracking indicator & hidden control buttons (Right) -->
+            <StackPanel Grid.Column="2"
+                        Orientation="Horizontal"
                         Spacing="8"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center">
-                <Button x:Name="StartButton" 
-                        Content="Start Tracking" 
-                        Click="StartButton_Click"/>
-                <Button x:Name="StopButton" 
-                        Content="Stop Tracking" 
+                <!-- Hidden control buttons to preserve existing logic -->
+                <Button x:Name="StartButton"
+                        Content="Start Tracking"
+                        Click="StartButton_Click"
+                        Visibility="Collapsed"/>
+                <Button x:Name="StopButton"
+                        Content="Stop Tracking"
                         Click="StopButton_Click"
-                        IsEnabled="False"/>
+                        IsEnabled="False"
+                        Visibility="Collapsed"/>
+
+                <!-- Visible status indicator as a button -->
+                <Button x:Name="TrackingStatusButton"
+                        Padding="12,4"
+                        MinHeight="32"
+                        Click="TrackingStatusButton_Click"
+                        VerticalAlignment="Center">
+                    <Button.Resources>
+                        <!-- Slow pulse storyboard for dot (scale only) -->
+                        <Storyboard x:Name="PulseStoryboard" RepeatBehavior="Forever" AutoReverse="True">
+                            <DoubleAnimation Storyboard.TargetName="DotTransform"
+                                             Storyboard.TargetProperty="ScaleX"
+                                             From="1" To="1.3" Duration="0:0:2" />
+                            <DoubleAnimation Storyboard.TargetName="DotTransform"
+                                             Storyboard.TargetProperty="ScaleY"
+                                             From="1" To="1.3" Duration="0:0:2" />
+                        </Storyboard>
+                    </Button.Resources>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Ellipse x:Name="PulseDot"
+                                 Width="6" Height="6"
+                                 Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                                 RenderTransformOrigin="0.5,0.5">
+                            <Ellipse.RenderTransform>
+                                <ScaleTransform x:Name="DotTransform" ScaleX="1" ScaleY="1" />
+                            </Ellipse.RenderTransform>
+                        </Ellipse>
+                        <TextBlock x:Name="TrackingStatusText"
+                                   Text="Paused"
+                                   VerticalAlignment="Center"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Grid>
 

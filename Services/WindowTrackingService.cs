@@ -91,13 +91,34 @@ namespace ScreenTimeTracker.Services
                 _timer.Stop();
                 _dayChangeTimer.Stop();
                 IsTracking = false;
+
+                // Ensure every record, including the (possible) current one, is unfocused
+                // **exactly once** so we don't double-add the same focused slice.
+
                 if (_currentRecord != null)
                 {
+                    // First finalise the current record
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    _records.Add(_currentRecord);
+
+                    // Add it to the list if it isn't already stored
+                    if (!_records.Contains(_currentRecord))
+                    {
+                        _records.Add(_currentRecord);
+                    }
+
                     _currentRecord = null;
                 }
+
+                // Now iterate the list to make sure none remain focused
+                foreach (var rec in _records)
+                {
+                    if (rec.IsFocused)
+                    {
+                        rec.SetFocus(false);
+                    }
+                }
+
                 Debug.WriteLine($"StopTracking: Finalized session with {_records.Count} records ready for saving.");
             }
         }
@@ -124,7 +145,7 @@ namespace ScreenTimeTracker.Services
                     {
                         Debug.WriteLine($"Suspend: Attempting immediate save for {_currentRecord.ProcessName} (Calculated Duration: {_currentRecord.Duration.TotalSeconds}s)");
                         
-                        // Create a copy of the record to avoid thread issues
+                        // Clone to avoid threading issues
                         var recordToSave = new AppUsageRecord
                         {
                             ProcessName = _currentRecord.ProcessName,
@@ -137,7 +158,6 @@ namespace ScreenTimeTracker.Services
                             ApplicationName = _currentRecord.ApplicationName
                         };
                         
-                        // Save outside of lock to avoid deadlock
                         lock (_databaseService)
                         {
                             _databaseService.SaveRecord(recordToSave);
@@ -150,15 +170,25 @@ namespace ScreenTimeTracker.Services
                         Debug.WriteLine($"CRITICAL ERROR: Failed to save record during suspend: {ex.Message}");
                         Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                     }
-                    finally
+
+                    // Ensure it's part of the list for consistency, then clear focus list below
+                    if (!_records.Contains(_currentRecord))
                     {
-                        _currentRecord = null;
+                        _records.Add(_currentRecord);
+                    }
+
+                    _currentRecord = null;
+                }
+
+                // Unfocus any residual records (single pass)
+                foreach (var rec in _records)
+                {
+                    if (rec.IsFocused)
+                    {
+                        rec.SetFocus(false);
                     }
                 }
-                else
-                {
-                    Debug.WriteLine("Suspend: No current record to finalize and save.");
-                }
+
                 _records.Clear();
             }
         }
