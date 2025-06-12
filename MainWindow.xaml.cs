@@ -2112,6 +2112,7 @@ namespace ScreenTimeTracker
             
             // Check if this is a "Last 7 days" selection
             bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
+            bool isCustomRange = _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom;
             
             // Force specific view modes based on selection
             if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
@@ -2146,6 +2147,20 @@ namespace ScreenTimeTracker
                     }
                     
                     // Hide the view mode panel (user can't change the view)
+                    if (ViewModePanel != null)
+                    {
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                    }
+                });
+            }
+            else if (isCustomRange)
+            {
+                _currentChartViewMode = ChartViewMode.Daily;
+                DispatcherQueue.TryEnqueue(() => {
+                    if (ViewModeLabel != null)
+                    {
+                        ViewModeLabel.Text = "Daily View";
+                    }
                     if (ViewModePanel != null)
                     {
                         ViewModePanel.Visibility = Visibility.Collapsed;
@@ -2194,6 +2209,10 @@ namespace ScreenTimeTracker
             }
             
             // Update the chart
+            if (ViewModePanel != null)
+            {
+                ViewModePanel.Visibility = Visibility.Collapsed;
+            }
             UpdateUsageChart();
         }
 
@@ -2360,6 +2379,9 @@ namespace ScreenTimeTracker
             // For Last 7 days, ensure we're in Weekly time period and force Daily view
                 bool isLast7Days = (_selectedDate == today.AddDays(-6) && _selectedEndDate == today);
                 
+                bool isLast30Days = (_selectedDate == today.AddDays(-29) && _selectedEndDate == today);
+                bool isThisMonth = (_selectedDate == new DateTime(today.Year, today.Month, 1) && _selectedEndDate == today);
+                
                 if (isLast7Days)
             {
                 _currentTimePeriod = TimePeriod.Weekly;
@@ -2421,6 +2443,31 @@ namespace ScreenTimeTracker
                         {
                             LoadingIndicator.Visibility = Visibility.Collapsed;
                         }
+                    }
+                });
+            }
+            else if (isLast30Days || isThisMonth)
+            {
+                // Treat as custom range
+                _currentTimePeriod = TimePeriod.Custom;
+                _currentChartViewMode = ChartViewMode.Daily;
+                DispatcherQueue.TryEnqueue(async () => {
+                    try
+                    {
+                        if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
+                        if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
+
+                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
+                        await Task.Delay(50);
+
+                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+
+                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error loading records for custom preset: {ex.Message}");
+                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
                     }
                 });
             }
@@ -2508,6 +2555,22 @@ namespace ScreenTimeTracker
                         _currentTimePeriod == TimePeriod.Weekly)
                     {
                         DatePickerButton.Content = "Last 7 days";
+                        return;
+                    }
+                    
+                    // Special case for Last 30 days
+                    if (_selectedDate == today.AddDays(-29) && _isDateRangeSelected &&
+                        _currentTimePeriod == TimePeriod.Custom)
+                    {
+                        DatePickerButton.Content = "Last 30 days";
+                        return;
+                    }
+                    
+                    // Special case for This month
+                    if (_selectedDate == new DateTime(today.Year, today.Month, 1) && _isDateRangeSelected &&
+                        _currentTimePeriod == TimePeriod.Custom)
+                    {
+                        DatePickerButton.Content = "This month";
                         return;
                     }
                     
@@ -2722,7 +2785,7 @@ namespace ScreenTimeTracker
                      if (!_disposed)
                      {
                          if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
-                         if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Visible;
+                         if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
                          UpdateUsageChart(); // Uses granular _usageRecords
                          UpdateSummaryTab(aggregatedRecords); // Pass aggregated records
                      }

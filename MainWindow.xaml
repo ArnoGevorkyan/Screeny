@@ -152,7 +152,8 @@
                                     Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1"
-                                    Padding="4">
+                                    Padding="4"
+                                    Visibility="Collapsed">
                             <TextBlock x:Name="ViewModeLabel"
                                       Text="Hourly View" 
                                       Padding="12,4"

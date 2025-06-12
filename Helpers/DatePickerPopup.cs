@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using System.Linq;
 using ScreenTimeTracker.Models;
 using System;
 
@@ -16,6 +17,10 @@ namespace ScreenTimeTracker.Helpers
         private Button? _todayButton;
         private Button? _yesterdayButton;
         private Button? _last7DaysButton;
+        private Button? _last30DaysButton;
+        private Button? _thisMonthButton;
+        private CalendarView? _calendarView;
+        private TextBlock? _dateText;
         private readonly Window _owner;
         
         // Events for notifying the owner window about date selection changes
@@ -65,9 +70,8 @@ namespace ScreenTimeTracker.Helpers
                 if (_datePickerPopup.Child is Grid rootGrid)
                 {
                     // Find the calendar and date display
-                    var calendar = rootGrid.Children.OfType<CalendarView>().FirstOrDefault();
-                    var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
-                    var dateDisplayText = dateDisplayBorder?.Child as TextBlock;
+                    var calendar = _calendarView;
+                    var dateDisplayText = _dateText;
                     
                     if (calendar != null)
                     {
@@ -139,38 +143,24 @@ namespace ScreenTimeTracker.Helpers
             {
                 // Get the button position
                 var transform = button.TransformToVisual(null);
-                var point = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
-                
+                var pointBelow = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
+                // Start a bit below the button (24 px)
+                double verticalOffset = pointBelow.Y + 24;
+
+                // Popup width for horizontal boundary checks
+                const double popupWidth = 550;
+
                 // Get window dimensions
                 var windowWidth = _owner.Bounds.Width;
-                var windowHeight = _owner.Bounds.Height;
-                
-                // Default popup position
-                double horizontalOffset = point.X;
-                double verticalOffset = point.Y;
-                
-                // Popup dimensions
-                const double popupWidth = 350;
-                const double popupHeight = 580;
+
+                // Default horizontal offset (we reuse existing logic below)
+                double horizontalOffset = pointBelow.X;
                 
                 // Adjust horizontal position if needed
                 if (horizontalOffset + popupWidth > windowWidth - 20) // 20px safety margin
                 {
                     // If popup would go beyond right edge, align it to the right
                     horizontalOffset = windowWidth - popupWidth - 20;
-                }
-                
-                // Adjust vertical position if needed
-                if (verticalOffset + popupHeight > windowHeight - 20) // 20px safety margin
-                {
-                    // If popup would go beyond bottom edge, show it above the button
-                    verticalOffset = point.Y - popupHeight - button.ActualHeight;
-                    
-                    // If that would put it above the top of the window, just align to top with margin
-                    if (verticalOffset < 20)
-                    {
-                        verticalOffset = 20;
-                    }
                 }
                 
                 // Set the position of the popup
@@ -210,7 +200,7 @@ namespace ScreenTimeTracker.Helpers
                 // Handle the Closed event to notify when popup is dismissed
                 _datePickerPopup.Closed += (s, e) => PopupClosed?.Invoke(this, EventArgs.Empty);
                 
-                // Create the root grid for the popup content
+                // Create the root grid (two-column layout)
                 var rootGrid = new Grid
                 {
                     Background = Application.Current.Resources["ApplicationPageBackgroundThemeBrush"] as Brush,
@@ -218,28 +208,37 @@ namespace ScreenTimeTracker.Helpers
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(16),
-                    Width = 350, // Increased width to avoid content being cut off
-                    MaxHeight = 580 // Increased max height to ensure calendar fits properly
+                    Width = 550, // adjusted popup width
+                    MaxHeight = 540
                 };
-                
-                // Set up row definitions
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Quick selection buttons 
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(12) }); // Spacing
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Date display
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // Spacing
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Calendar
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(16) }); // Spacing
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Action buttons
-                
-                // Create quick selection buttons in a simple horizontal grid layout
+                // Add spacing between the two main columns
+                rootGrid.ColumnSpacing = 16;
+
+                // Two columns: calendar (flex) on the left, preset buttons fixed on the right
+                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // calendar column
+                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) }); // presets column
+
+                // Create a vertical StackPanel for buttons (reuse buttonsGrid)
                 var buttonsGrid = new StackPanel
                 { 
                     Orientation = Orientation.Vertical,
-                    Spacing = 8
+                    Spacing = 4 // tighter vertical gap
                 };
-                Grid.SetRow(buttonsGrid, 0);
+                Grid.SetColumn(buttonsGrid, 1); // move presets to right column
+                rootGrid.Children.Add(buttonsGrid);
+
+                // Right-side container with rows: calendar at top, caption near bottom
+                var contentGrid = new Grid();
+                Grid.SetColumn(contentGrid, 0); // calendar on the left column
+                // Define rows so caption and action buttons can span both columns
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // main content (columns)
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) }); // tighter spacing between content and caption
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // date caption
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // consistent spacing before actions
+                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // action buttons
+                rootGrid.Children.Add(contentGrid);
                 
-                // Create first row of buttons (Today, Yesterday)
+                // Create quick selection buttons in a simple horizontal grid layout
                 var topButtonsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
                 topButtonsRow.HorizontalAlignment = HorizontalAlignment.Stretch; // Make sure the row takes full width
                 
@@ -247,71 +246,81 @@ namespace ScreenTimeTracker.Helpers
                 var todayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
                 var yesterdayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
                 
-                // Convert StackPanel to Grid for better layout control
-                var topButtonsGrid = new Grid();
-                topButtonsGrid.ColumnDefinitions.Add(todayColumn);
-                topButtonsGrid.ColumnDefinitions.Add(yesterdayColumn);
-                
-                // Create Today button
+                // Create Today button (full-width row)
                 _todayButton = new Button
                 {
                     Content = "Today",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 4, 0),
+                    Margin = new Thickness(0, 0, 0, 4), // bottom spacing 4
                     Style = Application.Current.Resources["AccentButtonStyle"] as Style
                 };
                 _todayButton.Click += QuickSelect_Today_Click;
-                Grid.SetColumn(_todayButton, 0);
-                topButtonsGrid.Children.Add(_todayButton);
+                buttonsGrid.Children.Add(_todayButton);
                 
-                // Create Yesterday button
+                // Create Yesterday button (full-width row)
                 _yesterdayButton = new Button
                 {
                     Content = "Yesterday",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(4, 0, 0, 0)
+                    Margin = new Thickness(0, 0, 0, 4)
                 };
                 _yesterdayButton.Click += QuickSelect_Yesterday_Click;
-                Grid.SetColumn(_yesterdayButton, 1);
-                topButtonsGrid.Children.Add(_yesterdayButton);
-                
-                buttonsGrid.Children.Add(topButtonsGrid);
+                buttonsGrid.Children.Add(_yesterdayButton);
                 
                 // Create second row with just Last 7 days button
                 _last7DaysButton = new Button
                 {
                     Content = "Last 7 days",
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 0) // Even margin
+                    Margin = new Thickness(0, 0, 0, 4) // Bottom spacing reduced
                 };
                 _last7DaysButton.Click += QuickSelect_Last7Days_Click;
                 buttonsGrid.Children.Add(_last7DaysButton);
                 
-                rootGrid.Children.Add(buttonsGrid);
+                // Create third row with Last 30 days button
+                _last30DaysButton = new Button
+                {
+                    Content = "Last 30 days",
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0, 0, 0, 4)
+                };
+                _last30DaysButton.Click += QuickSelect_Last30Days_Click;
+                buttonsGrid.Children.Add(_last30DaysButton);
+                
+                // Create fourth row with This month button
+                _thisMonthButton = new Button
+                {
+                    Content = "This month",
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0, 0, 0, 4)
+                };
+                _thisMonthButton.Click += QuickSelect_ThisMonth_Click;
+                buttonsGrid.Children.Add(_thisMonthButton);
                 
                 // Create date display text block to show selected date/range
                 var dateDisplayBorder = new Border
                 {
                     Background = Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"] as Brush,
                     BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
-                    BorderThickness = new Thickness(1),
+                    BorderThickness = new Thickness(0), // remove border
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(8),
                     HorizontalAlignment = HorizontalAlignment.Stretch
                 };
-                Grid.SetRow(dateDisplayBorder, 2);
-                
-                var dateText = new TextBlock
+                _dateText = new TextBlock
                 {
                     Text = "Today",
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Style = Application.Current.Resources["BodyStrongTextBlockStyle"] as Style
                 };
-                dateDisplayBorder.Child = dateText;
+                dateDisplayBorder.Child = _dateText;
+                // Place the caption spanning both columns in row 2
+                Grid.SetRow(dateDisplayBorder, 2);
+                Grid.SetColumnSpan(dateDisplayBorder, 2);
                 rootGrid.Children.Add(dateDisplayBorder);
                 
                 // Create calendar view
-                var calendar = new CalendarView
+                _calendarView = new CalendarView
                 {
                     SelectionMode = CalendarViewSelectionMode.Single,
                     FirstDayOfWeek = Windows.Globalization.DayOfWeek.Monday,
@@ -324,14 +333,15 @@ namespace ScreenTimeTracker.Helpers
                     IsGroupLabelVisible = true, // Show month/year label
                     IsTodayHighlighted = true // Highlight today's date
                 };
-                calendar.SelectedDatesChanged += Calendar_SelectedDatesChanged;
-                calendar.CalendarViewDayItemChanging += Calendar_DayItemChanging;
-                Grid.SetRow(calendar, 4);
-                rootGrid.Children.Add(calendar);
+                _calendarView.SelectedDatesChanged += Calendar_SelectedDatesChanged;
+                _calendarView.CalendarViewDayItemChanging += Calendar_DayItemChanging;
+                Grid.SetRow(_calendarView, 0);
+                contentGrid.Children.Add(_calendarView);
                 
-                // Create action buttons (Cancel/Done)
+                // Create action buttons (Cancel/Done) spanning both columns
                 var actionButtonsGrid = new Grid();
-                Grid.SetRow(actionButtonsGrid, 6);
+                Grid.SetRow(actionButtonsGrid, 4);
+                Grid.SetColumnSpan(actionButtonsGrid, 2);
                 actionButtonsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 actionButtonsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 
@@ -359,12 +369,18 @@ namespace ScreenTimeTracker.Helpers
                 rootGrid.Children.Add(actionButtonsGrid);
                 
                 // Set the popup content
-                _datePickerPopup.Child = rootGrid;
+                var scrollViewer = new ScrollViewer
+                {
+                    Content = rootGrid,
+                    VerticalScrollMode = ScrollMode.Enabled,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                };
+                _datePickerPopup.Child = scrollViewer;
                 
                 // Initialize date selection
                 var today = DateTime.Today;
-                calendar.SelectedDates.Add(new DateTimeOffset(today));
-                dateText.Text = "Today";
+                _calendarView.SelectedDates.Add(new DateTimeOffset(today));
+                if (_dateText != null) _dateText.Text = "Today";
                 _selectedDate = today;
                 _isDateRangeSelected = false;
             }
@@ -399,29 +415,22 @@ namespace ScreenTimeTracker.Helpers
                     _isDateRangeSelected = false;
                     
                     // Update the date display
-                    if (_datePickerPopup?.Child is Grid rootGrid)
-                    {
-                        var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
-                        var dateText = dateDisplayBorder?.Child as TextBlock;
-                        
-                        if (dateText != null)
+                    if (_dateText != null)
                         {
                             var today = DateTime.Today;
-                            
                             if (_selectedDate == today)
                             {
-                                dateText.Text = "Today";
+                            _dateText.Text = "Today";
                                 HighlightQuickSelectButton("Today");
                             }
                             else if (_selectedDate == today.AddDays(-1))
                             {
-                                dateText.Text = "Yesterday";
+                            _dateText.Text = "Yesterday";
                                 HighlightQuickSelectButton("Yesterday");
                             }
                             else
                             {
-                                dateText.Text = _selectedDate.ToString("MMM dd, yyyy");
-                            }
+                            _dateText.Text = _selectedDate.ToString("MMM dd, yyyy");
                         }
                     }
                 }
@@ -466,6 +475,14 @@ namespace ScreenTimeTracker.Helpers
                 {
                     _last7DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
                 }
+                else if (buttonContent == "Last 30 Days" && _last30DaysButton != null)
+                {
+                    _last30DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
+                }
+                else if (buttonContent == "This Month" && _thisMonthButton != null)
+                {
+                    _thisMonthButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
+                }
             }
             catch (Exception ex)
             {
@@ -488,6 +505,12 @@ namespace ScreenTimeTracker.Helpers
                 
                 if (_last7DaysButton != null)
                     _last7DaysButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
+                
+                if (_last30DaysButton != null)
+                    _last30DaysButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
+                
+                if (_thisMonthButton != null)
+                    _thisMonthButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
             }
             catch (Exception ex)
             {
@@ -511,22 +534,15 @@ namespace ScreenTimeTracker.Helpers
                 HighlightQuickSelectButton("Today");
                 
                 // Update calendar selection
-                if (_datePickerPopup?.Child is Grid rootGrid)
-                {
-                    var calendar = rootGrid.Children.OfType<CalendarView>().FirstOrDefault();
-                    var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
-                    var dateText = dateDisplayBorder?.Child as TextBlock;
-                    
-                    if (calendar != null)
+                if (_calendarView != null)
                     {
-                        calendar.SelectedDates.Clear();
-                        calendar.SelectedDates.Add(new DateTimeOffset(today));
+                    _calendarView.SelectedDates.Clear();
+                    _calendarView.SelectedDates.Add(new DateTimeOffset(today));
                     }
                     
-                    if (dateText != null)
+                if (_dateText != null)
                     {
-                        dateText.Text = "Today";
-                    }
+                    _dateText.Text = "Today";
                 }
                 
                 // Apply the selection immediately (optional)
@@ -555,22 +571,15 @@ namespace ScreenTimeTracker.Helpers
                 HighlightQuickSelectButton("Yesterday");
                 
                 // Update calendar selection
-                if (_datePickerPopup?.Child is Grid rootGrid)
-                {
-                    var calendar = rootGrid.Children.OfType<CalendarView>().FirstOrDefault();
-                    var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
-                    var dateText = dateDisplayBorder?.Child as TextBlock;
-                    
-                    if (calendar != null)
+                if (_calendarView != null)
                     {
-                        calendar.SelectedDates.Clear();
-                        calendar.SelectedDates.Add(new DateTimeOffset(yesterday));
+                    _calendarView.SelectedDates.Clear();
+                    _calendarView.SelectedDates.Add(new DateTimeOffset(yesterday));
                     }
                     
-                    if (dateText != null)
+                if (_dateText != null)
                     {
-                        dateText.Text = "Yesterday";
-                    }
+                    _dateText.Text = "Yesterday";
                 }
                 
                 // Apply the selection immediately (optional)
@@ -608,20 +617,14 @@ namespace ScreenTimeTracker.Helpers
                 HighlightQuickSelectButton("Last 7 Days");
                 
                 // Update calendar selection and date display
-                if (_datePickerPopup?.Child is Grid rootGrid)
-                {
-                    var calendar = rootGrid.Children.OfType<CalendarView>().FirstOrDefault();
-                    var dateDisplayBorder = rootGrid.Children.OfType<Border>().FirstOrDefault();
-                    var dateText = dateDisplayBorder?.Child as TextBlock;
-                    
-                    if (calendar != null)
+                if (_calendarView != null)
                     {
                         try
                         {
                             // WinUI 3 Calendar can't show range selection visually,
                             // so we just select the start date
-                            calendar.SelectedDates.Clear();
-                            calendar.SelectedDates.Add(new DateTimeOffset(lastWeek));
+                        _calendarView.SelectedDates.Clear();
+                        _calendarView.SelectedDates.Add(new DateTimeOffset(lastWeek));
                         }
                         catch (Exception calEx)
                         {
@@ -629,10 +632,9 @@ namespace ScreenTimeTracker.Helpers
                         }
                     }
                     
-                    if (dateText != null)
+                if (_dateText != null)
                     {
-                        dateText.Text = "Last 7 days";
-                    }
+                    _dateText.Text = "Last 7 days";
                 }
                 
                 // Apply the selection immediately
@@ -646,6 +648,80 @@ namespace ScreenTimeTracker.Helpers
                 
                 // Recover from error - close popup without changing selection
                 ClosePopup();
+            }
+        }
+
+        /// <summary>
+        /// Handler for Last 30 Days quick select button
+        /// </summary>
+        private void QuickSelect_Last30Days_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var today = DateTime.Today;
+                var startDate = today.AddDays(-29); // 30 days including today
+
+                _selectedDate = startDate;
+                _selectedEndDate = today;
+                _isDateRangeSelected = true;
+
+                HighlightQuickSelectButton("Last 30 Days");
+
+                // Update calendar and date display
+                if (_calendarView != null)
+                {
+                    _calendarView.SelectedDates.Clear();
+                    _calendarView.SelectedDates.Add(new DateTimeOffset(startDate));
+                }
+
+                if (_dateText != null)
+                {
+                    _dateText.Text = "Last 30 days";
+                }
+
+                DateRangeSelected?.Invoke(this, (startDate, today));
+                ClosePopup();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Last30Days_Click: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Handler for This Month quick select button
+        /// </summary>
+        private void QuickSelect_ThisMonth_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var today = DateTime.Today;
+                var startOfMonth = new DateTime(today.Year, today.Month, 1);
+
+                _selectedDate = startOfMonth;
+                _selectedEndDate = today;
+                _isDateRangeSelected = true;
+
+                HighlightQuickSelectButton("This Month");
+
+                // Update calendar and date display
+                if (_calendarView != null)
+                {
+                    _calendarView.SelectedDates.Clear();
+                    _calendarView.SelectedDates.Add(new DateTimeOffset(startOfMonth));
+                }
+
+                if (_dateText != null)
+                {
+                    _dateText.Text = "This month";
+                }
+
+                DateRangeSelected?.Invoke(this, (startOfMonth, today));
+                ClosePopup();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_ThisMonth_Click: {ex.Message}");
             }
         }
 
