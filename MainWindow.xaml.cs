@@ -556,9 +556,7 @@ namespace ScreenTimeTracker
                         // We require either object identity (same reference) OR a strict match on window handle
                         // *and* focus state, so that a stale record from before a pause isn't mistaken for the
                         // active one after we resume.
-                        bool isActuallyFocused = object.ReferenceEquals(recordToUpdate, liveFocusedApp) ||
-                                                (recordToUpdate.IsFocused &&
-                                                 recordToUpdate.WindowHandle == liveFocusedApp.WindowHandle);
+                        bool isActuallyFocused = liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
                         
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Focus comparison:");
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Live focused app: {liveFocusedApp.ProcessName}");

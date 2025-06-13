@@ -134,7 +134,15 @@ namespace ScreenTimeTracker.Helpers
                         totalHr += (iv.End - iv.Start).TotalHours;
                     }
 
-                    hourlyUsage[hr] = Math.Clamp(totalHr, 0, 1); // cannot exceed one full hour
+                    // Clamp to [0,1] and apply a small floor so that tiny but real usage
+                    // (a few seconds) still shows up as a visible bar instead of appearing
+                    // empty.  0.02 h ≈ 1 min – visually perceptible but not misleading.
+                    totalHr = Math.Clamp(totalHr, 0, 1);
+                    if (totalHr > 0 && totalHr < 0.02)
+                    {
+                        totalHr = 0.02;
+                    }
+                    hourlyUsage[hr] = totalHr;
                 }
 
                 // Check if all values are zero
@@ -286,9 +294,25 @@ namespace ScreenTimeTracker.Helpers
                     Fill         = new SolidColorPaint(seriesColor),
                     Stroke       = null,
                     Padding      = 0,
-                    Name         = "Usage"
+                    Name         = "Usage",
+                    AnimationsSpeed = TimeSpan.Zero,
+                    EasingFunction  = null
                 };
+
+                // To avoid the visual "jump" each second, keep the same series instance if one already
+                // exists; otherwise assign the new one.  This prevents LiveCharts from animating in a
+                // fresh collection every tick.
+                if (chart.Series?.FirstOrDefault() is ColumnSeries<double> existingSeries)
+                {
+                    existingSeries.Values = values;
+                }
+                else
+                {
                 chart.Series = new ISeries[] { columnSeries };
+                }
+
+                // Ensure the chart itself does not animate property changes.
+                chart.AnimationsSpeed = TimeSpan.Zero;
 
                 // Category X-axis using hour labels
                 chart.XAxes = new Axis[]
@@ -534,7 +558,6 @@ namespace ScreenTimeTracker.Helpers
             
             // Set additional chart properties for better appearance
             chart.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
-            chart.AnimationsSpeed = TimeSpan.FromMilliseconds(300);
             
             System.Diagnostics.Debug.WriteLine($"Chart updated with {chart.Series?.Count() ?? 0} series");
             System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart COMPLETED ===");

@@ -104,7 +104,7 @@ namespace ScreenTimeTracker.Services
                     // Add it to the list if it isn't already stored
                     if (!_records.Contains(_currentRecord))
                     {
-                        _records.Add(_currentRecord);
+                    _records.Add(_currentRecord);
                     }
 
                     _currentRecord = null;

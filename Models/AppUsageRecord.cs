@@ -1792,20 +1792,33 @@ namespace ScreenTimeTracker.Models
                 System.Diagnostics.Debug.WriteLine($"  - *** POTENTIAL DOUBLE COUNT: Adding {interval.TotalSeconds:F2}s but {timeSinceLastFocus.TotalSeconds:F2}s already calculated in Duration getter ***");
             }
             
-            // FIX: Only increment if NOT focused, since Duration getter already calculates real-time for focused apps
+            // For unfocused records we add directly to accumulated.
+            // For the currently focused record we do **not** move _lastFocusTime; that timestamp
+            // is the anchor the Duration getter uses to measure the live-elapsed span.
             if (!IsFocused)
             {
                 _accumulatedDuration += interval;
-                System.Diagnostics.Debug.WriteLine($"  - NEW _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s (incremented because NOT focused)");
+                System.Diagnostics.Debug.WriteLine($"  - NEW _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s (incremented – record not focused)");
+
+                // Advance _lastFocusTime so that when the record becomes focused again,
+                // the live span starts from this point and we don't double-count.
+                _lastFocusTime = DateTime.Now;
             }
             else
             {
-                // When focused, just update _lastFocusTime to current time to sync with the timer
-                System.Diagnostics.Debug.WriteLine($"  - SKIPPING increment (app is focused, Duration getter handles real-time calculation)");
+                System.Diagnostics.Debug.WriteLine($"  - SKIPPING accumulated increment; record is focused and live span will be derived from _lastFocusTime");
+
+                // Do NOT touch _lastFocusTime here – it acts as the fixed anchor for the live
+                // elapsed span while this record remains focused.  Moving it every tick would
+                // reset the anchor and make Duration appear stalled.
             }
             
-            // Always update last focus time to keep in sync with timer
-            _lastFocusTime = DateTime.Now;
+            // Update the anchor timestamp ONLY when the record is not focused.
+            // This prevents the live Duration from stalling at ~0 seconds.
+            if (!IsFocused)
+            {
+                _lastFocusTime = DateTime.Now;
+            }
             System.Diagnostics.Debug.WriteLine($"  - NEW _lastFocusTime: {_lastFocusTime:HH:mm:ss.fff}");
             
             NotifyPropertyChanged(nameof(Duration));
