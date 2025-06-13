@@ -101,6 +101,10 @@ namespace ScreenTimeTracker
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+        // Add Win32 DPI helper – returns the DPI for the window (96 = 100 %)
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetDpiForWindow(IntPtr hWnd);
+
         private const int GWLP_WNDPROC = -4;
 
         // Fields for power notification handles
@@ -248,8 +252,9 @@ namespace ScreenTimeTracker
         private IntPtr NewWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
             const int WM_GETMINMAXINFO = 0x0024;
-            const int MIN_WIDTH = 1000;   // pixels
-            const int MIN_HEIGHT = 800;  // pixels
+            // Minimum window size expressed in logical units (device-independent pixels)
+            const double MIN_WIDTH_DIP  = 600; // ~600 DIP ≈ 8.3 in at 96 DPI
+            const double MIN_HEIGHT_DIP = 450; // ~450 DIP
 
             // Handle Tray Icon Messages first
             _trayIconHelper?.HandleWindowMessage(msg, wParam, lParam);
@@ -275,10 +280,17 @@ namespace ScreenTimeTracker
                 try
                 {
                     MINMAXINFO mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-                    if (mmi.ptMinTrackSize.x < MIN_WIDTH)
-                        mmi.ptMinTrackSize.x = MIN_WIDTH;
-                    if (mmi.ptMinTrackSize.y < MIN_HEIGHT)
-                        mmi.ptMinTrackSize.y = MIN_HEIGHT;
+
+                    // Convert the DIP minimums to physical pixels based on current DPI
+                    uint dpi = GetDpiForWindow(hWnd);
+                    double scale = dpi <= 0 ? 1.0 : dpi / 96.0; // 96 DPI = 100 %
+                    int minWidthPx  = (int)Math.Round(MIN_WIDTH_DIP  * scale);
+                    int minHeightPx = (int)Math.Round(MIN_HEIGHT_DIP * scale);
+
+                    if (mmi.ptMinTrackSize.x < minWidthPx)
+                        mmi.ptMinTrackSize.x = minWidthPx;
+                    if (mmi.ptMinTrackSize.y < minHeightPx)
+                        mmi.ptMinTrackSize.y = minHeightPx;
                     Marshal.StructureToPtr(mmi, lParam, true);
                     return IntPtr.Zero; // handled
                 }
