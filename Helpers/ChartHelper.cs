@@ -334,8 +334,8 @@ namespace ScreenTimeTracker.Helpers
                 {
                     new Axis
                     {
-                        Name            = "Hours",
-                        NamePaint       = new SolidColorPaint(axisColor),
+                        Name            = string.Empty,
+                        NamePaint       = null,
                         NameTextSize    = 12,
                         LabelsPaint     = new SolidColorPaint(axisColor),
                         TextSize        = 11,
@@ -518,17 +518,29 @@ namespace ScreenTimeTracker.Helpers
                 };
 
                 // Set up the axes with improved contrast
+                // --- Improve X-axis label readability for long ranges ---
+                // Dynamically choose a step (how many labels to skip) based on the
+                // number of points to display.  Also tilt the text to avoid overlap.
+
+                int labelCount = labels.Count;
+                // Aim to render ~ 10-12 labels maximum for readability
+                double targetLabelCount = 12;
+                double minStep = Math.Max(1, Math.Ceiling(labelCount / targetLabelCount));
+
+                // Rotate labels only up to 45° for readability
+                double rotation = labelCount > 12 ? 45 : 0;
+
                 chart.XAxes = new Axis[]
                 {
                     new Axis
                     {
-                        Labels = labels,
-                        LabelsRotation = 0, // Flat labels for days
+                        Labels         = labels,
+                        LabelsRotation = rotation,
                         ForceStepToMin = true,
-                        MinStep = 1,
-                        TextSize = 11, // Slightly larger text
-                        LabelsPaint = new SolidColorPaint(axisColor), // More contrast
-                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
+                        MinStep        = minStep,
+                        TextSize       = 11,
+                        LabelsPaint    = new SolidColorPaint(axisColor),
+                        SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100))
                     }
                 };
 
@@ -536,16 +548,16 @@ namespace ScreenTimeTracker.Helpers
                 {
                     new Axis
                     {
-                        Name = "Hours",
-                        NamePaint = new SolidColorPaint(axisColor),
-                        NameTextSize = 12,
-                        LabelsPaint = new SolidColorPaint(axisColor),
-                        TextSize = 11, // Slightly larger text
-                        MinLimit = 0,
-                        MaxLimit = yAxisMax,
-                        ForceStepToMin = true,
-                        MinStep = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
-                        Labeler = FormatHoursForYAxis,
+                        Name            = string.Empty,
+                        NamePaint       = null,
+                        NameTextSize    = 12,
+                        LabelsPaint     = new SolidColorPaint(axisColor),
+                        TextSize        = 11,
+                        MinLimit        = 0,
+                        MaxLimit        = yAxisMax,
+                        ForceStepToMin  = true,
+                        MinStep         = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
+                        Labeler         = FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };

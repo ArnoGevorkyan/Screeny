@@ -248,8 +248,8 @@ namespace ScreenTimeTracker
         private IntPtr NewWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
             const int WM_GETMINMAXINFO = 0x0024;
-            const int MIN_WIDTH = 800;   // pixels
-            const int MIN_HEIGHT = 600;  // pixels
+            const int MIN_WIDTH = 1000;   // pixels
+            const int MIN_HEIGHT = 800;  // pixels
 
             // Handle Tray Icon Messages first
             _trayIconHelper?.HandleWindowMessage(msg, wParam, lParam);
