@@ -568,27 +568,39 @@ namespace ScreenTimeTracker
                         // We require either object identity (same reference) OR a strict match on window handle
                         // *and* focus state, so that a stale record from before a pause isn't mistaken for the
                         // active one after we resume.
-                        bool isActuallyFocused = liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
-                        
+                        bool isActuallyFocused =
+                            (recordToUpdate.WindowHandle != IntPtr.Zero &&
+                             recordToUpdate.WindowHandle == liveFocusedApp.WindowHandle) ||
+                            liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
+
+                        // --- Focus comparison & duration handling ---
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Focus comparison:");
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Live focused app: {liveFocusedApp.ProcessName}");
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Matching record: {recordToUpdate.ProcessName}");
                         System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Is actually focused: {isActuallyFocused}");
-                        
+
                         if (isActuallyFocused)
                         {
                             System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] INCREMENTING duration for ACTUALLY FOCUSED record: {recordToUpdate.ProcessName}");
                             System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Before increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
-                        
-                            // Increment duration every second for accuracy
+
+                            // First credit the elapsed second.  If the focus flag was stale (IsFocused == false)
+                            // this call will add the second to _accumulatedDuration.
                             recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
-                            
+
+                            // Now ensure the record is marked as focused for the next tick.
+                            if (!recordToUpdate.IsFocused)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Correcting stale focus flag for {recordToUpdate.ProcessName}");
+                                recordToUpdate.SetFocus(true);
+                            }
+
                             System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] After increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
                         }
                         else
                         {
                             System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] NOT incrementing duration for {recordToUpdate.ProcessName} - it's not the current focused app!");
-                            
+
                             // Make sure it's marked as unfocused in the UI collection
                             if (recordToUpdate.IsFocused)
                             {
@@ -1440,6 +1452,19 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine("Stopping tracking");
             _trackingService.StopTracking();
 
+                // NEW: Explicitly unfocus all UI records to guarantee no record continues
+                // accumulating time while tracking is paused.  This is especially important
+                // for aggregated views where the backing service record may differ from the
+                // UI instance, leaving its IsFocused flag untouched by the service-level stop.
+                foreach (var uiRec in _usageRecords.ToList())
+                {
+                    if (uiRec.IsFocused)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PAUSE_FIX] Unfocusing UI record {uiRec.ProcessName} during StopButton_Click");
+                        uiRec.SetFocus(false);
+                    }
+                }
+
                 // Stop UI updates and auto-save
                 _updateTimer.Stop();
                 _autoSaveTimer.Stop();
@@ -1472,6 +1497,10 @@ namespace ScreenTimeTracker
             // Update UI state
             StartButton.IsEnabled = true;
             StopButton.IsEnabled = false;
+
+            // Refresh summary and chart immediately to reflect the unfocused state
+            UpdateSummaryTab(_usageRecords.ToList());
+            UpdateUsageChart();
 
             // Update tracking indicator
             UpdateTrackingIndicator();

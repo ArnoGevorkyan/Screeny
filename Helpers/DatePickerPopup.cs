@@ -13,6 +13,9 @@ namespace ScreenTimeTracker.Helpers
     /// </summary>
     public class DatePickerPopup
     {
+        // Global scale factor to shrink the popup uniformly (1.0 = original size)
+        private const double POPUP_SCALE = 0.85; // 85 % of original dimensions
+
         private Popup? _datePickerPopup;
         private Button? _todayButton;
         private Button? _yesterdayButton;
@@ -147,8 +150,8 @@ namespace ScreenTimeTracker.Helpers
                 // Start slightly below the button (12 px gap)
                 double verticalOffset = pointBelow.Y + 12;
 
-                // Popup width for horizontal boundary checks
-                const double popupWidth = 550;
+                // Popup width for horizontal boundary checks (scaled)
+                double popupWidth = 550 * POPUP_SCALE;
 
                 // Get window dimensions
                 var windowWidth = _owner.Bounds.Width;
@@ -207,16 +210,16 @@ namespace ScreenTimeTracker.Helpers
                     BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
-                    Padding = new Thickness(16),
-                    Width = 550, // adjusted popup width
-                    MaxHeight = 540
+                    Padding = new Thickness(16 * POPUP_SCALE, 16, 16 * POPUP_SCALE, 16),
+                    Width = 550 * POPUP_SCALE,    // scaled popup width
+                    MaxHeight = 540 // keep original height to avoid clipping
                 };
                 // Add spacing between the two main columns
-                rootGrid.ColumnSpacing = 16;
+                rootGrid.ColumnSpacing = 16 * POPUP_SCALE;
 
                 // Two columns: calendar (flex) on the left, preset buttons fixed on the right
                 rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // calendar column
-                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) }); // presets column
+                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180 * POPUP_SCALE) }); // presets column
 
                 // Create a vertical StackPanel for buttons (reuse buttonsGrid)
                 var buttonsGrid = new StackPanel
@@ -327,8 +330,8 @@ namespace ScreenTimeTracker.Helpers
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     VerticalAlignment = VerticalAlignment.Stretch,
                     MaxDate = DateTimeOffset.Now, // Can't select future dates
-                    MinHeight = 320, // Set minimum height to ensure calendar isn't too small
-                    Margin = new Thickness(0, 0, 0, 0), // Even margin
+                    MinHeight = 320, // keep original min height to prevent clipping
+                    Margin = new Thickness(0), // Even margin
                     CalendarIdentifier = "GregorianCalendar", // Explicitly set calendar type
                     IsGroupLabelVisible = true, // Show month/year label
                     IsTodayHighlighted = true // Highlight today's date
