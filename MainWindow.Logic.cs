@@ -535,11 +535,7 @@ namespace ScreenTimeTracker
 
                 DispatcherQueue?.TryEnqueue(() =>
                 {
-                    if (UsageListView != null)
-                    {
-                        UsageListView.ItemsSource = null;
-                        UsageListView.ItemsSource = _usageRecords;
-                    }
+                    // Binding handles ItemsSource updates
                 });
 
                 UpdateSummaryTab(_usageRecords.ToList());
@@ -657,6 +653,57 @@ namespace ScreenTimeTracker
                 total += span.End - span.Start;
 
             return total;
+        }
+
+        // ---------------- Helper: Load single-day records without UI refresh ----------------
+        private List<AppUsageRecord> LoadRecordsForSpecificDay(DateTime date, bool updateUI = true)
+        {
+            if (_databaseService == null)
+            {
+                System.Diagnostics.Debug.WriteLine("ERROR: _databaseService is null in LoadRecordsForSpecificDay. Returning empty list.");
+                return new List<AppUsageRecord>();
+            }
+
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
+
+                var records = _databaseService.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+
+                if (!updateUI)
+                    return records;
+
+                _selectedDate        = date;
+                _selectedEndDate     = null;
+                _isDateRangeSelected = false;
+
+                _usageRecords.Clear();
+
+                foreach (var r in records.OrderByDescending(r => r.Duration))
+                    _usageRecords.Add(r);
+
+                // Refresh UI elements on dispatcher
+                DispatcherQueue?.TryEnqueue(() =>
+                {
+                    if (_disposed) return;
+
+                    if (UsageListView != null)
+                    {
+                        UsageListView.ItemsSource = null;
+                        UsageListView.ItemsSource = _usageRecords;
+                    }
+
+                    UpdateUsageChart();
+                    UpdateSummaryTab(_usageRecords.ToList());
+                });
+
+                return records;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForSpecificDay: {ex.Message}");
+                return new List<AppUsageRecord>();
+            }
         }
     }
 } 

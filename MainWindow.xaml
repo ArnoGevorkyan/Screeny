@@ -21,6 +21,9 @@
             <local:NullToVisibleConverter x:Key="NullToVisibleConverter"/>
             <local:NotNullToVisibleConverter x:Key="NotNullToVisibleConverter"/>
             <local:DateDisplayConverter x:Key="DateDisplayConverter"/>
+            <local:ChartViewModeToLabelConverter x:Key="ChartViewModeToLabelConverter"/>
+            <local:BoolToTrackingTextConverter x:Key="BoolToTrackingTextConverter"/>
+            <local:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
         </Grid.Resources>
         <Grid.RowDefinitions>
             <!-- Fixed header area -->
@@ -70,8 +73,8 @@
                         VerticalAlignment="Center">
                 <TextBlock Text="Select Date:" VerticalAlignment="Center"/>
                 <Button x:Name="DatePickerButton"
-                       Content="Today"
-                       Click="DatePickerButton_Click"/>
+                       Content="{Binding SelectedDate, Converter={StaticResource DateDisplayConverter}}"
+                       Command="{Binding PickDateCommand}"/>
             </StackPanel>
 
             <!-- Tracking indicator & hidden control buttons (Right) -->
@@ -83,11 +86,11 @@
                 <!-- Hidden control buttons to preserve existing logic -->
                 <Button x:Name="StartButton"
                         Content="Start Tracking"
-                        Click="StartButton_Click"
+                        Command="{Binding StartTrackingCommand}"
                         Visibility="Collapsed"/>
                 <Button x:Name="StopButton"
                         Content="Stop Tracking"
-                        Click="StopButton_Click"
+                        Command="{Binding StopTrackingCommand}"
                         IsEnabled="False"
                         Visibility="Collapsed"/>
 
@@ -95,7 +98,7 @@
                 <Button x:Name="TrackingStatusButton"
                         Padding="12,4"
                         MinHeight="32"
-                        Click="TrackingStatusButton_Click"
+                        Command="{Binding ToggleTrackingCommand}"
                         VerticalAlignment="Center">
                     <Button.Resources>
                         <!-- Slow pulse storyboard for dot (scale only) -->
@@ -111,14 +114,14 @@
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Ellipse x:Name="PulseDot"
                                  Width="6" Height="6"
-                                 Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                                 Fill="{Binding IsTracking, Converter={StaticResource BoolToBrushConverter}}"
                                  RenderTransformOrigin="0.5,0.5">
                             <Ellipse.RenderTransform>
                                 <ScaleTransform x:Name="DotTransform" ScaleX="1" ScaleY="1" />
                             </Ellipse.RenderTransform>
                         </Ellipse>
                         <TextBlock x:Name="TrackingStatusText"
-                                   Text="Paused"
+                                   Text="{Binding IsTracking, Converter={StaticResource BoolToTrackingTextConverter}}"
                                    VerticalAlignment="Center"
                                    Style="{ThemeResource CaptionTextBlockStyle}"/>
                     </StackPanel>
@@ -191,7 +194,7 @@
                                     Padding="4"
                                     Visibility="Collapsed">
                             <TextBlock x:Name="ViewModeLabel"
-                                      Text="Hourly View" 
+                                      Text="{Binding CurrentChartViewMode, Converter={StaticResource ChartViewModeToLabelConverter}}" 
                                       Padding="12,4"
                                       VerticalAlignment="Center"/>
                         </StackPanel>
@@ -256,7 +259,7 @@
                         <!-- Date Display (moved from header) -->
                         <TextBlock Grid.Row="0"
                                    x:Name="DateDisplay"
-                                   Text="Today"
+                                   Text="{Binding SelectedDate, Converter={StaticResource DateDisplayConverter}}"
                                    Style="{ThemeResource CaptionTextBlockStyle}"
                                    VerticalAlignment="Center"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
@@ -337,6 +340,7 @@
                 
                 <!-- App List -->
                 <ListView x:Name="UsageListView" 
+                          ItemsSource="{Binding Records}"
                           Grid.Row="4"
                           Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                           BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

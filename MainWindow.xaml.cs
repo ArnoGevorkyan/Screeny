@@ -26,7 +26,7 @@ namespace ScreenTimeTracker
     {
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
-        private readonly ObservableCollection<AppUsageRecord> _usageRecords;
+        private ObservableCollection<AppUsageRecord> _usageRecords;
         private DateTime _selectedDate;
         private DateTime? _selectedEndDate; // For date ranges
         private DispatcherTimer _updateTimer;
@@ -124,11 +124,7 @@ namespace ScreenTimeTracker
             // Use today's date
                 _selectedDate = todayDate;
             
-            _usageRecords = new ObservableCollection<AppUsageRecord>();
-            
-            // Initialize timer fields to avoid nullable warnings
-            _updateTimer = new DispatcherTimer();
-            _autoSaveTimer = new DispatcherTimer();
+            // The records collection now lives in the ViewModel so we alias to it after VM creation
 
             InitializeComponent();
 
@@ -200,8 +196,7 @@ namespace ScreenTimeTracker
             _appWindow = GetAppWindowForCurrentWindow();
             _appWindow.Closing += AppWindow_Closing;
 
-            // Set initial indicator state
-            UpdateTrackingIndicator();
+            // Indicator visuals are data-bound; no imperative call needed
 
             // NEW – instantiate the ViewModel early and set it as DataContext. We will migrate
             // state into it incrementally so the UI can bind to a single source of truth.
@@ -210,6 +205,9 @@ namespace ScreenTimeTracker
             {
                 fe.DataContext = _viewModel;
             }
+
+            // Alias local collection to the ViewModel one so existing logic keeps working
+            _usageRecords = _viewModel.Records;
 
             // Instantiate icon service
             _iconService = new IconRefreshService();
@@ -230,8 +228,7 @@ namespace ScreenTimeTracker
             };
             _viewModel.OnPickDateRequested += (_, __) =>
             {
-                // simulate click on DatePickerButton
-                DatePickerButton_Click(DatePickerButton, new RoutedEventArgs());
+                _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
             };
             _viewModel.OnToggleViewModeRequested += (_, __) =>
             {
@@ -241,6 +238,10 @@ namespace ScreenTimeTracker
                     _currentChartViewMode = ChartViewMode.Hourly;
                 UpdateUsageChart();
             };
+
+            // Initialize timer fields
+            _updateTimer = new DispatcherTimer();
+            _autoSaveTimer = new DispatcherTimer();
         }
 
         private void SubclassWindow()
@@ -804,34 +805,6 @@ namespace ScreenTimeTracker
             return null;
         }
 
-        private void StartButton_Click(object sender, RoutedEventArgs e)
-        {
-            StartTracking();
-        }
-        
-        // StartTracking implementation moved to MainWindow.Logic.cs
-
-        private void StopButton_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                StopTracking();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error stopping tracking: {ex.Message}");
-                var dialog = new ContentDialog
-                {
-                    Title = "Error",
-                    Content = $"Failed to stop tracking: {ex.Message}",
-                    CloseButtonText = "OK",
-                    XamlRoot = Content.XamlRoot
-                };
-
-                _ = dialog.ShowAsync();
-            }
-        }
-
         private void MinimizeButton_Click(object sender, RoutedEventArgs e)
         {
             _windowHelper.MinimizeWindow();
@@ -1069,8 +1042,7 @@ namespace ScreenTimeTracker
                     }
                 }
 
-                // Set initial indicator state
-                UpdateTrackingIndicator();
+                // Indicator bound via ViewModel; no imperative call needed
             }
             catch (ObjectDisposedException odEx) // Catch specific expected exceptions first
             {
@@ -1214,134 +1186,7 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error in TrackingService_WindowChanged: {ex.Message}");
                 }
         }
-#if false
-        private void UpdateChartViewMode()
-        {
-            // Get today and yesterday dates for comparison
-            var today = DateTime.Today;
-            var yesterday = today.AddDays(-1);
-            
-            // Check if this is a "Last 7 days" selection
-            bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
-            bool isCustomRange = _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom;
-            
-            // Force specific view modes based on selection
-            if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
-            {
-                // Today or Yesterday: Force Hourly view
-                _currentChartViewMode = ChartViewMode.Hourly;
-                
-                // Update view mode label and hide toggle panel (since it can't be changed)
-                DispatcherQueue.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = "Hourly View";
-                    }
-                    
-                    // Hide the view mode panel (user can't change the view)
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
-                });
-            }
-            else if (isLast7Days)
-            {
-                // Last 7 days: Force Daily view
-                _currentChartViewMode = ChartViewMode.Daily;
-                
-                // Update view mode label and hide toggle panel (since it can't be changed)
-                DispatcherQueue.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = "Daily View";
-                    }
-                    
-                    // Hide the view mode panel (user can't change the view)
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
-                });
-            }
-            else if (isCustomRange)
-            {
-                _currentChartViewMode = ChartViewMode.Daily;
-                DispatcherQueue.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = "Daily View";
-                    }
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
-                });
-            }
-            else
-            {
-                // Default behavior based on time period for other selections
-                if (_currentTimePeriod == TimePeriod.Daily)
-                {
-                    _currentChartViewMode = ChartViewMode.Hourly;
-                    
-                    // Update view mode label
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Hourly View";
-                        }
-                        
-                        // Show the view mode panel (user can change the view)
-                        if (ViewModePanel != null)
-                        {
-                            ViewModePanel.Visibility = Visibility.Visible;
-                        }
-                    });
-                }
-                else // Weekly or Custom
-                {
-                    _currentChartViewMode = ChartViewMode.Daily;
-                    
-                    // Update view mode label
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Daily View";
-                        }
-                        
-                        // Show the view mode panel (user can change the view)
-                        if (ViewModePanel != null)
-                        {
-                            ViewModePanel.Visibility = Visibility.Visible;
-                        }
-                    });
-                }
-            }
-            
-            // Update the chart
-            if (ViewModePanel != null)
-            {
-                ViewModePanel.Visibility = Visibility.Collapsed;
-            }
-            UpdateUsageChart();
-        }
 
-        private void ForceChartRefresh()
-        {
-            // Call the ChartHelper method to force refresh the chart
-            TimeSpan totalTime = ChartHelper.ForceChartRefresh(
-                UsageChartLive, 
-                _usageRecords, 
-                _currentChartViewMode, 
-                _currentTimePeriod, 
-                _selectedDate, 
-                _selectedEndDate);
-                
-            // Update the chart time display
-            ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
-        }
-#endif
         private void DatePickerButton_Click(object sender, RoutedEventArgs e)
         {
             // Use the DatePickerPopup helper to show the date picker
@@ -1639,382 +1484,6 @@ namespace ScreenTimeTracker
             }
         }
         
-        private void UpdateDatePickerButtonText_Dup()
-        {
-            try
-            {
-                if (DatePickerButton != null)
-                {
-                    // First check if we're in any of the quick select modes
-                    var today = DateTime.Today;
-                    
-                    if (_selectedDate == today && !_isDateRangeSelected)
-                    {
-                        DatePickerButton.Content = "Today";
-                        return;
-                    }
-                    
-                    if (_selectedDate == today.AddDays(-1) && !_isDateRangeSelected)
-                    {
-                        DatePickerButton.Content = "Yesterday";
-                        return;
-                    }
-                    
-                    // Special case for Last 7 days
-                    if (_selectedDate == today && _isDateRangeSelected && 
-                        _currentTimePeriod == TimePeriod.Weekly)
-                    {
-                        DatePickerButton.Content = "Last 7 days";
-                        return;
-                    }
-                    
-                    // Special case for Last 30 days
-                    if (_selectedDate == today.AddDays(-29) && _isDateRangeSelected &&
-                        _currentTimePeriod == TimePeriod.Custom)
-                    {
-                        DatePickerButton.Content = "Last 30 days";
-                        return;
-                    }
-                    
-                    // Special case for This month
-                    if (_selectedDate == new DateTime(today.Year, today.Month, 1) && _isDateRangeSelected &&
-                        _currentTimePeriod == TimePeriod.Custom)
-                    {
-                        DatePickerButton.Content = "This month";
-                        return;
-                    }
-                    
-                    // For single date selection
-                    if (!_isDateRangeSelected)
-                    {
-                        DatePickerButton.Content = _selectedDate.ToString("MMM dd");
-                    }
-                    // For date range selection
-                    else if (_selectedEndDate.HasValue)
-                    {
-                        DatePickerButton.Content = $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}";
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateDatePickerButtonText: {ex.Message}");
-                // Set a fallback value
-                if (DatePickerButton != null)
-                {
-                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
-                }
-            }
-        }
-        
-        // LoadRecordsForDateRange implementation moved to MainWindow.Logic.cs
-
-        private void LoadRecordsForLastSevenDays_Dup()
-        {
-            try
-            {
-                // Get current date
-                DateTime today = DateTime.Today;
-                DateTime startDate = today.AddDays(-6); // Last 7 days including today
-                DateTime endDate = today;
-
-                System.Diagnostics.Debug.WriteLine($"Loading records for Last 7 Days: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
-
-                // Get aggregated records for the entire week
-                var weekRecords = GetAggregatedRecordsForDateRange(startDate, endDate);
-
-                // Update the UI with the aggregated data
-                UpdateRecordListView_Dup(weekRecords);
-
-                // Set header based on date range
-                SetTimeFrameHeader_Dup($"Last 7 Days ({startDate:MMM d} - {endDate:MMM d}, {endDate.Year})");
-
-                // Calculate and display daily average
-                if (weekRecords.Any())
-                {
-                    double totalHours = weekRecords.Sum(r => r.Duration.TotalHours);
-                    double dailyAverage = totalHours / 7.0;
-                    // DailyAverageTextBlock.Text = $"Daily Average: {dailyAverage:F1} hours"; // Commented out - UI element missing
-                    // DailyAverageTextBlock.Visibility = Microsoft.UI.Xaml.Visibility.Visible; // Commented out - UI element missing
-                    System.Diagnostics.Debug.WriteLine($"Calculated Daily Average: {dailyAverage:F1} hours (UI element 'DailyAverageTextBlock' not found or commented out)");
-                }
-                else
-                {
-                    // DailyAverageTextBlock.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed; // Commented out - UI element missing
-                    System.Diagnostics.Debug.WriteLine("No records for daily average calculation (UI element 'DailyAverageTextBlock' not found or commented out)");
-                }
-
-                // Update the chart for the entire week
-                UpdateChartWithRecords_Dup(weekRecords);
-
-                // Also load the individual day records for reference but don't display them
-                DateTime currentDate = startDate;
-                while (currentDate <= endDate)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Loading reference data for {currentDate:yyyy-MM-dd}");
-                    var dailyRecords = LoadRecordsForSpecificDay(currentDate, false);
-                    System.Diagnostics.Debug.WriteLine($"Found {dailyRecords.Count} records for {currentDate:yyyy-MM-dd}");
-                    currentDate = currentDate.AddDays(1);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForLastSevenDays: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Updates the record list view with the provided records
-        /// </summary>
-        /// <param name="records">The records to display in the list view</param>
-        private void UpdateRecordListView_Dup(List<AppUsageRecord> records)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"UpdateRecordListView: Updating with {records.Count} records");
-                
-                // Clear existing records
-                if (_usageRecords != null)
-                {
-                    _usageRecords.Clear();
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("ERROR: _usageRecords collection is null");
-                    return;
-                }
-                
-                // Sort records by duration (descending)
-                var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
-                
-                // Add sorted records to the observable collection
-                foreach (var record in sortedRecords)
-                {
-                    if (_usageRecords != null) // Add explicit null check
-                    {
-                        _usageRecords.Add(record);
-                    }
-                }
-                
-                // Force a refresh of the ListView
-                if (!_disposed && UsageListView != null)
-                {
-                    DispatcherQueue?.TryEnqueue(() => {
-                        if (!_disposed && UsageListView != null)
-                        {
-                            UsageListView.ItemsSource = null;
-                            UsageListView.ItemsSource = _usageRecords;
-                        }
-                    });
-                }
-                
-                System.Diagnostics.Debug.WriteLine("UpdateRecordListView: Complete");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateRecordListView: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Updates the chart display with the provided records
-        /// </summary>
-        /// <param name="records">The records to display in the chart</param>
-        private void UpdateChartWithRecords_Dup(List<AppUsageRecord> records)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"UpdateChartWithRecords: Updating with {records.Count} records");
-                
-                // Set the weekly view mode
-                _currentTimePeriod = TimePeriod.Weekly;
-                _currentChartViewMode = ChartViewMode.Daily; // Default to daily for weekly view
-                
-                // Update the chart
-                DispatcherQueue?.TryEnqueue(() => {
-                    if (!_disposed)
-                    {
-                        // Update view mode label
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Daily View";
-                        }
-                        
-                        // Hide the view mode panel (user can't change the view for weekly)
-                        if (ViewModePanel != null)
-                        {
-                            ViewModePanel.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
-                        }
-                        
-                        // Update the chart
-                        UpdateUsageChart();
-                        
-                        // Update the summary tab
-                        UpdateSummaryTab(records); // Pass the received records
-                    }
-                });
-                
-                System.Diagnostics.Debug.WriteLine("UpdateChartWithRecords: Complete");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateChartWithRecords: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Loads records for a specific day without updating the UI
-        /// </summary>
-        /// <param name="date">The date to load records for</param>
-        /// <param name="updateUI">Whether to update the UI with the loaded records</param>
-        /// <returns>List of app usage records for the specified day</returns>
-        private List<AppUsageRecord> LoadRecordsForSpecificDay(DateTime date, bool updateUI = true)
-        {
-            // Add explicit null check for _databaseService
-            if (_databaseService == null)
-            {
-                System.Diagnostics.Debug.WriteLine("ERROR: _databaseService is null in LoadRecordsForSpecificDay. Returning empty list.");
-                return new List<AppUsageRecord>();
-            }
-
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
-                
-                // Get records from database
-                var records = _databaseService?.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
-                
-                System.Diagnostics.Debug.WriteLine($"Retrieved {records.Count} records for {date:yyyy-MM-dd}");
-                
-                // For weekly view, we just want to return the records without updating UI
-                if (!updateUI)
-                {
-                    return records;
-                }
-                
-                // Otherwise update the UI (similar to LoadRecordsForDate)
-                _selectedDate = date;
-                _selectedEndDate = null;
-                _isDateRangeSelected = false;
-                
-                // Clear existing records
-                if (_usageRecords != null)
-                {
-                    _usageRecords.Clear();
-                }
-                
-                // Sort and add records
-                var sortedRecords = records.OrderByDescending(r => r.Duration).ToList();
-                foreach (var record in sortedRecords)
-                {
-                    // Add explicit null check before adding
-                    if (_usageRecords != null)
-                    {
-                        _usageRecords.Add(record);
-                    }
-                }
-                
-                // Update the ListView
-                DispatcherQueue?.TryEnqueue(() => {
-                    if (!_disposed && UsageListView != null)
-                    {
-                        UsageListView.ItemsSource = null;
-                        UsageListView.ItemsSource = _usageRecords;
-                        
-                        // Update the chart (already has null check)
-                        if (_usageRecords != null)
-                        {
-                            UpdateUsageChart();
-                        }
-                        
-                        // Update the summary tab (add explicit null check)
-                        if (_usageRecords != null)
-                        {
-                            UpdateSummaryTab(_usageRecords.ToList());
-                        }
-                    }
-                });
-                
-                return records;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForSpecificDay: {ex.Message}");
-                return new List<AppUsageRecord>();
-            }
-        }
-
-        /// <summary>
-        /// Sets the time frame header text in the UI
-        /// </summary>
-        /// <param name="headerText">The text to set as the header</param>
-        private void SetTimeFrameHeader_Dup(string headerText)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"Setting time frame header: {headerText}");
-
-                // Update the UI on the UI thread
-                DispatcherQueue?.TryEnqueue(() => {
-                    if (!_disposed)
-                    {
-                        // Assuming there's a TextBlock named TimeFrameHeader
-                        // if (TimeFrameHeader != null) // Commented out - UI element missing
-                        // {
-                        //     TimeFrameHeader.Text = headerText;
-                        // }
-
-                        // Also update the date display
-                        if (DateDisplay != null)
-                        {
-                             // Update DateDisplay instead, as TimeFrameHeader seems missing
-                            DateDisplay.Text = headerText;
-                            System.Diagnostics.Debug.WriteLine($"Updated DateDisplay text to: {headerText} (UI element 'TimeFrameHeader' not found or commented out)");
-                        }
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in SetTimeFrameHeader: {ex.Message}");
-            }
-        }
-
-        private TimeSpan CalculateTotalActiveTime_Dup(List<AppUsageRecord> records)
-        {
-            // Create time intervals for each record
-            var intervals = records
-                .Select(r => new { Start = r.StartTime, End = r.StartTime + r.Duration })
-                .Where(iv => iv.End > iv.Start)
-                .OrderBy(iv => iv.Start)
-                .ToList();
-            
-            // Merge overlapping intervals
-            var merged = new List<(DateTime Start, DateTime End)>();
-            foreach (var iv in intervals)
-            {
-                if (!merged.Any() || iv.Start > merged.Last().End)
-                {
-                    merged.Add((iv.Start, iv.End));
-                }
-                else
-                {
-                    // Extend the last interval end if overlapping
-                    var last = merged[merged.Count - 1];
-                    var newEnd = iv.End > last.End ? iv.End : last.End;
-                    merged[merged.Count - 1] = (last.Start, newEnd);
-                }
-            }
-            
-            // Sum merged intervals durations
-            TimeSpan total = TimeSpan.Zero;
-            foreach (var span in merged)
-            {
-                total += span.End - span.Start;
-            }
-            return total;
-        }
-
         // Event Handlers for Tray Icon Clicks
         private void TrayIcon_ShowClicked(object? sender, EventArgs e)
         {
@@ -2102,19 +1571,6 @@ namespace ScreenTimeTracker
                 TrackingStatusText.Text = "Paused";
                 PulseDot.Fill = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
                 PulseStoryboard.Stop();
-            }
-        }
-
-        private void TrackingStatusButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Toggle tracking by forwarding to existing button handlers
-            if (_trackingService != null && _trackingService.IsTracking)
-            {
-                StopButton_Click(StopButton, new RoutedEventArgs());
-            }
-            else
-            {
-                StartButton_Click(StartButton, new RoutedEventArgs());
             }
         }
 

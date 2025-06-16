@@ -322,8 +322,7 @@ namespace ScreenTimeTracker
                     DispatcherQueue?.TryEnqueue(() =>
                     {
                         if (_disposed || UsageListView == null) return;
-                        UsageListView.ItemsSource = null;
-                        UsageListView.ItemsSource = _usageRecords;
+                        // ItemsSource binding handles updates automatically
                     });
                 }
             }
