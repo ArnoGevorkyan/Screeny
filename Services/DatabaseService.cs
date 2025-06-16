@@ -1358,5 +1358,11 @@ namespace ScreenTimeTracker.Services
                 return new List<AppUsageRecord>();
             }
         }
+
+        public List<AppUsageRecord> GetRecordsForDateRange(DateTime startDate, DateTime endDate)
+        {
+            // Reuse existing raw retrieval method. Caller is responsible for any aggregation.
+            return GetRawRecordsForDateRange(startDate, endDate);
+        }
     }
 } 
