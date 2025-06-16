@@ -260,6 +260,9 @@ namespace ScreenTimeTracker
 
                 // Immediate chart refresh
                 UpdateUsageChart();
+
+                // Sync ViewModel state
+                _viewModel.IsTracking = true;
             }
             catch (Exception ex)
             {
@@ -287,6 +290,8 @@ namespace ScreenTimeTracker
             ThrowIfDisposed();
             System.Diagnostics.Debug.WriteLine("Stopping tracking");
             _trackingService.StopTracking();
+
+            _viewModel.IsTracking = false;
 
             // Unfocus all UI records
             foreach (var uiRec in _usageRecords.ToList())
@@ -609,6 +614,49 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
                 ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
             }
+        }
+
+        // ---------------- Date-period helpers migrated from MainWindow.xaml.cs ----------------
+        private int GetDayCountForTimePeriod(TimePeriod period, DateTime date)
+        {
+            return period switch
+            {
+                TimePeriod.Weekly => 7,
+                _ => 1,
+            };
+        }
+
+        /// <summary>
+        /// Calculates the total active time covered by a set of records, merging overlapping intervals so time isn't double-counted.
+        /// </summary>
+        private TimeSpan CalculateTotalActiveTime(List<AppUsageRecord> records)
+        {
+            var intervals = records
+                .Select(r => new { Start = r.StartTime, End = r.StartTime + r.Duration })
+                .Where(iv => iv.End > iv.Start)
+                .OrderBy(iv => iv.Start)
+                .ToList();
+
+            var merged = new List<(DateTime Start, DateTime End)>();
+
+            foreach (var iv in intervals)
+            {
+                if (!merged.Any() || iv.Start > merged.Last().End)
+                {
+                    merged.Add((iv.Start, iv.End));
+                }
+                else
+                {
+                    var last = merged[^1];
+                    merged[^1] = (last.Start, iv.End > last.End ? iv.End : last.End);
+                }
+            }
+
+            TimeSpan total = TimeSpan.Zero;
+            foreach (var span in merged)
+                total += span.End - span.Start;
+
+            return total;
         }
     }
 } 

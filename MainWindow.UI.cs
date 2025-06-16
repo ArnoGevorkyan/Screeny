@@ -3,6 +3,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
 using System.Linq;
 using System;
+using ScreenTimeTracker.Helpers;
+using System.Collections.Generic;
 
 namespace ScreenTimeTracker
 {
@@ -44,9 +46,23 @@ namespace ScreenTimeTracker
 
         private void UpdateAveragePanel(List<AppUsageRecord> aggregatedRecords, DateTime startDate, DateTime endDate)
         {
-            // Placeholder – original logic showed daily average; can be restored later
-            // Here we simply keep the panel hidden for now
-            if (AveragePanel != null) AveragePanel.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            if (AveragePanel == null || DailyAverage == null) return;
+
+            int dayCount = (endDate.Date - startDate.Date).Days + 1;
+            if (dayCount <= 0) dayCount = 1;
+
+            // Sum total duration across all aggregated records.
+            TimeSpan total = TimeSpan.Zero;
+            foreach (var rec in aggregatedRecords)
+                total += rec.Duration;
+
+            // Calculate daily average.
+            var avg = TimeSpan.FromSeconds(total.TotalSeconds / dayCount);
+
+            DailyAverage.Text = ChartHelper.FormatTimeSpan(avg);
+
+            // Show panel only when selection spans more than one day.
+            AveragePanel.Visibility = dayCount > 1 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
@@ -103,6 +119,266 @@ namespace ScreenTimeTracker
         {
             // Delegate to Dispose logic already in Logic partial
             Dispose();
+        }
+
+        // ---------------- Additional UI helpers migrated from MainWindow.xaml.cs ----------------
+        private void UpdateChartViewMode()
+        {
+            var today = DateTime.Today;
+            var yesterday = today.AddDays(-1);
+
+            bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
+            bool isCustomRange = _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom;
+
+            if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
+            {
+                _currentChartViewMode = ChartViewMode.Hourly;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (ViewModeLabel != null)
+                        ViewModeLabel.Text = "Hourly View";
+
+                    if (ViewModePanel != null)
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                });
+            }
+            else if (isLast7Days)
+            {
+                _currentChartViewMode = ChartViewMode.Daily;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (ViewModeLabel != null)
+                        ViewModeLabel.Text = "Daily View";
+
+                    if (ViewModePanel != null)
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                });
+            }
+            else if (isCustomRange)
+            {
+                _currentChartViewMode = ChartViewMode.Daily;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (ViewModeLabel != null)
+                        ViewModeLabel.Text = "Daily View";
+
+                    if (ViewModePanel != null)
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+                });
+            }
+            else
+            {
+                if (_currentTimePeriod == TimePeriod.Daily)
+                {
+                    _currentChartViewMode = ChartViewMode.Hourly;
+
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (ViewModeLabel != null)
+                            ViewModeLabel.Text = "Hourly View";
+
+                        if (ViewModePanel != null)
+                            ViewModePanel.Visibility = Visibility.Visible;
+                    });
+                }
+                else
+                {
+                    _currentChartViewMode = ChartViewMode.Daily;
+
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (ViewModeLabel != null)
+                            ViewModeLabel.Text = "Daily View";
+
+                        if (ViewModePanel != null)
+                            ViewModePanel.Visibility = Visibility.Visible;
+                    });
+                }
+            }
+
+            if (ViewModePanel != null)
+                ViewModePanel.Visibility = Visibility.Collapsed;
+
+            UpdateUsageChart();
+        }
+
+        // Forces the LiveCharts control to refresh completely
+        private void ForceChartRefresh()
+        {
+            if (UsageChartLive == null) return;
+
+            var totalTime = ChartHelper.ForceChartRefresh(
+                UsageChartLive,
+                _usageRecords,
+                _currentChartViewMode,
+                _currentTimePeriod,
+                _selectedDate,
+                _selectedEndDate);
+
+            if (ChartTimeValue != null)
+                ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
+        }
+
+        private void UpdateDatePickerButtonText()
+        {
+            try
+            {
+                if (DatePickerButton == null) return;
+
+                var today = DateTime.Today;
+
+                if (_selectedDate == today && !_isDateRangeSelected)
+                {
+                    DatePickerButton.Content = "Today";
+                    return;
+                }
+
+                if (_selectedDate == today.AddDays(-1) && !_isDateRangeSelected)
+                {
+                    DatePickerButton.Content = "Yesterday";
+                    return;
+                }
+
+                if (_selectedDate == today && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Weekly)
+                {
+                    DatePickerButton.Content = "Last 7 days";
+                    return;
+                }
+
+                if (_selectedDate == today.AddDays(-29) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
+                {
+                    DatePickerButton.Content = "Last 30 days";
+                    return;
+                }
+
+                if (_selectedDate == new DateTime(today.Year, today.Month, 1) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
+                {
+                    DatePickerButton.Content = "This month";
+                    return;
+                }
+
+                if (!_isDateRangeSelected)
+                {
+                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
+                }
+                else if (_selectedEndDate.HasValue)
+                {
+                    DatePickerButton.Content = $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateDatePickerButtonText: {ex.Message}");
+                if (DatePickerButton != null)
+                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
+            }
+        }
+
+        private void LoadRecordsForLastSevenDays()
+        {
+            try
+            {
+                DateTime today = DateTime.Today;
+                DateTime startDate = today.AddDays(-6);
+
+                var weekRecords = GetAggregatedRecordsForDateRange(startDate, today);
+
+                UpdateRecordListView(weekRecords);
+                SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {today:MMM d}, {today.Year})");
+
+                if (weekRecords.Any())
+                {
+                    double totalHours = weekRecords.Sum(r => r.Duration.TotalHours);
+                    double dailyAverage = totalHours / 7.0;
+                    System.Diagnostics.Debug.WriteLine($"Daily average: {dailyAverage:F1} h");
+                }
+
+                UpdateChartWithRecords(weekRecords);
+
+                for (var d = startDate; d <= today; d = d.AddDays(1))
+                    LoadRecordsForSpecificDay(d, false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForLastSevenDays: {ex.Message}");
+            }
+        }
+
+        private void UpdateRecordListView(List<AppUsageRecord> records)
+        {
+            try
+            {
+                if (_usageRecords == null) return;
+                _usageRecords.Clear();
+
+                foreach (var r in records.OrderByDescending(r => r.Duration))
+                    _usageRecords.Add(r);
+
+                if (!_disposed && UsageListView != null)
+                {
+                    DispatcherQueue?.TryEnqueue(() =>
+                    {
+                        if (_disposed || UsageListView == null) return;
+                        UsageListView.ItemsSource = null;
+                        UsageListView.ItemsSource = _usageRecords;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateRecordListView: {ex.Message}");
+            }
+        }
+
+        private void UpdateChartWithRecords(List<AppUsageRecord> records)
+        {
+            try
+            {
+                _currentTimePeriod = TimePeriod.Weekly;
+                _currentChartViewMode = ChartViewMode.Daily;
+
+                DispatcherQueue?.TryEnqueue(() =>
+                {
+                    if (_disposed) return;
+
+                    if (ViewModeLabel != null)
+                        ViewModeLabel.Text = "Daily View";
+
+                    if (ViewModePanel != null)
+                        ViewModePanel.Visibility = Visibility.Collapsed;
+
+                    UpdateUsageChart();
+                    UpdateSummaryTab(records);
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateChartWithRecords: {ex.Message}");
+            }
+        }
+
+        private void SetTimeFrameHeader(string headerText)
+        {
+            try
+            {
+                DispatcherQueue?.TryEnqueue(() =>
+                {
+                    if (_disposed) return;
+
+                    if (DateDisplay != null)
+                    {
+                        DateDisplay.Text = headerText;
+                        System.Diagnostics.Debug.WriteLine($"DateDisplay updated to: {headerText}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in SetTimeFrameHeader: {ex.Message}");
+            }
         }
     }
 } 

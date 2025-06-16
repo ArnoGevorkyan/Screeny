@@ -12,17 +12,6 @@ using System.Runtime.InteropServices;
 using System.Linq;
 using System.Collections.Generic;
 using Microsoft.UI; // Add this for Win32Interop
-// LiveCharts using directives
-using LiveChartsCore;
-using LiveChartsCore.SkiaSharpView;
-using LiveChartsCore.SkiaSharpView.Painting;
-using LiveChartsCore.SkiaSharpView.VisualElements;
-using LiveChartsCore.SkiaSharpView.WinUI;
-using LiveChartsCore.SkiaSharpView.Painting.Effects;
-using LiveChartsCore.Drawing;
-using SkiaSharp;
-using Windows.Globalization; // For DayOfWeek
-using SDColor = System.Drawing.Color; // Alias for System.Drawing.Color
 using ScreenTimeTracker.Helpers;
 using Microsoft.UI.Dispatching;
 using System.Diagnostics; // Add for Debug.WriteLine
@@ -224,6 +213,34 @@ namespace ScreenTimeTracker
 
             // Instantiate icon service
             _iconService = new IconRefreshService();
+
+            // After _viewModel instantiated
+            _viewModel.SelectedDate = _selectedDate;
+            _viewModel.SelectedEndDate = _selectedEndDate;
+            _viewModel.IsDateRangeSelected = _isDateRangeSelected;
+            _viewModel.CurrentTimePeriod = _currentTimePeriod;
+            _viewModel.CurrentChartViewMode = _currentChartViewMode;
+            _viewModel.IsTracking = _trackingService.IsTracking;
+
+            _viewModel.OnStartTrackingRequested += (_, __) => StartTracking();
+            _viewModel.OnStopTrackingRequested  += (_, __) => StopTracking();
+            _viewModel.OnToggleTrackingRequested += (_, __) =>
+            {
+                if (_trackingService.IsTracking) StopTracking(); else StartTracking();
+            };
+            _viewModel.OnPickDateRequested += (_, __) =>
+            {
+                // simulate click on DatePickerButton
+                DatePickerButton_Click(DatePickerButton, new RoutedEventArgs());
+            };
+            _viewModel.OnToggleViewModeRequested += (_, __) =>
+            {
+                if (_currentChartViewMode == ChartViewMode.Hourly)
+                    _currentChartViewMode = ChartViewMode.Daily;
+                else
+                    _currentChartViewMode = ChartViewMode.Hourly;
+                UpdateUsageChart();
+            };
         }
 
         private void SubclassWindow()
@@ -1197,22 +1214,7 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error in TrackingService_WindowChanged: {ex.Message}");
                 }
         }
-
-        private int GetDayCountForTimePeriod(TimePeriod period, DateTime date)
-        {
-            switch (period)
-            {
-                case TimePeriod.Weekly:
-                    // A week has 7 days
-                    return 7;
-                
-                case TimePeriod.Daily:
-                default:
-                    // Daily view is just 1 day
-                    return 1;
-            }
-        }
-
+#if false
         private void UpdateChartViewMode()
         {
             // Get today and yesterday dates for comparison
@@ -1325,7 +1327,6 @@ namespace ScreenTimeTracker
             UpdateUsageChart();
         }
 
-        // Add a method to force a chart refresh - useful for debugging and ensuring chart gets updated
         private void ForceChartRefresh()
         {
             // Call the ChartHelper method to force refresh the chart
@@ -1340,7 +1341,7 @@ namespace ScreenTimeTracker
             // Update the chart time display
             ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
         }
-
+#endif
         private void DatePickerButton_Click(object sender, RoutedEventArgs e)
         {
             // Use the DatePickerPopup helper to show the date picker
@@ -1638,7 +1639,7 @@ namespace ScreenTimeTracker
             }
         }
         
-        private void UpdateDatePickerButtonText()
+        private void UpdateDatePickerButtonText_Dup()
         {
             try
             {
@@ -1708,7 +1709,7 @@ namespace ScreenTimeTracker
         
         // LoadRecordsForDateRange implementation moved to MainWindow.Logic.cs
 
-        private void LoadRecordsForLastSevenDays()
+        private void LoadRecordsForLastSevenDays_Dup()
         {
             try
             {
@@ -1723,10 +1724,10 @@ namespace ScreenTimeTracker
                 var weekRecords = GetAggregatedRecordsForDateRange(startDate, endDate);
 
                 // Update the UI with the aggregated data
-                UpdateRecordListView(weekRecords);
+                UpdateRecordListView_Dup(weekRecords);
 
                 // Set header based on date range
-                SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {endDate:MMM d}, {endDate.Year})");
+                SetTimeFrameHeader_Dup($"Last 7 Days ({startDate:MMM d} - {endDate:MMM d}, {endDate.Year})");
 
                 // Calculate and display daily average
                 if (weekRecords.Any())
@@ -1744,7 +1745,7 @@ namespace ScreenTimeTracker
                 }
 
                 // Update the chart for the entire week
-                UpdateChartWithRecords(weekRecords);
+                UpdateChartWithRecords_Dup(weekRecords);
 
                 // Also load the individual day records for reference but don't display them
                 DateTime currentDate = startDate;
@@ -1766,7 +1767,7 @@ namespace ScreenTimeTracker
         /// Updates the record list view with the provided records
         /// </summary>
         /// <param name="records">The records to display in the list view</param>
-        private void UpdateRecordListView(List<AppUsageRecord> records)
+        private void UpdateRecordListView_Dup(List<AppUsageRecord> records)
         {
             try
             {
@@ -1819,7 +1820,7 @@ namespace ScreenTimeTracker
         /// Updates the chart display with the provided records
         /// </summary>
         /// <param name="records">The records to display in the chart</param>
-        private void UpdateChartWithRecords(List<AppUsageRecord> records)
+        private void UpdateChartWithRecords_Dup(List<AppUsageRecord> records)
         {
             try
             {
@@ -1947,7 +1948,7 @@ namespace ScreenTimeTracker
         /// Sets the time frame header text in the UI
         /// </summary>
         /// <param name="headerText">The text to set as the header</param>
-        private void SetTimeFrameHeader(string headerText)
+        private void SetTimeFrameHeader_Dup(string headerText)
         {
             try
             {
@@ -1979,7 +1980,7 @@ namespace ScreenTimeTracker
             }
         }
 
-        private TimeSpan CalculateTotalActiveTime(List<AppUsageRecord> records)
+        private TimeSpan CalculateTotalActiveTime_Dup(List<AppUsageRecord> records)
         {
             // Create time intervals for each record
             var intervals = records
@@ -2141,4 +2142,5 @@ namespace ScreenTimeTracker
         }
     }
 }
+
 
