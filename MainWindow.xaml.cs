@@ -821,87 +821,6 @@ namespace ScreenTimeTracker
             _windowHelper.CloseWindow();
         }
 
-        // Convenience overload: summarize current usage records without providing list
-        private void UpdateSummaryTab()
-        {
-            UpdateSummaryTab(_usageRecords.ToList());
-        }
-
-        private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
-        {
-            try
-            {
-                // Calculate total screen time by summing individual record durations
-                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, rec) => sum + rec.Duration);
-                // Cap to reasonable maximum
-                int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
-                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
-                if (totalTime > absoluteMaxDuration)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
-                    totalTime = absoluteMaxDuration;
-                }
-                // Update total time display
-                TotalScreenTime.Text = FormatTimeSpan(totalTime);
-
-                // Find most used app based on aggregated list
-                AppUsageRecord? mostUsedApp = null;
-                foreach (var record in recordsToSummarize)
-                {
-                    TimeSpan cappedDuration = record.Duration;
-                    if (cappedDuration > absoluteMaxDuration)
-                        cappedDuration = absoluteMaxDuration;
-                    if (mostUsedApp == null || cappedDuration > mostUsedApp.Duration)
-                        mostUsedApp = record;
-                }
-                // Update most used app (rest of existing code remains)
-                 
-                // ... existing code ...
-                // Update most used app (rest of existing code remains)
-                if (mostUsedApp != null)
-                {
-                    MostUsedApp.Text = mostUsedApp.ProcessName;
-                    MostUsedAppTime.Text = FormatTimeSpan(mostUsedApp.Duration);
-                    // Icon visibility is now handled via XAML converters; no direct UI manipulation needed.
-                    mostUsedApp.LoadAppIconIfNeeded();
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        if (mostUsedApp.AppIcon != null)
-                        {
-                            MostUsedAppIcon.Source = mostUsedApp.AppIcon;
-                            MostUsedAppIcon.Visibility = Visibility.Visible;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
-                        }
-                        else
-                        {
-                            MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                        }
-                    }
-                }
-                else
-                {
-                    MostUsedApp.Text = "None";
-                    MostUsedAppTime.Text = FormatTimeSpan(TimeSpan.Zero);
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                    }
-                }
-                // ... existing code ...
-             }
-             catch (Exception ex)
-             {
-                 System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
-             }
-         }
-
-        private string FormatTimeSpan(TimeSpan time)
-        {
-            return ChartHelper.FormatTimeSpan(time);
-        }
-
         // New method to handle initialization after window is loaded - Made async void
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
@@ -1092,9 +1011,6 @@ namespace ScreenTimeTracker
             // Initialize the date button
             UpdateDatePickerButtonText();
 
-            // Initialize tracking start/stop buttons
-            UpdateTrackingButtonsState();
-
             // Configure timer for duration updates (already initialized in constructor)
             _updateTimer.Interval = TimeSpan.FromSeconds(1);
             _updateTimer.Tick += UpdateTimer_Tick;
@@ -1109,16 +1025,6 @@ namespace ScreenTimeTracker
         {
             // Welcome message has been removed as requested
             System.Diagnostics.Debug.WriteLine("First run check - welcome message disabled");
-        }
-
-        // New method to handle initialization after window is loaded
-        private void UpdateTrackingButtonsState()
-        {
-            if (_trackingService != null)
-            {
-                StartButton.IsEnabled = !_trackingService.IsTracking;
-                StopButton.IsEnabled = _trackingService.IsTracking;
-            }
         }
 
         // New method to handle initialization after window is loaded
@@ -1549,52 +1455,6 @@ namespace ScreenTimeTracker
             public POINT_WIN32 ptMaxPosition;
             public POINT_WIN32 ptMinTrackSize;
             public POINT_WIN32 ptMaxTrackSize;
-        }
-
-        // --- Tracking status indicator helper ---
-        private void UpdateTrackingIndicator()
-        {
-            // Ensure XAML elements exist (could be null during early constructor)
-            if (TrackingStatusText == null || PulseStoryboard == null)
-                return;
-
-            bool isActive = _trackingService != null && _trackingService.IsTracking;
-
-            if (isActive)
-            {
-                TrackingStatusText.Text = "Active";
-                PulseDot.Fill = Application.Current.Resources["AccentFillColorDefaultBrush"] as Brush;
-                PulseStoryboard.Begin();
-            }
-            else
-            {
-                TrackingStatusText.Text = "Paused";
-                PulseDot.Fill = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush;
-                PulseStoryboard.Stop();
-            }
-        }
-
-        // Utility to determine whether a process is a system/utility process we don't track visually
-        private bool IsWindowsSystemProcess(string processName)
-        {
-            if (string.IsNullOrEmpty(processName)) return false;
-
-            string normalizedName = processName.Trim().ToLowerInvariant();
-
-            string[] highPriority = {
-                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
-                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
-            };
-            if (highPriority.Any(p => normalizedName.Contains(p))) return true;
-
-            string[] others = {
-                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
-                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
-                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
-                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
-                "settingssynchost","wudfhost"
-            };
-            return others.Contains(normalizedName);
         }
     }
 }

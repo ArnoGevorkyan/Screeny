@@ -250,9 +250,7 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine("No current window detected yet");
                 }
 
-                // Update UI state
-                StartButton.IsEnabled = false;
-                StopButton.IsEnabled  = true;
+                // Start/Stop buttons are collapsed; tracking indicator handles state.
 
                 // Start timers
                 _updateTimer.Start();
@@ -278,10 +276,7 @@ namespace ScreenTimeTracker
             }
             finally
             {
-                // Ensure UI consistency
-                StartButton.IsEnabled = false;
-                StopButton.IsEnabled  = true;
-                UpdateTrackingIndicator();
+                // Tracking indicator now handled via data bindings (no imperative update needed)
             }
         }
 
@@ -310,12 +305,10 @@ namespace ScreenTimeTracker
             SaveRecordsToDatabase();
             CleanupSystemProcesses();
 
-            // Update UI state
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled  = false;
+            // Update summary and chart
             UpdateSummaryTab(_usageRecords.ToList());
             UpdateUsageChart();
-            UpdateTrackingIndicator();
+            // Tracking indicator handled via binding; no imperative call.
         }
 
         private void SaveRecordsToDatabase()
@@ -704,6 +697,29 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForSpecificDay: {ex.Message}");
                 return new List<AppUsageRecord>();
             }
+        }
+
+        // ---------------- Utility helpers (non-UI) ----------------
+        private bool IsWindowsSystemProcess(string processName)
+        {
+            if (string.IsNullOrEmpty(processName)) return false;
+
+            string normalizedName = processName.Trim().ToLowerInvariant();
+
+            string[] highPriority = {
+                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
+                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
+            };
+            if (highPriority.Any(p => normalizedName.Contains(p))) return true;
+
+            string[] others = {
+                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
+                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
+                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
+                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
+                "settingssynchost","wudfhost"
+            };
+            return others.Contains(normalizedName);
         }
     }
 } 

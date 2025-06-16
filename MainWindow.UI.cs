@@ -379,5 +379,83 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error in SetTimeFrameHeader: {ex.Message}");
             }
         }
+
+        private void UpdateSummaryTab()
+        {
+            UpdateSummaryTab(_usageRecords.ToList());
+        }
+
+        private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
+        {
+            try
+            {
+                // Calculate total screen time by summing individual durations
+                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, rec) => sum + rec.Duration);
+
+                // Cap to a realistic maximum: 24 h per day * days in period
+                int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
+                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
+                if (totalTime > absoluteMaxDuration)
+                {
+                    System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
+                    totalTime = absoluteMaxDuration;
+                }
+
+                // Update summary UI – total screen time block
+                if (TotalScreenTime != null)
+                {
+                    TotalScreenTime.Text = FormatTimeSpan(totalTime);
+                }
+
+                // Determine most-used application within the supplied list
+                AppUsageRecord? mostUsedApp = null;
+                foreach (var record in recordsToSummarize)
+                {
+                    var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
+                    if (mostUsedApp == null || capped > mostUsedApp.Duration)
+                        mostUsedApp = record;
+                }
+
+                if (mostUsedApp != null)
+                {
+                    if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
+                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = FormatTimeSpan(mostUsedApp.Duration);
+
+                    // Ensure icon is loaded (deferred)
+                    mostUsedApp.LoadAppIconIfNeeded();
+
+                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
+                    {
+                        if (mostUsedApp.AppIcon != null)
+                        {
+                            MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                            MostUsedAppIcon.Visibility = Visibility.Visible;
+                            MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                        }
+                        else
+                        {
+                            MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                            MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                        }
+                    }
+                }
+                else
+                {
+                    if (MostUsedApp != null)       MostUsedApp.Text = "None";
+                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = FormatTimeSpan(TimeSpan.Zero);
+                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
+                    {
+                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
+            }
+        }
+
+        private string FormatTimeSpan(TimeSpan time) => ChartHelper.FormatTimeSpan(time);
     }
 } 
