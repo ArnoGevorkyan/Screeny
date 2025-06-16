@@ -43,7 +43,7 @@ namespace ScreenTimeTracker.Helpers
             
             // Get the window handle and AppWindow
             _windowHandle = WindowNative.GetWindowHandle(window);
-            var windowId = Win32Interop.GetWindowIdFromWindow(_windowHandle);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_windowHandle);
             _appWindow = AppWindow.GetFromWindowId(windowId);
             _presenter = _appWindow.Presenter as OverlappedPresenter;
         }

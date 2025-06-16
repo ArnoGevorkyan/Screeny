@@ -278,6 +278,32 @@ namespace ScreenTimeTracker.Helpers
                     record.ProcessName = "VS Code";
                 }
             }
+
+            // Handle generic webhelper/helper suffixes to map back to main application
+            if (record.ProcessName.Contains("webhelper", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.EndsWith("helper", StringComparison.OrdinalIgnoreCase))
+            {
+                // Remove common helper suffixes and illegal characters
+                string cleaned = record.ProcessName
+                    .Replace("webhelper", string.Empty, StringComparison.OrdinalIgnoreCase)
+                    .Replace("helper", string.Empty, StringComparison.OrdinalIgnoreCase)
+                    .Trim('_', '-', ' ', '.');
+
+                if (!string.IsNullOrWhiteSpace(cleaned) && cleaned.Length > 2)
+                {
+                    record.ProcessName = cleaned;
+                    System.Diagnostics.Debug.WriteLine($"[APP_HELPER] Normalised helper process to {cleaned}");
+                    return;
+                }
+            }
+
+            // Outlook's child process (OLK.EXE / olk.exe) should map to Outlook
+            if (record.ProcessName.Equals("olk", StringComparison.OrdinalIgnoreCase) ||
+                record.ProcessName.Equals("olk.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                record.ProcessName = "Outlook";
+                return;
+            }
         }
         
         /// <summary>

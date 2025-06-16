@@ -292,16 +292,13 @@
                             <StackPanel Orientation="Horizontal" Grid.Column="1">
                                 <!-- App Icon -->
                                 <Grid Width="20" Height="20" VerticalAlignment="Center" Margin="0,0,8,0">
-                                    <FontIcon x:Name="MostUsedPlaceholderIcon" 
-                                             Glyph="&#xE700;" 
-                                             FontSize="16"
-                                             VerticalAlignment="Center"
-                                             HorizontalAlignment="Center"/>
-                                    <Image x:Name="MostUsedAppIcon" 
-                                           Visibility="Collapsed" 
-                                           Width="20" 
-                                           Height="20"
-                                           Stretch="Uniform"/>
+                                    <FontIcon x:Name="MostUsedPlaceholderIcon"
+                                              Glyph="&#xE700;"
+                                              FontSize="16"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                                    <Image x:Name="MostUsedAppIcon"
+                                           Width="20" Height="20" Stretch="Uniform"/>
                                 </Grid>
                                 <TextBlock x:Name="MostUsedApp" 
                                           Text="None" 
@@ -345,8 +342,7 @@
                           BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                           BorderThickness="1"
                           CornerRadius="8"
-                          MaxHeight="300"
-                          ContainerContentChanging="UsageListView_ContainerContentChanging">
+                          MaxHeight="300">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="models:AppUsageRecord">
                         <Grid Margin="12,6">
@@ -360,17 +356,14 @@
                             
                             <!-- Icon with loading state -->
                             <Grid Grid.Column="0" Width="24" Height="24">
-                                    <FontIcon x:Name="PlaceholderIcon"
-                                             Glyph="&#xECAA;"
-                                         FontSize="16"
-                                         HorizontalAlignment="Center"
-                                             VerticalAlignment="Center"
-                                             Visibility="Visible"/>
-                                    <Image x:Name="AppIconImage"
-                                           Source="{x:Bind AppIcon, Mode=OneWay}"
-                                           Width="24"
-                                           Height="24"
-                                           Visibility="Collapsed"/>
+                                    <FontIcon Glyph="&#xECAA;"
+                                              FontSize="16"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Visibility="{Binding AppIcon, Converter={StaticResource NullToVisibleConverter}}"/>
+                                    <Image Source="{x:Bind AppIcon, Mode=OneWay}"
+                                           Width="24" Height="24"
+                                           Visibility="{Binding AppIcon, Converter={StaticResource NotNullToVisibleConverter}}"/>
                             </Grid>
                             
                                 <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"/>

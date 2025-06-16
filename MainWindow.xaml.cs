@@ -120,6 +120,10 @@ namespace ScreenTimeTracker
 
         private bool _iconsRefreshedOnce = false; // flag to ensure refresh runs only once
 
+        private readonly MainViewModel _viewModel;
+
+        private readonly IconRefreshService _iconService;
+
         public MainWindow()
         {
             _disposed = false;
@@ -209,6 +213,17 @@ namespace ScreenTimeTracker
 
             // Set initial indicator state
             UpdateTrackingIndicator();
+
+            // NEW – instantiate the ViewModel early and set it as DataContext. We will migrate
+            // state into it incrementally so the UI can bind to a single source of truth.
+            _viewModel = new MainViewModel();
+            if (Content is FrameworkElement fe)
+            {
+                fe.DataContext = _viewModel;
+            }
+
+            // Instantiate icon service
+            _iconService = new IconRefreshService();
         }
 
         private void SubclassWindow()
@@ -351,117 +366,7 @@ namespace ScreenTimeTracker
             }
         }
 
-        public void Dispose()
-        {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING Dispose");
-            if (!_disposed)
-            {
-                 // Dispose Tray Icon Helper FIRST to remove icon
-                 _trayIconHelper?.Dispose();
-
-                 // Unregister power notifications
-                 UnregisterPowerNotifications();
-
-                 // Restore original window procedure
-                 RestoreWindowProc();
-
-                // Unsubscribe from AppWindow event
-                if (_appWindow != null)
-                {
-                    _appWindow.Closing -= AppWindow_Closing;
-                }
-
-                // Stop services
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services...");
-                _trackingService?.StopTracking();
-                _updateTimer?.Stop();
-                _autoSaveTimer?.Stop();
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
-
-                // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Save skipped.");
-                
-                // Clear collections
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Clearing collections...");
-                _usageRecords?.Clear();
-                
-                // Dispose services
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Disposing services...");
-                _trackingService?.Dispose();
-                _databaseService?.Dispose();
-                
-                // Remove event handlers
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Removing event handlers...");
-                 if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
-                 if (_trackingService != null) 
-                 { 
-                     _trackingService.WindowChanged -= TrackingService_WindowChanged;
-                     _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
-                 }
-                 if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
-                 if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded;
-                 // Unsubscribe from Tray Icon events
-                 if (_trayIconHelper != null)
-                 {
-                     _trayIconHelper.ShowClicked -= TrayIcon_ShowClicked;
-                     _trayIconHelper.ExitClicked -= TrayIcon_ExitClicked;
-                 }
-
-                _disposed = true;
-                 System.Diagnostics.Debug.WriteLine("[LOG] MainWindow disposed.");
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Already disposed.");
-            }
-            System.Diagnostics.Debug.WriteLine("[LOG] EXITING Dispose");
-        }
-
-        /// <summary>
-        /// Prepares the application for suspension by stopping tracking and saving data.
-        /// This is called from the App.OnSuspending event handler.
-        /// </summary>
-        public void PrepareForSuspend()
-        {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING PrepareForSuspend");
-            try
-            {
-                // Debug check for system time
-                System.Diagnostics.Debug.WriteLine($"[LOG] Current system time: {DateTime.Now}");
-                
-                // Validate _selectedDate to ensure it's not in the future
-                if (_selectedDate > DateTime.Today)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future _selectedDate detected ({_selectedDate:yyyy-MM-dd}), resetting to today.");
-                    _selectedDate = DateTime.Today;
-                }
-                
-                // Ensure tracking is stopped first to finalize durations
-                if (_trackingService != null && _trackingService.IsTracking)
-                {
-                     System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE StopTracking()");
-                    _trackingService.StopTracking(); 
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER StopTracking()");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: Tracking service null or not tracking.");
-                }
-                
-                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE SaveRecordsToDatabase()");
-                SaveRecordsToDatabase();
-                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER SaveRecordsToDatabase()");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LOG] PrepareForSuspend: **** ERROR **** during save: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-            }
-             System.Diagnostics.Debug.WriteLine("[LOG] EXITING PrepareForSuspend");
-        }
-
-        // Add a counter for timer ticks to control periodic chart refreshes
-        private int _timerTickCounter = 0;
+        // Methods moved to MainWindow.Logic.cs (Dispose, PrepareForSuspend, AutoSaveTimer_Tick)
 
         private void UpdateTimer_Tick(object? sender, object e)
         {
@@ -887,67 +792,7 @@ namespace ScreenTimeTracker
             StartTracking();
         }
         
-        private void StartTracking()
-        {
-            ThrowIfDisposed();
-            
-            try
-            {
-                System.Diagnostics.Debug.WriteLine("Starting tracking");
-
-                // Start tracking the current window
-            _trackingService.StartTracking();
-                System.Diagnostics.Debug.WriteLine($"Tracking started: IsTracking={_trackingService.IsTracking}");
-                
-                // Log current foreground window
-                if (_trackingService.CurrentRecord != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Current window: {_trackingService.CurrentRecord.ProcessName} - {_trackingService.CurrentRecord.WindowTitle}");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("No current window detected yet");
-                }
-            
-            // Update UI state
-            StartButton.IsEnabled = false;
-            StopButton.IsEnabled = true;
-            
-                // Start timer for duration updates
-                _updateTimer.Start();
-                System.Diagnostics.Debug.WriteLine("Update timer started");
-                
-                // Start auto-save timer
-                _autoSaveTimer.Start();
-                System.Diagnostics.Debug.WriteLine("Auto-save timer started");
-                
-                // Update the chart immediately to show the initial state
-                UpdateUsageChart();
-                System.Diagnostics.Debug.WriteLine("Initial chart update called");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error starting tracking: {ex.Message}");
-                
-                // Display error dialog
-                var dialog = new ContentDialog
-                {
-                    Title = "Error",
-                    Content = $"Failed to start tracking: {ex.Message}",
-                    CloseButtonText = "OK"
-                };
-
-                dialog.XamlRoot = this.Content.XamlRoot;
-                _ = dialog.ShowAsync();
-            }
-
-            // Update UI state
-            StartButton.IsEnabled = false;
-            StopButton.IsEnabled = true;
-
-            // Update tracking indicator
-            UpdateTrackingIndicator();
-        }
+        // StartTracking implementation moved to MainWindow.Logic.cs
 
         private void LoadRecordsForDate(DateTime date)
         {
@@ -1444,153 +1289,22 @@ namespace ScreenTimeTracker
 
         private void StopButton_Click(object sender, RoutedEventArgs e)
         {
-            ThrowIfDisposed();
-
             try
             {
-                // Stop tracking
-                System.Diagnostics.Debug.WriteLine("Stopping tracking");
-            _trackingService.StopTracking();
-
-                // NEW: Explicitly unfocus all UI records to guarantee no record continues
-                // accumulating time while tracking is paused.  This is especially important
-                // for aggregated views where the backing service record may differ from the
-                // UI instance, leaving its IsFocused flag untouched by the service-level stop.
-                foreach (var uiRec in _usageRecords.ToList())
-                {
-                    if (uiRec.IsFocused)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[PAUSE_FIX] Unfocusing UI record {uiRec.ProcessName} during StopButton_Click");
-                        uiRec.SetFocus(false);
-                    }
-                }
-
-                // Stop UI updates and auto-save
-                _updateTimer.Stop();
-                _autoSaveTimer.Stop();
-
-                // Update UI state
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled = false;
-
-                // Save all active records to the database
-                SaveRecordsToDatabase();
-
-                // Cleanup any system processes one last time
-                CleanupSystemProcesses();
+                StopTracking();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error stopping tracking: {ex.Message}");
-                // Display error dialog
                 var dialog = new ContentDialog
                 {
                     Title = "Error",
                     Content = $"Failed to stop tracking: {ex.Message}",
-                    CloseButtonText = "OK"
+                    CloseButtonText = "OK",
+                    XamlRoot = Content.XamlRoot
                 };
 
-                dialog.XamlRoot = this.Content.XamlRoot;
                 _ = dialog.ShowAsync();
-            }
-
-            // Update UI state
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled = false;
-
-            // Refresh summary and chart immediately to reflect the unfocused state
-            UpdateSummaryTab(_usageRecords.ToList());
-            UpdateUsageChart();
-
-            // Update tracking indicator
-            UpdateTrackingIndicator();
-        }
-
-        private void SaveRecordsToDatabase()
-        {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING SaveRecordsToDatabase");
-            // Skip saving if database or tracking service is not available
-            if (_databaseService == null || _trackingService == null)
-            {
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: DB or Tracking service is null. Skipping save.");
-                System.Diagnostics.Debug.WriteLine("[LOG] EXITING SaveRecordsToDatabase (skipped)");
-                return;
-            }
-
-            try
-            {
-                // Get the definitive list of records from the tracking service for today
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Getting records from tracking service...");
-                var recordsToSave = _trackingService.GetRecords()
-                                    .Where(r => r.IsFromDate(DateTime.Now.Date))
-                                    .ToList(); 
-                                    
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Found {recordsToSave.Count} records from tracking service for today.");
-
-                // Group by process name to avoid duplicates
-                var recordsByProcess = recordsToSave
-                    .Where(r => !IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds > 0)
-                    .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                    
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Found {recordsByProcess.Count} unique processes after filtering.");
-
-                // Save each unique process record after merging duplicates
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Starting save loop...");
-                foreach (var processGroup in recordsByProcess)
-                {
-                    try
-                    {
-                        // Calculate total duration for this process
-                        var totalDuration = TimeSpan.FromSeconds(processGroup.Sum(r => r.Duration.TotalSeconds));
-                        
-                        // Get the first record as our representative (with longest duration preferably)
-                        var record = processGroup.OrderByDescending(r => r.Duration).First();
-                        
-                        // Ensure focus is off to finalize duration - critical step!
-                        if (record.IsFocused)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Explicitly finalizing duration for {record.ProcessName} before saving.");
-                            record.SetFocus(false);
-                        }
-                        
-                        // Use the calculated total duration
-                        record._accumulatedDuration = totalDuration;
-                        
-                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: >>> Preparing to save: {record.ProcessName}, Duration: {record.Duration.TotalSeconds:F1}s, ID: {record.Id}");
-
-                        // If record has an ID greater than 0, it likely exists in DB (but might be partial)
-                        if (record.Id > 0)
-                        {
-                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Calling UpdateRecord...");
-                            _databaseService.UpdateRecord(record);
-                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: UpdateRecord returned.");
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Calling SaveRecord...");
-                            _databaseService.SaveRecord(record);
-                            System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: SaveRecord returned.");
-                        }
-                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: <<< Finished save attempt for: {record.ProcessName}");
-                    }
-                    catch (Exception processEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: Error saving process {processGroup.Key}: {processEx.Message}");
-                    }
-                }
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: FINISHED save loop.");
-
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: Save process completed normally.");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase: **** ERROR **** during save process: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-            }
-            finally
-            {
-                System.Diagnostics.Debug.WriteLine("[LOG] EXITING SaveRecordsToDatabase");
             }
         }
 
@@ -1608,216 +1322,6 @@ namespace ScreenTimeTracker
         {
             _trackingService.StopTracking();
             _windowHelper.CloseWindow();
-        }
-
-        private void UsageListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
-        {
-            // Handle recycle to avoid memory leaks and stale handlers
-            if (args.InRecycleQueue && args.ItemContainer?.ContentTemplateRoot is Grid oldGrid && args.ItemContainer.Tag is PropertyChangedEventHandler oldHandler)
-            {
-                if (args.Item is AppUsageRecord oldRecord)
-                {
-                    oldRecord.PropertyChanged -= oldHandler;
-                }
-                args.ItemContainer.Tag = null;
-            }
-
-            if (args.Item is AppUsageRecord record)
-            {
-                System.Diagnostics.Debug.WriteLine($"Container changing for {record.ProcessName}, has icon: {record.AppIcon != null}");
-
-                // Get the container and find the UI elements
-                if (args.ItemContainer?.ContentTemplateRoot is Grid grid)
-                {
-                    var placeholderIcon = grid.FindName("PlaceholderIcon") as FontIcon;
-                    var appIconImage = grid.FindName("AppIconImage") as Microsoft.UI.Xaml.Controls.Image;
-
-                    if (placeholderIcon != null && appIconImage != null)
-                    {
-                        // Update visibility based on whether the app icon is loaded
-                        UpdateIconVisibility(record, placeholderIcon, appIconImage);
-
-                        // Store the control references in tag for property changed event
-                        if (args.ItemContainer.Tag == null)
-                        {
-                            // Only add the event handler once
-                            args.ItemContainer.Tag = true;
-
-                            PropertyChangedEventHandler handler = (s, e) =>
-                            {
-                                if (e.PropertyName == nameof(AppUsageRecord.AppIcon))
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"AppIcon property changed for {record.ProcessName}");
-                                    DispatcherQueue.TryEnqueue(() =>
-                                    {
-                                        if (grid != null && placeholderIcon != null && appIconImage != null)
-                                        {
-                                            UpdateIconVisibility(record, placeholderIcon, appIconImage);
-                                        }
-                                    });
-                                }
-                            };
-
-                            record.PropertyChanged += handler;
-                            // store handler so we can detach later on recycle
-                            args.ItemContainer.Tag = handler;
-                        }
-                    }
-                }
-
-                // Request icon to load
-                if (record.AppIcon == null)
-                {
-                    record.LoadAppIconIfNeeded();
-                }
-
-                // Register for phase-based callback to handle deferred loading
-                if (args.Phase == 0)
-                {
-                    args.RegisterUpdateCallback(UsageListView_ContainerContentChanging);
-                }
-            }
-
-            // Increment the phase
-            args.Handled = true;
-        }
-
-        private void UpdateIconVisibility(AppUsageRecord record, FontIcon placeholder, Microsoft.UI.Xaml.Controls.Image iconImage)
-        {
-            if (record.AppIcon != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"Setting icon visible for {record.ProcessName}");
-                placeholder.Visibility = Visibility.Collapsed;
-                iconImage.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"Setting placeholder visible for {record.ProcessName}");
-                placeholder.Visibility = Visibility.Visible;
-                iconImage.Visibility = Visibility.Collapsed;
-            }
-        }
-
-        private bool IsWindowsSystemProcess(string processName)
-        {
-            if (string.IsNullOrEmpty(processName)) return false;
-
-            // Normalize the process name (trim and convert to lowercase)
-            string normalizedName = processName.Trim().ToLowerInvariant();
-            
-            // List of high-priority system processes that should ALWAYS be filtered out
-            // regardless of duration or view mode
-            string[] highPriorityFilterProcesses = {
-                "explorer",
-                "shellexperiencehost", 
-                "searchhost",
-                "startmenuexperiencehost",
-                "applicationframehost",
-                "systemsettings",
-                "dwm",
-                "winlogon",
-                "csrss",
-                "services",
-                "svchost",
-                "runtimebroker",
-            };
-            
-            // Check high-priority list first (these are always filtered)
-            if (highPriorityFilterProcesses.Any(p => normalizedName.Contains(p)))
-            {
-                System.Diagnostics.Debug.WriteLine($"Filtering high-priority system process: {processName}");
-                return true;
-            }
-
-            // Broader list of system processes that might be filtered depending on context
-            string[] systemProcesses = {
-                "textinputhost",
-                "windowsterminal",
-                "cmd",
-                "powershell",
-                "pwsh",
-                "conhost",
-                "winstore.app",
-                "lockapp",
-                "logonui",
-                "fontdrvhost",
-                "taskhostw",
-                "ctfmon",
-                "rundll32",
-                "dllhost",
-                "sihost",
-                "taskmgr",
-                "backgroundtaskhost",
-                "smartscreen",
-                "securityhealthservice",
-                "registry",
-                "microsoftedgeupdate",
-                "wmiprvse",
-                "spoolsv",
-                "tabtip",
-                "tabtip32",
-                "searchui",
-                "searchapp",
-                "settingssynchost",
-                "wudfhost"
-            };
-
-            // Return true if in the general system process list
-            return systemProcesses.Contains(normalizedName);
-        }
-
-        private void AutoSaveTimer_Tick(object? sender, object e)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine("Auto-save timer tick - saving records");
-
-                // Save all active records to the database
-                SaveRecordsToDatabase();
-
-                // Clean up any system processes one last time
-                CleanupSystemProcesses();
-                
-                // Increment counter and run database maintenance every 12 cycles (approximately once per hour)
-                _autoSaveCycleCount++;
-                if (_autoSaveCycleCount >= 12 && _databaseService != null)
-                {
-                    _autoSaveCycleCount = 0;
-                    System.Diagnostics.Debug.WriteLine("Running periodic database maintenance");
-                    
-                    // Run maintenance in background thread to avoid blocking UI
-                    Task.Run(() => 
-                    {
-                        try
-                        {
-                            _databaseService.PerformDatabaseMaintenance();
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error during periodic database maintenance: {ex.Message}");
-                        }
-                    });
-                }
-                
-                // If viewing today's data, reload from database to ensure UI is in sync
-                if (_selectedDate.Date == DateTime.Now.Date && _currentTimePeriod == TimePeriod.Daily)
-                {
-                    System.Diagnostics.Debug.WriteLine("Refreshing today's data after auto-save");
-                    
-                    // Reload data without clearing the selection
-                    LoadRecordsForDate(_selectedDate);
-                }
-                else
-                {
-                    // Otherwise just update the chart and summary
-                    UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList()); // Pass List
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in auto-save timer tick: {ex}");
-            }
         }
 
         // Convenience overload: summarize current usage records without providing list
@@ -1861,25 +1365,32 @@ namespace ScreenTimeTracker
                 {
                     MostUsedApp.Text = mostUsedApp.ProcessName;
                     MostUsedAppTime.Text = FormatTimeSpan(mostUsedApp.Duration);
+                    // Icon visibility is now handled via XAML converters; no direct UI manipulation needed.
                     mostUsedApp.LoadAppIconIfNeeded();
-                    if (mostUsedApp.AppIcon != null)
+                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
                     {
-                        MostUsedAppIcon.Source = mostUsedApp.AppIcon;
-                        MostUsedAppIcon.Visibility = Visibility.Visible;
-                        MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
-                    }
-                    else
-                    {
-                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                        if (mostUsedApp.AppIcon != null)
+                        {
+                            MostUsedAppIcon.Source = mostUsedApp.AppIcon;
+                            MostUsedAppIcon.Visibility = Visibility.Visible;
+                            MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
+                        }
+                        else
+                        {
+                            MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                            MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                        }
                     }
                 }
                 else
                 {
                     MostUsedApp.Text = "None";
                     MostUsedAppTime.Text = FormatTimeSpan(TimeSpan.Zero);
-                    MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                    MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
+                    {
+                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
+                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
+                    }
                 }
                 // ... existing code ...
              }
@@ -3002,7 +2513,7 @@ namespace ScreenTimeTracker
         private AppWindow GetAppWindowForCurrentWindow()
         {
             IntPtr hWnd = WindowNative.GetWindowHandle(this);
-            WindowId wndId = Win32Interop.GetWindowIdFromWindow(hWnd);
+            WindowId wndId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
             return AppWindow.GetFromWindowId(wndId);
         }
 
@@ -3043,71 +2554,7 @@ namespace ScreenTimeTracker
             }
         }
 
-        // New methods for registration/unregistration
-        private void RegisterPowerNotifications()
-        {
-            if (_hWnd == IntPtr.Zero)
-            {
-                Debug.WriteLine("Cannot register power notifications: HWND is zero.");
-                return;
-            }
-
-            try
-            {
-                Guid consoleGuid = GuidConsoleDisplayState; // Need local copy for ref parameter
-                _hConsoleDisplayState = RegisterPowerSettingNotification(_hWnd, ref consoleGuid, DEVICE_NOTIFY_WINDOW_HANDLE);
-                if (_hConsoleDisplayState == IntPtr.Zero)
-                {                    
-                    Debug.WriteLine($"Failed to register for GuidConsoleDisplayState. Error: {Marshal.GetLastWin32Error()}");
-                }
-                else
-                {
-                    Debug.WriteLine("Successfully registered for GuidConsoleDisplayState.");
-                }
-
-                Guid awayGuid = GuidSystemAwayMode; // Need local copy for ref parameter
-                _hSystemAwayMode = RegisterPowerSettingNotification(_hWnd, ref awayGuid, DEVICE_NOTIFY_WINDOW_HANDLE);
-                if (_hSystemAwayMode == IntPtr.Zero)
-                {
-                    Debug.WriteLine($"Failed to register for GuidSystemAwayMode. Error: {Marshal.GetLastWin32Error()}");
-                }
-                 else
-                 {
-                     Debug.WriteLine("Successfully registered for GuidSystemAwayMode.");
-                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error registering power notifications: {ex.Message}");
-            }
-        }
-
-        private void UnregisterPowerNotifications()
-        {
-            try
-            {
-                if (_hConsoleDisplayState != IntPtr.Zero)
-                {
-                    if (UnregisterPowerSettingNotification(_hConsoleDisplayState))
-                        Debug.WriteLine("Successfully unregistered GuidConsoleDisplayState.");
-                    else
-                        Debug.WriteLine($"Failed to unregister GuidConsoleDisplayState. Error: {Marshal.GetLastWin32Error()}");
-                    _hConsoleDisplayState = IntPtr.Zero;
-                }
-                if (_hSystemAwayMode != IntPtr.Zero)
-                {
-                    if (UnregisterPowerSettingNotification(_hSystemAwayMode))
-                        Debug.WriteLine("Successfully unregistered GuidSystemAwayMode.");
-                    else
-                        Debug.WriteLine($"Failed to unregister GuidSystemAwayMode. Error: {Marshal.GetLastWin32Error()}");
-                     _hSystemAwayMode = IntPtr.Zero;
-                }
-            }
-            catch (Exception ex)
-            {
-                 Debug.WriteLine($"Error unregistering power notifications: {ex.Message}");
-            }
-        }
+        // Power-notification methods moved to MainWindow.Logic.cs
 
         private void LoadRecordsForLastSevenDays()
         {
@@ -3516,6 +2963,29 @@ namespace ScreenTimeTracker
             {
                 StartButton_Click(StartButton, new RoutedEventArgs());
             }
+        }
+
+        // Utility to determine whether a process is a system/utility process we don't track visually
+        private bool IsWindowsSystemProcess(string processName)
+        {
+            if (string.IsNullOrEmpty(processName)) return false;
+
+            string normalizedName = processName.Trim().ToLowerInvariant();
+
+            string[] highPriority = {
+                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
+                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
+            };
+            if (highPriority.Any(p => normalizedName.Contains(p))) return true;
+
+            string[] others = {
+                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
+                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
+                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
+                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
+                "settingssynchost","wudfhost"
+            };
+            return others.Contains(normalizedName);
         }
     }
 }
