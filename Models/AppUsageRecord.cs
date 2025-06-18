@@ -368,5 +368,12 @@ namespace ScreenTimeTracker.Models
         {
             AppIcon = null;
         }
+
+        public void RaiseDurationChanged()
+        {
+            // Notify the UI that the duration-related properties have changed
+            NotifyPropertyChanged(nameof(Duration));
+            NotifyPropertyChanged(nameof(FormattedDuration));
+        }
     }
 } 

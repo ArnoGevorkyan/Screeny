@@ -18,6 +18,9 @@ namespace ScreenTimeTracker
         // Domain collection to which the UI ListView/Chart will bind
         public ObservableCollection<AppUsageRecord> Records { get; } = new();
 
+        // Aggregated (merged) records used for summary/chart views
+        public ObservableCollection<AppUsageRecord> AggregatedRecords { get; } = new();
+
         private DateTime _selectedDate = DateTime.Today;
         public DateTime SelectedDate
         {

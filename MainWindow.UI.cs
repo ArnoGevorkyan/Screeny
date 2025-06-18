@@ -5,6 +5,7 @@ using System.Linq;
 using System;
 using ScreenTimeTracker.Helpers;
 using System.Collections.Generic;
+using ScreenTimeTracker.Services;
 
 namespace ScreenTimeTracker
 {
@@ -284,7 +285,7 @@ namespace ScreenTimeTracker
                 DateTime today = DateTime.Today;
                 DateTime startDate = today.AddDays(-6);
 
-                var weekRecords = GetAggregatedRecordsForDateRange(startDate, today);
+                var weekRecords = _aggregationService.GetAggregatedRecordsForDateRange(startDate, today);
 
                 UpdateRecordListView(weekRecords);
                 SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {today:MMM d}, {today.Year})");
@@ -457,5 +458,105 @@ namespace ScreenTimeTracker
         }
 
         private string FormatTimeSpan(TimeSpan time) => ChartHelper.FormatTimeSpan(time);
+
+        // ---------------- TitleBar & DatePicker button handlers ----------------
+        private void MinimizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MinimizeWindow();
+        private void MaximizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MaximizeOrRestoreWindow();
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            _trackingService.StopTracking();
+            _windowHelper.CloseWindow();
+        }
+
+        private void DatePickerButton_Click(object sender, RoutedEventArgs e)
+        {
+            _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
+        }
+
+        // ---------------- UI refresh & tracking events migrated from XAML partial ----------------
+        private void SetUpUiElements()
+        {
+            // Initialize the date button text and timers
+            UpdateDatePickerButtonText();
+
+            // Timers were configured in constructor; ensure delegates attached
+            _updateTimer.Tick += UpdateTimer_Tick;
+            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+        }
+
+        private void UpdateTimer_Tick(object? sender, object e)
+        {
+            try
+            {
+                if (_disposed || _usageRecords == null) return;
+                if (_trackingService == null || !_trackingService.IsTracking) return;
+
+                // Pull current focused record to keep UI list in sync
+                var liveFocusedApp = _trackingService.CurrentRecord;
+                UpdateUsageChart(liveFocusedApp);
+
+                // Increment live durations in UI collection
+                foreach (var rec in _usageRecords)
+                {
+                    if (rec.IsFocused)
+                    {
+                        rec.RaiseDurationChanged();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateTimer_Tick: {ex.Message}");
+            }
+        }
+
+        private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
+        {
+            if (_disposed) return;
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    // Replace or add the updated record in the UI collection
+                    var existing = _usageRecords.FirstOrDefault(r => r == record);
+                    if (existing == null)
+                        _usageRecords.Add(record);
+                    else
+                        existing.RaiseDurationChanged();
+
+                    // Refresh chart & summary quickly
+                    UpdateUsageChart();
+                    UpdateSummaryTab(_usageRecords.ToList());
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in UsageRecordUpdated handler: {ex.Message}");
+                }
+            });
+        }
+
+        private void TrackingService_WindowChanged(object? sender, EventArgs e)
+        {
+            if (_disposed) return;
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                try
+                {
+                    // Clear focus flags then set on the current record
+                    foreach (var rec in _usageRecords) rec.SetFocus(false);
+                    var current = _trackingService?.CurrentRecord;
+                    if (current != null)
+                    {
+                        var uiRec = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
+                        uiRec?.SetFocus(true);
+                    }
+                    UpdateUsageChart();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in WindowChanged handler: {ex.Message}");
+                }
+            });
+        }
     }
 } 

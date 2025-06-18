@@ -27,14 +27,42 @@ namespace ScreenTimeTracker
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
         private ObservableCollection<AppUsageRecord> _usageRecords;
-        private DateTime _selectedDate;
-        private DateTime? _selectedEndDate; // For date ranges
+
+        // --- ViewModel-backed state properties (replace former duplicate fields) ---
+        private DateTime _selectedDate
+        {
+            get => _viewModel.SelectedDate;
+            set => _viewModel.SelectedDate = value;
+        }
+
+        private DateTime? _selectedEndDate
+        {
+            get => _viewModel.SelectedEndDate;
+            set => _viewModel.SelectedEndDate = value;
+        }
+
+        private bool _isDateRangeSelected
+        {
+            get => _viewModel.IsDateRangeSelected;
+            set => _viewModel.IsDateRangeSelected = value;
+        }
+
+        private TimePeriod _currentTimePeriod
+        {
+            get => _viewModel.CurrentTimePeriod;
+            set => _viewModel.CurrentTimePeriod = value;
+        }
+
+        private ChartViewMode _currentChartViewMode
+        {
+            get => _viewModel.CurrentChartViewMode;
+            set => _viewModel.CurrentChartViewMode = value;
+        }
+
         private DispatcherTimer _updateTimer;
         private DispatcherTimer _autoSaveTimer;
         private bool _disposed;
-        private TimePeriod _currentTimePeriod = TimePeriod.Daily;
-        private ChartViewMode _currentChartViewMode = ChartViewMode.Hourly;
-        private bool _isDateRangeSelected = false;
+        private bool _iconsRefreshedOnce = false;
         
         // Static constructor to configure LiveCharts
         static MainWindow()
@@ -107,11 +135,12 @@ namespace ScreenTimeTracker
 
         private TrayIconHelper? _trayIconHelper; // Add field for TrayIconHelper
 
-        private bool _iconsRefreshedOnce = false; // flag to ensure refresh runs only once
-
-        private readonly MainViewModel _viewModel;
+        // Initialised inline so property wrappers above can work immediately
+        private readonly MainViewModel _viewModel = new MainViewModel();
 
         private readonly IconRefreshService _iconService;
+
+        private readonly UsageAggregationService _aggregationService;
 
         public MainWindow()
         {
@@ -122,11 +151,18 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine($"[LOG] System time check - Today: {todayDate:yyyy-MM-dd}, Now: {DateTime.Now}");
             
             // Use today's date
-                _selectedDate = todayDate;
+            _selectedDate = todayDate;
             
-            // The records collection now lives in the ViewModel so we alias to it after VM creation
-
             InitializeComponent();
+
+            // After InitializeComponent, set DataContext
+            if (Content is FrameworkElement fe)
+            {
+                fe.DataContext = _viewModel;
+            }
+
+            // Alias local collection to ViewModel collection
+            _usageRecords = _viewModel.Records;
 
             // Get window handle AFTER InitializeComponent
             _hWnd = WindowNative.GetWindowHandle(this);
@@ -198,39 +234,35 @@ namespace ScreenTimeTracker
 
             // Indicator visuals are data-bound; no imperative call needed
 
-            // NEW – instantiate the ViewModel early and set it as DataContext. We will migrate
-            // state into it incrementally so the UI can bind to a single source of truth.
-            _viewModel = new MainViewModel();
-            if (Content is FrameworkElement fe)
-            {
-                fe.DataContext = _viewModel;
-            }
-
-            // Alias local collection to the ViewModel one so existing logic keeps working
-            _usageRecords = _viewModel.Records;
-
             // Instantiate icon service
             _iconService = new IconRefreshService();
 
-            // After _viewModel instantiated
-            _viewModel.SelectedDate = _selectedDate;
-            _viewModel.SelectedEndDate = _selectedEndDate;
-            _viewModel.IsDateRangeSelected = _isDateRangeSelected;
-            _viewModel.CurrentTimePeriod = _currentTimePeriod;
-            _viewModel.CurrentChartViewMode = _currentChartViewMode;
-            _viewModel.IsTracking = _trackingService.IsTracking;
+            // ViewModel is already kept in sync via property wrappers.
 
-            _viewModel.OnStartTrackingRequested += (_, __) => StartTracking();
-            _viewModel.OnStopTrackingRequested  += (_, __) => StopTracking();
-            _viewModel.OnToggleTrackingRequested += (_, __) =>
+            // Initialize timer fields
+            _updateTimer = new DispatcherTimer();
+            _autoSaveTimer = new DispatcherTimer();
+
+            // Configure primary UI update timer (1-second pulse)
+            _updateTimer.Interval = TimeSpan.FromSeconds(1);
+            _updateTimer.Tick += UpdateTimer_Tick;
+
+            // Configure auto-save/maintenance timer (5-minute pulse)
+            _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
+            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+
+            // Hook ViewModel command events
+            _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
+            _viewModel.OnStopTrackingRequested     += (_, __) => StopTracking();
+            _viewModel.OnToggleTrackingRequested   += (_, __) =>
             {
                 if (_trackingService.IsTracking) StopTracking(); else StartTracking();
             };
-            _viewModel.OnPickDateRequested += (_, __) =>
+            _viewModel.OnPickDateRequested         += (_, __) =>
             {
                 _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
             };
-            _viewModel.OnToggleViewModeRequested += (_, __) =>
+            _viewModel.OnToggleViewModeRequested   += (_, __) =>
             {
                 if (_currentChartViewMode == ChartViewMode.Hourly)
                     _currentChartViewMode = ChartViewMode.Daily;
@@ -239,9 +271,7 @@ namespace ScreenTimeTracker
                 UpdateUsageChart();
             };
 
-            // Initialize timer fields
-            _updateTimer = new DispatcherTimer();
-            _autoSaveTimer = new DispatcherTimer();
+            _aggregationService = new UsageAggregationService(_databaseService, _trackingService);
         }
 
         private void SubclassWindow()
@@ -385,441 +415,6 @@ namespace ScreenTimeTracker
         }
 
         // Methods moved to MainWindow.Logic.cs (Dispose, PrepareForSuspend, AutoSaveTimer_Tick)
-
-        private void UpdateTimer_Tick(object? sender, object e)
-        {
-            try
-            {
-                // Check if disposed or disposing
-                if (_disposed || _usageRecords == null) 
-                {
-                    System.Diagnostics.Debug.WriteLine("UpdateTimer_Tick: Skipping update as window is disposed or collection is null");
-                    return;
-                }
-
-                // Stop any duration increments when tracking is paused
-                if (_trackingService == null || !_trackingService.IsTracking)
-                {
-                    System.Diagnostics.Debug.WriteLine("UpdateTimer_Tick: Tracking is paused – skipping updates");
-                    return;
-                }
-
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== UpdateTimer_Tick at {DateTime.Now:HH:mm:ss.fff} =====");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current view state:");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Selected Date: {_selectedDate:yyyy-MM-dd}");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Today's Date: {DateTime.Today:yyyy-MM-dd}");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Is Date Range: {_isDateRangeSelected}");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - End Date: {(_selectedEndDate?.ToString("yyyy-MM-dd") ?? "null")}");
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - UI Records Count: {_usageRecords.Count}");
-        
-                // Use a local variable for safer thread interaction
-                _timerTickCounter++;
-                int localTickCounter = _timerTickCounter;
-        
-                // Debug: Show all current records and their focus states
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current UI records:");
-                foreach (var rec in _usageRecords)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - {rec.ProcessName}: IsFocused={rec.IsFocused}, Duration={rec.Duration.TotalSeconds:F1}s, Date={rec.Date:yyyy-MM-dd}, StartTime={rec.StartTime:yyyy-MM-dd HH:mm:ss}");
-                }
-                
-                // Get the current focused app from the tracking service
-                var liveFocusedApp = _trackingService?.CurrentRecord;
-                if (liveFocusedApp != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Live focused app from service: {liveFocusedApp.ProcessName} (Date: {liveFocusedApp.Date:yyyy-MM-dd}, StartTime: {liveFocusedApp.StartTime:yyyy-MM-dd HH:mm:ss})");
-                    
-                    AppUsageRecord? recordToUpdate = null;
-                    
-                    // Find if this app exists in the currently displayed list (_usageRecords)
-                    // Match based on ProcessName for simplicity in aggregated views
-                    // Use ToList to get a snapshot to avoid collection modified exception
-                    var snapshot = _usageRecords.ToList();
-                    
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Searching for matching record in {snapshot.Count} UI records...");
-                    
-                    // CRITICAL FIX: Only match records that are from TODAY
-                    // This prevents updating historical records when viewing past dates
-                    recordToUpdate = snapshot
-                        .FirstOrDefault(r => r.ProcessName.Equals(liveFocusedApp.ProcessName, StringComparison.OrdinalIgnoreCase) 
-                                          && r.IsFromDate(DateTime.Today));
-                    
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Record lookup result: {(recordToUpdate != null ? $"Found {recordToUpdate.ProcessName} from {recordToUpdate.Date:yyyy-MM-dd}" : "No matching record from today")}");
-
-                    if (recordToUpdate != null && !_disposed)
-                    {
-                        // COMPREHENSIVE LOGGING TO TRACE THE ISSUE
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== FOUND MATCHING RECORD =====");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Current view date: {_selectedDate:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Today's date: {DateTime.Today:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Record details:");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - ProcessName: {recordToUpdate.ProcessName}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.Date: {recordToUpdate.Date:yyyy-MM-dd}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.StartTime: {recordToUpdate.StartTime:yyyy-MM-dd HH:mm:ss}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.ID: {recordToUpdate.Id}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.Duration: {recordToUpdate.Duration.TotalSeconds:F1}s");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record.IsFocused: {recordToUpdate.IsFocused}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Record._accumulatedDuration: {recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - IsFromDate(Today): {recordToUpdate.IsFromDate(DateTime.Today)}");
-                        
-                        // CRITICAL FIX: Only update duration if the record is from TODAY
-                        // This prevents past date records from being incremented
-                        if (!recordToUpdate.IsFromDate(DateTime.Today))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] BLOCKING UPDATE - Record is from {recordToUpdate.Date:yyyy-MM-dd}, not today");
-                            return; // Exit the entire method, not just this iteration
-                        }
-                        
-                        // ADDITIONAL CHECK: Only update if we're actually viewing today or a range that includes today
-                        bool isViewingToday = _selectedDate.Date == DateTime.Today && !_isDateRangeSelected;
-                        bool isViewingRangeIncludingToday = _isDateRangeSelected && _selectedEndDate.HasValue && 
-                                                          DateTime.Today >= _selectedDate.Date && DateTime.Today <= _selectedEndDate.Value.Date;
-                        
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] View validation:");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - isViewingToday: {isViewingToday}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - isViewingRangeIncludingToday: {isViewingRangeIncludingToday}");
-                        
-                        if (!isViewingToday && !isViewingRangeIncludingToday)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] BLOCKING UPDATE - Not viewing today (viewing {_selectedDate:yyyy-MM-dd})");
-                            return; // Exit the entire method
-                        }
-                        
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ALLOWING UPDATE - All checks passed");
-                        
-                        // IMPORTANT: Check if this ListView record truly represents the CURRENT live focused app.
-                        // We require either object identity (same reference) OR a strict match on window handle
-                        // *and* focus state, so that a stale record from before a pause isn't mistaken for the
-                        // active one after we resume.
-                        bool isActuallyFocused =
-                            (recordToUpdate.WindowHandle != IntPtr.Zero &&
-                             recordToUpdate.WindowHandle == liveFocusedApp.WindowHandle) ||
-                            liveFocusedApp.ProcessName.Equals(recordToUpdate.ProcessName, StringComparison.OrdinalIgnoreCase);
-
-                        // --- Focus comparison & duration handling ---
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Focus comparison:");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Live focused app: {liveFocusedApp.ProcessName}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Matching record: {recordToUpdate.ProcessName}");
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG]   - Is actually focused: {isActuallyFocused}");
-
-                        if (isActuallyFocused)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] INCREMENTING duration for ACTUALLY FOCUSED record: {recordToUpdate.ProcessName}");
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Before increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
-
-                            // First credit the elapsed second.  If the focus flag was stale (IsFocused == false)
-                            // this call will add the second to _accumulatedDuration.
-                            recordToUpdate.IncrementDuration(TimeSpan.FromSeconds(1));
-
-                            // Now ensure the record is marked as focused for the next tick.
-                            if (!recordToUpdate.IsFocused)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Correcting stale focus flag for {recordToUpdate.ProcessName}");
-                                recordToUpdate.SetFocus(true);
-                            }
-
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] After increment: Duration={recordToUpdate.Duration.TotalSeconds:F1}s, Accumulated={recordToUpdate._accumulatedDuration.TotalSeconds:F1}s");
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] NOT incrementing duration for {recordToUpdate.ProcessName} - it's not the current focused app!");
-
-                            // Make sure it's marked as unfocused in the UI collection
-                            if (recordToUpdate.IsFocused)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Correcting focus state for {recordToUpdate.ProcessName} - setting to unfocused");
-                                recordToUpdate.SetFocus(false);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Live focused app {liveFocusedApp.ProcessName} not found in current view or window disposed");
-                    }
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] No live focused app from tracking service");
-                }
-                
-                // --- CHANGE: Only update UI based on timer interval, not duration increment --- 
-                // Periodically force UI refresh to ensure chart updates correctly.
-                if (localTickCounter >= 10 && !_disposed) // Reduced from 15 to 10 seconds for more frequent updates
-                {
-                    System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] Periodic UI Update Triggered (tickCounter={localTickCounter})");
-                    _timerTickCounter = 0; // Reset counter
-                    
-                    // Update UI using dispatcher to ensure we're on the UI thread
-                    DispatcherQueue?.TryEnqueue(() =>
-                    {
-                        try 
-                        {
-                            // Double-check we're not disposed before updating UI
-                            if (!_disposed && _usageRecords != null)
-                            {
-                                // Update summary and chart
-                                UpdateSummaryTab(_usageRecords.ToList()); // Pass List
-                                UpdateUsageChart(liveFocusedApp); // Pass live app in case it needs it
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error in UI update dispatcher: {ex.Message}");
-                        }
-                    });
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"[UI_TIMER_LOG] ===== UpdateTimer_Tick complete =====");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in timer tick: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-            }
-        }
-
-        private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
-        {
-            // Check if window is disposed
-            if (_disposed)
-            {
-                System.Diagnostics.Debug.WriteLine("TrackingService_UsageRecordUpdated: Window is disposed, ignoring event");
-                return;
-            }
-            
-            try
-            {
-                // Process the application record to improve its naming
-                ApplicationProcessingHelper.ProcessApplicationRecord(record);
-
-                // Additional check to make sure we filter out windows system processes
-                if (!record.ShouldTrack || IsWindowsSystemProcess(record.ProcessName)) 
-                {
-                    System.Diagnostics.Debug.WriteLine($"Ignoring system process: {record.ProcessName}");
-                    return;
-                }
-                
-                if (!record.IsFromDate(_selectedDate)) 
-                {
-                    System.Diagnostics.Debug.WriteLine($"[TRACKING_DEBUG] Ignoring record from different date:");
-                    System.Diagnostics.Debug.WriteLine($"[TRACKING_DEBUG]   - Record.ProcessName: {record.ProcessName}");
-                    System.Diagnostics.Debug.WriteLine($"[TRACKING_DEBUG]   - Record.Date: {record.Date:yyyy-MM-dd}");
-                    System.Diagnostics.Debug.WriteLine($"[TRACKING_DEBUG]   - Record.StartTime: {record.StartTime:yyyy-MM-dd HH:mm:ss}");
-                    System.Diagnostics.Debug.WriteLine($"[TRACKING_DEBUG]   - Selected Date: {_selectedDate:yyyy-MM-dd}");
-                    return;
-                }
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    // Double-check disposed state on UI thread
-                    if (_disposed)
-                    {
-                        System.Diagnostics.Debug.WriteLine("UI Update cancelled - window disposed");
-                        return;
-                    }
-                    
-                    System.Diagnostics.Debug.WriteLine($"UI Update: Processing record for: {record.ProcessName} ({record.WindowTitle})");
-
-                    // Track if we made any changes that require UI updates
-                    bool recordsChanged = false;
-
-                    // First try to find exact match
-                    var existingRecord = FindExistingRecord(record);
-
-                    if (existingRecord != null)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Found existing record: {existingRecord.ProcessName}");
-                        
-                        // Update the existing record's focus state
-                        if (existingRecord.IsFocused != record.IsFocused)
-                        {
-                            // CRITICAL: Only update focus if the record is from TODAY
-                            // This prevents historical records from tracking real-time duration
-                            if (existingRecord.IsFromDate(DateTime.Today))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Focus state changed for {existingRecord.ProcessName}: {existingRecord.IsFocused} -> {record.IsFocused}");
-                            existingRecord.SetFocus(record.IsFocused);
-                            recordsChanged = true;
-                            }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine($"NOT updating focus for {existingRecord.ProcessName} - it's from {existingRecord.Date:yyyy-MM-dd}, not today");
-                            }
-                        }
-
-                        // If the window title of the existing record is empty, use the new one
-                        if (string.IsNullOrEmpty(existingRecord.WindowTitle) && !string.IsNullOrEmpty(record.WindowTitle))
-                        {
-                            existingRecord.WindowTitle = record.WindowTitle;
-                        }
-
-                        // If we're updating the active status, make sure we unfocus any other records
-                        if (record.IsFocused)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Setting {record.ProcessName} as focused, unfocusing all others");
-                            foreach (var otherRecord in _usageRecords.Where(r => r != existingRecord))
-                            {
-                                if (otherRecord.IsFocused)
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"Unfocusing {otherRecord.ProcessName}");
-                                otherRecord.SetFocus(false);
-                                recordsChanged = true;
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Additional check before adding to make sure it's not a system process
-                        if (IsWindowsSystemProcess(record.ProcessName))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Skipping system process: {record.ProcessName}");
-                            return;
-                        }
-
-                        System.Diagnostics.Debug.WriteLine($"Adding new record: {record.ProcessName}");
-                        
-                        // If we're adding a new focused record, unfocus all other records
-                        if (record.IsFocused)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"New record {record.ProcessName} is focused, unfocusing all existing records");
-                            foreach (var otherRecord in _usageRecords)
-                            {
-                                if (otherRecord.IsFocused)
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"Unfocusing existing record: {otherRecord.ProcessName}");
-                                otherRecord.SetFocus(false);
-                                }
-                            }
-                        }
-
-                        _usageRecords.Add(record);
-                        recordsChanged = true;
-                        System.Diagnostics.Debug.WriteLine($"Record added to _usageRecords, collection count: {_usageRecords.Count}");
-                        System.Diagnostics.Debug.WriteLine($"Added record details: Process={record.ProcessName}, Duration={record.Duration.TotalSeconds:F1}s, Start={record.StartTime}, IsFocused={record.IsFocused}");
-                        
-                        // Log full collection details for troubleshooting
-                        System.Diagnostics.Debug.WriteLine("Current _usageRecords collection:");
-                        foreach (var r in _usageRecords.Take(5)) // Show first 5 records
-                        {
-                            System.Diagnostics.Debug.WriteLine($"  - {r.ProcessName}: {r.Duration.TotalSeconds:F1}s, IsFocused={r.IsFocused}");
-                        }
-                        if (_usageRecords.Count > 5)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"  - ... and {_usageRecords.Count - 5} more records");
-                        }
-                        
-                        // Clean up any system processes
-                        CleanupSystemProcesses();
-                        
-                        // Make sure the list view is actually showing the new record
-                        DispatcherQueue.TryEnqueue(() =>
-                        {
-                            // Ensure the UsageListView has the updated data
-                            if (UsageListView != null)
-                            {
-                                System.Diagnostics.Debug.WriteLine("Manually refreshing UsageListView");
-                                UsageListView.ItemsSource = null;
-                                if (UsageListView != null) // Add explicit null check here
-                                {
-                                     UsageListView.ItemsSource = _usageRecords;
-                                }
-                            }
-                        });
-                    }
-
-                    // Only update the UI if we made changes
-                    if (recordsChanged)
-                    {
-                        // Update the summary and chart in real-time
-                        System.Diagnostics.Debug.WriteLine("Updating summary and chart in real-time");
-                        UpdateSummaryTab(_usageRecords.ToList()); // Pass List
-                        UpdateUsageChart();
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error handling usage record update: {ex.Message}");
-            }
-        }
-
-        private AppUsageRecord? FindExistingRecord(AppUsageRecord record)
-        {
-            if (record == null)
-                return null;
-
-            // First, check for a match based on process name (case-insensitive)
-            // This is the most reliable way to identify the same app across different sessions
-            var processMatch = _usageRecords.FirstOrDefault(r => 
-                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
-                
-            if (processMatch != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by process name: {record.ProcessName}");
-                return processMatch;
-            }
-
-            // Check existing records for a match based on window handle (same session only)
-            foreach (var r in _usageRecords)
-            {
-                // If it's the exact same window, return it
-                if (r.WindowHandle == record.WindowHandle && r.WindowHandle != IntPtr.Zero)
-                {
-                    System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by window handle for {record.ProcessName}");
-                    return r;
-                }
-            }
-            
-            // Try to find matches based on application characteristics
-            foreach (var r in _usageRecords)
-            {
-                // For applications that should be consolidated, look for matching process names
-                string baseAppName = ApplicationProcessingHelper.GetBaseAppName(record.ProcessName);
-                if (!string.IsNullOrEmpty(baseAppName) && 
-                    ApplicationProcessingHelper.GetBaseAppName(r.ProcessName).Equals(baseAppName, StringComparison.OrdinalIgnoreCase))
-                {
-                    // For applications we want to consolidate, just match on process name
-                    if (ApplicationProcessingHelper.IsApplicationThatShouldConsolidate(record.ProcessName))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match for consolidatable app: {record.ProcessName} -> {r.ProcessName}");
-                        return r;
-                    }
-                    
-                    // For other applications, match on process name + check if they're related processes
-                    if (r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) ||
-                       ApplicationProcessingHelper.IsAlternateProcessNameForSameApp(r.ProcessName, record.ProcessName))
-                    {
-                        // If window titles are similar, consider it the same application
-                        if (ApplicationProcessingHelper.IsSimilarWindowTitle(r.WindowTitle, record.WindowTitle))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"FindExistingRecord: Found match by title similarity: {record.ProcessName}");
-                            return r;
-                        }
-                    }
-                }
-            }
-
-            // No match found
-            System.Diagnostics.Debug.WriteLine($"FindExistingRecord: No match found for {record.ProcessName}");
-            return null;
-        }
-
-        private void MinimizeButton_Click(object sender, RoutedEventArgs e)
-        {
-            _windowHelper.MinimizeWindow();
-        }
-
-        private void MaximizeButton_Click(object sender, RoutedEventArgs e)
-        {
-            _windowHelper.MaximizeOrRestoreWindow();
-        }
-
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
-        {
-            _trackingService.StopTracking();
-            _windowHelper.CloseWindow();
-        }
 
         // New method to handle initialization after window is loaded - Made async void
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -1005,20 +600,7 @@ namespace ScreenTimeTracker
             }
         }
 
-        // Move UI initialization to a separate method
-        private void SetUpUiElements()
-        {
-            // Initialize the date button
-            UpdateDatePickerButtonText();
-
-            // Configure timer for duration updates (already initialized in constructor)
-            _updateTimer.Interval = TimeSpan.FromSeconds(1);
-            _updateTimer.Tick += UpdateTimer_Tick;
-
-            // Configure auto-save timer (already initialized in constructor)
-            _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
-            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-        }
+        // SetUpUiElements implementation moved to MainWindow.UI.cs
 
         // New method to handle initialization after window is loaded
         private void CheckFirstRun()
@@ -1027,82 +609,8 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine("First run check - welcome message disabled");
         }
 
-        // New method to handle initialization after window is loaded
-        private void TrackingService_WindowChanged(object? sender, EventArgs e)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine("==== WINDOW CHANGED EVENT ====");
-            
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                    // Get the currently focused app from the tracking service
-                    var currentRecord = _trackingService?.CurrentRecord;
-                    
-                    if (currentRecord != null)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Current active window: {currentRecord.ProcessName}");
-                    }
-                    
-                    // Unfocus ALL records in the UI collection first
-                    bool anyChanges = false;
-                    foreach (var record in _usageRecords)
-                    {
-                        if (record.IsFocused)
-                {
-                            System.Diagnostics.Debug.WriteLine($"Window Changed: Unfocusing {record.ProcessName}");
-                            record.SetFocus(false);
-                            anyChanges = true;
-                }
-                    }
-                    
-                    // Now set focus on the current record if it exists in our collection
-                    if (currentRecord != null)
-                    {
-                        var uiRecord = _usageRecords.FirstOrDefault(r => 
-                            r.ProcessName.Equals(currentRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
-                        
-                        if (uiRecord != null)
-                    {
-                            // CRITICAL: Only set focus if the record is from TODAY
-                            // This prevents historical records from tracking real-time duration
-                            if (uiRecord.IsFromDate(DateTime.Today))
-                    {
-                            System.Diagnostics.Debug.WriteLine($"Window Changed: Setting focus on {uiRecord.ProcessName}");
-                            uiRecord.SetFocus(true);
-                            anyChanges = true;
-                            }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Window Changed: NOT setting focus on {uiRecord.ProcessName} - it's from {uiRecord.Date:yyyy-MM-dd}, not today");
-                            }
-                        }
-                    }
-                    
-                    // Update UI if we made changes
-                    if (anyChanges)
-                    {
-                        UpdateSummaryTab(_usageRecords.ToList());
-                        UpdateUsageChart();
-                    }
-                });
-                }
-                catch (Exception ex)
-                {
-                System.Diagnostics.Debug.WriteLine($"Error in TrackingService_WindowChanged: {ex.Message}");
-                }
-        }
+        // TrackingService_WindowChanged implementation moved to MainWindow.UI.cs
 
-        private void DatePickerButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Use the DatePickerPopup helper to show the date picker
-            _datePickerPopup?.ShowDatePicker(
-                sender, 
-                _selectedDate, 
-                _selectedEndDate, 
-                _isDateRangeSelected);
-        }
-        
         // Event handlers for DatePickerPopup events
         private void DatePickerPopup_SingleDateSelected(object? sender, DateTime selectedDate)
         {

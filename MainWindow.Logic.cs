@@ -7,6 +7,7 @@ using ScreenTimeTracker.Models;
 using System.Linq;
 using Microsoft.UI.Xaml.Controls;
 using System.Collections.Generic;
+using ScreenTimeTracker.Services;
 
 namespace ScreenTimeTracker
 {
@@ -15,9 +16,6 @@ namespace ScreenTimeTracker
     // compiling while we refactor incrementally.
     public sealed partial class MainWindow
     {
-        // Shared field for UpdateTimer_Tick counter
-        private int _timerTickCounter = 0;
-
         // ---------------- Power-notification plumbing ----------------
         // These were moved out of the giant code-behind to keep UI file lean.
         
@@ -363,82 +361,6 @@ namespace ScreenTimeTracker
                        ?.ToList() ?? new List<AppUsageRecord>();
         }
 
-        // ---------------- Data aggregation logic ----------------
-        private List<AppUsageRecord> GetAggregatedRecordsForDateRange(DateTime startDate, DateTime endDate, bool includeLiveRecords = true)
-        {
-            if (_databaseService == null)
-            {
-                System.Diagnostics.Debug.WriteLine("ERROR: _databaseService is null in GetAggregatedRecordsForDateRange. Returning empty list.");
-                return new List<AppUsageRecord>();
-            }
-
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"Getting aggregated records for date range: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
-
-                var uniqueRecords = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
-
-                var reportData = _databaseService.GetUsageReportForDateRange(startDate, endDate);
-                System.Diagnostics.Debug.WriteLine($"Retrieved {reportData.Count} items from initial database report");
-
-                foreach (var (processName, totalDuration) in reportData)
-                {
-                    if (!uniqueRecords.ContainsKey(processName))
-                    {
-                        var record = new AppUsageRecord
-                        {
-                            ProcessName = processName,
-                            ApplicationName = processName,
-                            _accumulatedDuration = totalDuration,
-                            Date = startDate,
-                            StartTime = startDate,
-                            IsFocused = false
-                        };
-                        uniqueRecords[processName] = record;
-                    }
-                }
-
-                if (includeLiveRecords && endDate.Date >= DateTime.Today)
-                {
-                    var liveRecords = GetLiveRecordsForToday();
-                    foreach (var liveRecord in liveRecords)
-                    {
-                        if (liveRecord.Duration.TotalSeconds <= 0) continue;
-
-                        if (uniqueRecords.TryGetValue(liveRecord.ProcessName, out var existing))
-                        {
-                            existing._accumulatedDuration += liveRecord.Duration;
-                            existing.WindowHandle = liveRecord.WindowHandle;
-                            if (!string.IsNullOrEmpty(liveRecord.WindowTitle)) existing.WindowTitle = liveRecord.WindowTitle;
-                            if (liveRecord.StartTime < existing.StartTime) existing.StartTime = liveRecord.StartTime;
-                        }
-                        else
-                        {
-                            liveRecord.Date = DateTime.Today;
-                            uniqueRecords[liveRecord.ProcessName] = liveRecord;
-                        }
-                    }
-                }
-
-                var aggregated = uniqueRecords.Values.ToList();
-
-                var filtered = aggregated.Where(r => !IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds >= 300).ToList();
-                if (filtered.Count == 0 && aggregated.Count > 0)
-                {
-                    filtered = aggregated.Where(r => !IsWindowsSystemProcess(r.ProcessName))
-                                          .OrderByDescending(r => r.Duration.TotalSeconds)
-                                          .Take(5).ToList();
-                }
-
-                return filtered.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"CRITICAL Error in GetAggregatedRecordsForDateRange: {ex.Message}");
-                return new List<AppUsageRecord>();
-            }
-        }
-
         // ---------------- Data loading logic ----------------
         private void LoadRecordsForDate(DateTime date)
         {
@@ -469,37 +391,18 @@ namespace ScreenTimeTracker
                     case TimePeriod.Weekly:
                         var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
                         var endOfWeek   = startOfWeek.AddDays(6);
-                        records = GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
+                        records = _aggregationService.GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
+                        _viewModel.AggregatedRecords.Clear();
+                        foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         if (DateDisplay != null) DateDisplay.Text = $"{startOfWeek:MMM d} - {endOfWeek:MMM d}";
                         SummaryTitle.Text = "Weekly Screen Time Summary";
                         AveragePanel.Visibility = Visibility.Visible;
                         break;
                     case TimePeriod.Daily:
                     default:
-                        List<AppUsageRecord> dbRecords = _databaseService?.GetRecordsForDate(date) ?? new();
-                        if (date == DateTime.Today)
-                        {
-                            var liveRecords = _trackingService.GetRecords().Where(r => r.IsFromDate(date)).ToList();
-                            var merged = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
-                            foreach (var r in dbRecords)
-                            {
-                                if (!merged.ContainsKey(r.ProcessName)) merged[r.ProcessName] = r; else merged[r.ProcessName]._accumulatedDuration += r.Duration;
-                            }
-                            foreach (var live in liveRecords)
-                            {
-                                if (merged.TryGetValue(live.ProcessName, out var existing))
-                                {
-                                    existing._accumulatedDuration += live.Duration;
-                                    if (live.IsFocused) existing.SetFocus(true);
-                                }
-                                else merged[live.ProcessName] = live;
-                            }
-                            records = merged.Values.ToList();
-                        }
-                        else
-                        {
-                            records = dbRecords;
-                        }
+                        records = _aggregationService.GetDetailRecordsForDate(date);
+                        _viewModel.AggregatedRecords.Clear();
+                        foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";
                         AveragePanel.Visibility = Visibility.Collapsed;
                         break;
@@ -571,17 +474,8 @@ namespace ScreenTimeTracker
 
             try
             {
-                // Fetch all records in range from DB
-                var allRecords = _databaseService?.GetRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
-
-                // If range includes today, merge in live records
-                if (endDate.Date == DateTime.Today)
-                {
-                    var live = _trackingService.GetRecords()
-                                .Where(r => r.Date >= startDate && r.Date <= endDate)
-                                .ToList();
-                    allRecords.AddRange(live);
-                }
+                // Fetch all records (detailed) via aggregation service
+                var allRecords = _aggregationService.GetDetailRecordsForDateRange(startDate, endDate);
 
                 // For list view we want the granular list (allRecords)
                 foreach (var rec in allRecords.OrderByDescending(r => r.Duration))
@@ -590,13 +484,17 @@ namespace ScreenTimeTracker
                 }
 
                 // Build aggregated list for summary tab and average
-                var aggregated = GetAggregatedRecordsForDateRange(startDate, endDate, includeLiveRecords: false);
+                var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(startDate, endDate, includeLiveRecords: false);
 
                 // Update UI helpers
                 CleanupSystemProcesses();
                 UpdateRecordListView(_usageRecords.ToList());
                 UpdateAveragePanel(aggregated, startDate, endDate);
                 UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
+
+                // Publish aggregated list to ViewModel
+                _viewModel.AggregatedRecords.Clear();
+                foreach (var rec in aggregated) _viewModel.AggregatedRecords.Add(rec);
             }
             catch (Exception ex)
             {
@@ -661,7 +559,7 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
 
-                var records = _databaseService.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+                var records = _aggregationService.GetDetailRecordsForDate(date);
 
                 if (!updateUI)
                     return records;
