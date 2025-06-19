@@ -503,6 +503,15 @@ namespace ScreenTimeTracker
                     }
                 }
 
+                // Lightweight live total update (avoids full chart rebuild)
+                try
+                {
+                    var liveTotal = TimeSpan.FromSeconds(_usageRecords.Sum(r => r.Duration.TotalSeconds));
+                    if (ChartTimeValue != null)       ChartTimeValue.Text = ChartHelper.FormatTimeSpan(liveTotal);
+                    if (TotalScreenTime != null)      TotalScreenTime.Text = ChartHelper.FormatTimeSpan(liveTotal);
+                }
+                catch { /* ignore in case of race */ }
+
                 // Throttle chart rebuild requests – only every 15 s unless something else
                 _chartStaleSeconds++;
                 if (_chartStaleSeconds >= 15)

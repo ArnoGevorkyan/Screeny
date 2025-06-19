@@ -92,7 +92,6 @@ namespace ScreenTimeTracker.Models
                         var endOfDay = _lastFocusTime.Date.AddDays(1).AddTicks(-1);
                         var focusedDuration = endOfDay - _lastFocusTime;
                         baseDuration += focusedDuration;
-                        System.Diagnostics.Debug.WriteLine($"[DURATION_LOG] WARNING: Stale session detected for {ProcessName}. Capping duration at end of day.");
                     }
                     else
                     {
@@ -102,30 +101,17 @@ namespace ScreenTimeTracker.Models
                         // Cap single session duration at 8 hours (reasonable maximum for continuous use)
                         if (focusedDuration.TotalHours > 8)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[DURATION_LOG] WARNING: Session duration exceeds 8 hours for {ProcessName}. Capping at 8 hours.");
                             focusedDuration = TimeSpan.FromHours(8);
                         }
                         
                         baseDuration += focusedDuration;
                     }
                     
-                    // ENHANCED LOGGING for double counting detection
-                    System.Diagnostics.Debug.WriteLine($"[DURATION_LOG] Duration getter for {ProcessName}:");
-                    System.Diagnostics.Debug.WriteLine($"  - _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s");
-                    System.Diagnostics.Debug.WriteLine($"  - _lastFocusTime: {_lastFocusTime:HH:mm:ss.fff}");
-                    System.Diagnostics.Debug.WriteLine($"  - currentTime: {currentTime:HH:mm:ss.fff}");
-                    System.Diagnostics.Debug.WriteLine($"  - calculated session: {(currentTime - _lastFocusTime).TotalSeconds:F2}s");
-                    System.Diagnostics.Debug.WriteLine($"  - FINAL baseDuration: {baseDuration.TotalSeconds:F2}s");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"[DURATION_LOG] Duration getter for {ProcessName} (NOT FOCUSED): {baseDuration.TotalSeconds:F2}s");
                 }
                 
                 // Final safety check - cap total duration at 16 hours (allowing for multiple sessions)
                 if (baseDuration.TotalHours > 16)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[DURATION_LOG] WARNING: Total duration exceeds 16 hours for {ProcessName}. Capping at 16 hours.");
                     baseDuration = TimeSpan.FromHours(16);
                 }
                 
@@ -195,14 +181,11 @@ namespace ScreenTimeTracker.Models
 
         public void SetFocus(bool isFocused)
         {
-            System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] SetFocus called for {ProcessName}: {IsFocused} -> {isFocused}");
             if (IsFocused != isFocused)
             {
              if (isFocused)
                 {
                     _lastFocusTime = DateTime.Now;
-                    System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] Focus started for {ProcessName} at {_lastFocusTime:HH:mm:ss.fff}");
-                    System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] Current _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s");
                 }
                 else
                 {
@@ -210,21 +193,10 @@ namespace ScreenTimeTracker.Models
                     var currentTime = DateTime.Now;
                     var focusedDuration = currentTime - _lastFocusTime;
                     
-                    System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] Focus ending for {ProcessName}:");
-                    System.Diagnostics.Debug.WriteLine($"  - _lastFocusTime: {_lastFocusTime:HH:mm:ss.fff}");
-                    System.Diagnostics.Debug.WriteLine($"  - currentTime: {currentTime:HH:mm:ss.fff}");
-                    System.Diagnostics.Debug.WriteLine($"  - calculated focusedDuration: {focusedDuration.TotalSeconds:F2}s");
-                    System.Diagnostics.Debug.WriteLine($"  - OLD _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s");
-                    
                     // Only accumulate if duration is reasonable (less than 1 day)
                     if (focusedDuration.TotalDays < 1 && focusedDuration.TotalSeconds > 0)
                     {
                         _accumulatedDuration += focusedDuration;
-                        System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] NEW _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] WARNING: Ignoring unreasonable focus duration for {ProcessName}: {focusedDuration.TotalDays} days, {focusedDuration.TotalSeconds:F2}s");
                     }
                 }
                 
@@ -232,10 +204,6 @@ namespace ScreenTimeTracker.Models
                 NotifyPropertyChanged(nameof(IsFocused));
                 NotifyPropertyChanged(nameof(Duration));
                 NotifyPropertyChanged(nameof(FormattedDuration));
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"[FOCUS_LOG] SetFocus for {ProcessName}: No change (already {isFocused})");
             }
         }
 
@@ -263,7 +231,6 @@ namespace ScreenTimeTracker.Models
         {
             if (IsFocused)
             {
-                System.Diagnostics.Debug.WriteLine($"Updating duration for {ProcessName} (Focused: {IsFocused})");
                 NotifyPropertyChanged(nameof(Duration));
                 NotifyPropertyChanged(nameof(FormattedDuration));
             }
@@ -280,18 +247,9 @@ namespace ScreenTimeTracker.Models
             var oldLastFocusTime = _lastFocusTime;
             var currentTime = DateTime.Now;
             
-            System.Diagnostics.Debug.WriteLine($"[INCREMENT_LOG] IncrementDuration called for {ProcessName}:");
-            System.Diagnostics.Debug.WriteLine($"  - IsFocused: {IsFocused}");
-            System.Diagnostics.Debug.WriteLine($"  - Interval to add: {interval.TotalSeconds:F2}s");
-            System.Diagnostics.Debug.WriteLine($"  - OLD _accumulatedDuration: {oldAccumulated.TotalSeconds:F2}s");
-            System.Diagnostics.Debug.WriteLine($"  - OLD _lastFocusTime: {oldLastFocusTime:HH:mm:ss.fff}");
-            System.Diagnostics.Debug.WriteLine($"  - Current time: {currentTime:HH:mm:ss.fff}");
-            
             if (IsFocused)
             {
                 var timeSinceLastFocus = currentTime - oldLastFocusTime;
-                System.Diagnostics.Debug.WriteLine($"  - Time since last focus: {timeSinceLastFocus.TotalSeconds:F2}s");
-                System.Diagnostics.Debug.WriteLine($"  - *** POTENTIAL DOUBLE COUNT: Adding {interval.TotalSeconds:F2}s but {timeSinceLastFocus.TotalSeconds:F2}s already calculated in Duration getter ***");
             }
             
             // For unfocused records we add directly to accumulated.
@@ -300,19 +258,6 @@ namespace ScreenTimeTracker.Models
             if (!IsFocused)
             {
                 _accumulatedDuration += interval;
-                System.Diagnostics.Debug.WriteLine($"  - NEW _accumulatedDuration: {_accumulatedDuration.TotalSeconds:F2}s (incremented – record not focused)");
-
-                // Advance _lastFocusTime so that when the record becomes focused again,
-                // the live span starts from this point and we don't double-count.
-                _lastFocusTime = DateTime.Now;
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"  - SKIPPING accumulated increment; record is focused and live span will be derived from _lastFocusTime");
-
-                // Do NOT touch _lastFocusTime here – it acts as the fixed anchor for the live
-                // elapsed span while this record remains focused.  Moving it every tick would
-                // reset the anchor and make Duration appear stalled.
             }
             
             // Update the anchor timestamp ONLY when the record is not focused.
@@ -321,7 +266,6 @@ namespace ScreenTimeTracker.Models
             {
                 _lastFocusTime = DateTime.Now;
             }
-            System.Diagnostics.Debug.WriteLine($"  - NEW _lastFocusTime: {_lastFocusTime:HH:mm:ss.fff}");
             
             NotifyPropertyChanged(nameof(Duration));
             NotifyPropertyChanged(nameof(FormattedDuration));
@@ -343,8 +287,6 @@ namespace ScreenTimeTracker.Models
             
             // Initialize icon loading in the background
             record.LoadAppIconIfNeeded();
-            
-            System.Diagnostics.Debug.WriteLine($"Created aggregated record for {processName} with date {date:yyyy-MM-dd} and start time {record.StartTime}");
             
             return record;
         }
