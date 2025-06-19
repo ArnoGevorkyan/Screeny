@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 using ScreenTimeTracker.Helpers;
+using System.Threading.Tasks;
 
 namespace ScreenTimeTracker.Services
 {
@@ -20,6 +21,33 @@ namespace ScreenTimeTracker.Services
         private readonly DatabaseService _databaseService;
         private readonly object _lockObject = new object();
         private DateTime _lastCheckedDate;
+
+        // ---------- WinEvent hook fields ----------
+        private IntPtr _focusHook = IntPtr.Zero;
+        private WinEventDelegate? _winEventDelegate;
+
+        private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        private const uint WINEVENT_OUTOFCONTEXT   = 0x0000;
+
+        private delegate void WinEventDelegate(
+            IntPtr hWinEventHook,
+            uint   eventType,
+            IntPtr hwnd,
+            int    idObject,
+            int    idChild,
+            uint   dwEventThread,
+            uint   dwmsEventTime);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SetWinEventHook(
+            uint eventMin, uint eventMax,
+            IntPtr hmodWinEventProc,
+            WinEventDelegate lpfnWinEventProc,
+            uint idProcess, uint idThread, uint dwFlags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -60,6 +88,11 @@ namespace ScreenTimeTracker.Services
             
             IsTracking = false;
             Debug.WriteLine("WindowTrackingService initialized.");
+
+            // Register foreground-window change hook
+            _winEventDelegate = OnWinEvent;
+            _focusHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                                         IntPtr.Zero, _winEventDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
         }
 
         public void StartTracking()
@@ -381,146 +414,18 @@ namespace ScreenTimeTracker.Services
             try
             {
                 var foregroundWindow = GetForegroundWindow();
-                if (foregroundWindow == IntPtr.Zero)
-                {
-                    System.Diagnostics.Debug.WriteLine("CheckActiveWindow - foregroundWindow is Zero, returning");
-                    return;
-                }
-                
-                // Validate window handle before using it
-                if (!IsWindow(foregroundWindow))
-                {
-                    System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Invalid window handle detected");
-                    return;
-                }
-                
+                if (foregroundWindow == IntPtr.Zero || !IsWindow(foregroundWindow)) return;
                 uint processId;
                 GetWindowThreadProcessId(foregroundWindow, out processId);
-                
-                if (processId == 0)
-                {
-                    System.Diagnostics.Debug.WriteLine("CheckActiveWindow - processId is 0, invalid window");
-                    return;
-                }
-                
-                // Comment out this check - we want to track Screeny too
-                // if (processId == (uint)System.Diagnostics.Process.GetCurrentProcess().Id)
-                // {
-                //     System.Diagnostics.Debug.WriteLine("CheckActiveWindow - Skipping our own process");
-                //     return;
-                // }
-
+                if (processId == 0) return;
                 var windowTitle = GetActiveWindowTitle(foregroundWindow);
                 var processName = GetProcessName(foregroundWindow);
 
-                // Removed per-call window detection diagnostics.
-
-                if (_currentRecord != null && 
-                    (_currentRecord.WindowHandle != foregroundWindow || 
-                     _currentRecord.ProcessId != (int)processId || 
-                     _currentRecord.WindowTitle != windowTitle))
-                {
-                    // Unfocus log removed.
-                    _currentRecord.SetFocus(false);
-                    _currentRecord = null;
-                }
-    
-                // IMPORTANT: Unfocus ALL records first to ensure only one is tracking
-                foreach (var record in _records)
-                {
-                    if (record.IsFocused)
-                    {
-                        // Background unfocus log removed.
-                        record.SetFocus(false);
-                    }
-                }
-
-                // Prefer exact match (pid + title + handle). If not found, fall back to
-                // any record with the same ProcessName to avoid duplicate rows when a
-                // window title changes (e.g., Telegram chat switch)
-                var existingRecord = _records.FirstOrDefault(r =>
-                    r.ProcessId == (int)processId &&
-                    r.WindowTitle == windowTitle &&
-                    r.WindowHandle == foregroundWindow);
-
-                if (existingRecord == null)
-                {
-                    existingRecord = _records.FirstOrDefault(r =>
-                        r.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
-
-                    if (existingRecord != null)
-                    {
-                        // Update handle/title so future exact-match checks succeed
-                        existingRecord.WindowHandle = foregroundWindow;
-                        existingRecord.WindowTitle  = windowTitle;
-                        existingRecord.ProcessId    = (int)processId;
-                    }
-                }
-
-                if (existingRecord != null)
-                {
-                    // Existing record found log removed.
-                    _currentRecord = existingRecord;
-                    if (!_currentRecord.IsFocused)
-                    {
-                        // Focus setting log removed.
-                        _currentRecord.SetFocus(true);
-                        
-                        // Apply generic application processing rules (handles java-based games, helper processes, etc.)
-                        ApplicationProcessingHelper.ProcessApplicationRecord(existingRecord);
-                        
-                        // Invoke events safely
-                        try
-                        {
-                            UsageRecordUpdated?.Invoke(this, _currentRecord);
-                            WindowChanged?.Invoke(this, EventArgs.Empty);
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"ERROR invoking events: {ex.Message}");
-                        }
-                    }
-                }
-                else
-                {
-                    // Creating new record log removed.
-                    _currentRecord = new AppUsageRecord
-                    {
-                        ProcessName = processName,
-                        WindowTitle = windowTitle,
-                        StartTime = DateTime.Now,
-                        ProcessId = (int)processId,
-                        WindowHandle = foregroundWindow,
-                        Date = EnsureValidDate(DateTime.Now.Date),
-                        ApplicationName = processName
-                    };
-                    
-                    // Apply generic application processing rules before tracking/displaying
-                    ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
-                    
-                    _currentRecord.SetFocus(true);
-                    _records.Add(_currentRecord);
-                    
-                    // Event firing log removed.
-                    
-                    // Invoke events safely
-                    try
-                    {
-                        UsageRecordUpdated?.Invoke(this, _currentRecord);
-                        WindowChanged?.Invoke(this, EventArgs.Empty);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR invoking events: {ex.Message}");
-                    }
-                }
+                ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"ERROR in CheckActiveWindow: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
-                
-                // Don't rethrow - we want to continue tracking even if one check fails
             }
         }
 
@@ -639,6 +544,14 @@ namespace ScreenTimeTracker.Services
                     _records.Clear();
                     _currentRecord = null;
                     _disposed = true;
+
+                    if (_focusHook != IntPtr.Zero)
+                    {
+                        try { UnhookWinEvent(_focusHook); } catch { }
+                        _focusHook = IntPtr.Zero;
+                        _winEventDelegate = null;
+                    }
+
                     Debug.WriteLine("WindowTrackingService disposed.");
                 }
             }
@@ -652,6 +565,107 @@ namespace ScreenTimeTracker.Services
                 return DateTime.Today;
             }
             return date;
+        }
+
+        // ---------- WinEvent hook callback ----------
+        private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
+        {
+            if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
+            {
+                // Process on thread-pool to avoid blocking WinEvent thread
+                Task.Run(() => CheckActiveWindow(hwnd));
+            }
+        }
+
+        // Overload that skips GetForegroundWindow and uses supplied handle
+        private void CheckActiveWindow(IntPtr foregroundWindow)
+        {
+            if (foregroundWindow == IntPtr.Zero) return;
+            // Reuse main logic by moving body to shared method if possible; for now duplicate minimal parts
+            lock (_lockObject)
+            {
+                if (!IsTracking || _disposed) return;
+            }
+
+            try
+            {
+                if (!IsWindow(foregroundWindow)) return;
+
+                uint processId;
+                GetWindowThreadProcessId(foregroundWindow, out processId);
+                if (processId == 0) return;
+
+                var windowTitle = GetActiveWindowTitle(foregroundWindow);
+                var processName = GetProcessName(foregroundWindow);
+
+                // Rest of logic identical to existing method -> call helper to reduce duplication
+                ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle);
+            }
+            catch { /* ignore */ }
+        }
+
+        // Extracted shared logic from original CheckActiveWindow body starting after obtaining names
+        private void ProcessWindowChange(IntPtr foregroundWindow, int processId, string processName, string windowTitle)
+        {
+            lock (_lockObject)
+            {
+                // Unfocus previous if different
+                if (_currentRecord != null &&
+                    (_currentRecord.WindowHandle != foregroundWindow ||
+                     _currentRecord.ProcessId != processId ||
+                     _currentRecord.WindowTitle != windowTitle))
+                {
+                    _currentRecord.SetFocus(false);
+                    _currentRecord = null;
+                }
+
+                foreach (var record in _records)
+                {
+                    if (record.IsFocused) record.SetFocus(false);
+                }
+
+                var existingRecord = _records.FirstOrDefault(r => r.ProcessId == processId && r.WindowTitle == windowTitle && r.WindowHandle == foregroundWindow);
+                if (existingRecord == null)
+                {
+                    existingRecord = _records.FirstOrDefault(r => r.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
+                    if (existingRecord != null)
+                    {
+                        existingRecord.WindowHandle = foregroundWindow;
+                        existingRecord.WindowTitle  = windowTitle;
+                        existingRecord.ProcessId    = processId;
+                    }
+                }
+
+                if (existingRecord != null)
+                {
+                    _currentRecord = existingRecord;
+                    if (!_currentRecord.IsFocused)
+                    {
+                        _currentRecord.SetFocus(true);
+                        ApplicationProcessingHelper.ProcessApplicationRecord(existingRecord);
+                        UsageRecordUpdated?.Invoke(this, _currentRecord);
+                        WindowChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                }
+                else
+                {
+                    _currentRecord = new AppUsageRecord
+                    {
+                        ProcessName = processName,
+                        WindowTitle = windowTitle,
+                        StartTime = DateTime.Now,
+                        ProcessId = processId,
+                        WindowHandle = foregroundWindow,
+                        Date = EnsureValidDate(DateTime.Now.Date),
+                        ApplicationName = processName
+                    };
+                    ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
+                    _currentRecord.SetFocus(true);
+                    _records.Add(_currentRecord);
+                    UsageRecordUpdated?.Invoke(this, _currentRecord);
+                    WindowChanged?.Invoke(this, EventArgs.Empty);
+                }
+            }
         }
     }
 } 
