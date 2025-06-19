@@ -991,16 +991,20 @@ namespace ScreenTimeTracker
             if (!_isChartDirty) return;
             _isChartDirty = false;
 
-            try
+            // Run heavy chart work at idle priority to keep UI responsive
+            DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {
-                UpdateUsageChart();
-                UpdateSummaryTab(_usageRecords.ToList());
-                _chartStaleSeconds = 0; // reset counter after refresh
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in ChartRefreshTimer_Tick: {ex.Message}");
-            }
+                if (_disposed) return;
+                try
+                {
+                    UpdateUsageChart();
+                    UpdateSummaryTab(_usageRecords.ToList());
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in deferred ChartRefresh: {ex.Message}");
+                }
+            });
         }
     }
 }

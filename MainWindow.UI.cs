@@ -491,17 +491,9 @@ namespace ScreenTimeTracker
                 if (_disposed || _usageRecords == null) return;
                 if (_trackingService == null || !_trackingService.IsTracking) return;
 
-                // Keep ListView focus flags in sync – but no heavy chart work
-                _ = _trackingService.CurrentRecord;
-
-                // Increment live durations in UI collection
-                foreach (var rec in _usageRecords)
-                {
-                    if (rec.IsFocused)
-                    {
-                        rec.RaiseDurationChanged();
-                    }
-                }
+                // Increment duration only for focused record to minimize UI churn
+                var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
+                activeRec?.RaiseDurationChanged();
 
                 // Lightweight live total update (avoids full chart rebuild)
                 try
@@ -512,7 +504,7 @@ namespace ScreenTimeTracker
                 }
                 catch { /* ignore in case of race */ }
 
-                // Throttle chart rebuild requests – only every 15 s unless something else
+                // Throttle chart refresh scheduling: no change but we'll modify ChartRefreshTimer_Tick.
                 _chartStaleSeconds++;
                 if (_chartStaleSeconds >= 15)
                 {
