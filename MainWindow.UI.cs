@@ -517,6 +517,10 @@ namespace ScreenTimeTracker
             {
                 try
                 {
+                    // Skip unwanted/system processes.
+                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName))
+                        return;
+
                     // Replace or merge by process name so the UI shows only one row per app.
                     var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
 
@@ -524,6 +528,7 @@ namespace ScreenTimeTracker
                     {
                         // First time we encounter this app – add directly.
                         _usageRecords.Add(record);
+                        existing = record;
                     }
                     else if (!ReferenceEquals(existing, record))
                     {
@@ -545,6 +550,10 @@ namespace ScreenTimeTracker
                         // Reference already in list – just refresh its duration.
                         existing.RaiseDurationChanged();
                     }
+
+                    // Purge any leftover duplicates (same ProcessName but different reference)
+                    var dupes = _usageRecords.Where(r => r.ProcessName.Equals(existing.ProcessName, StringComparison.OrdinalIgnoreCase) && !ReferenceEquals(r, existing)).ToList();
+                    foreach (var d in dupes) _usageRecords.Remove(d);
 
                     // Refresh chart & summary quickly
                     UpdateUsageChart();

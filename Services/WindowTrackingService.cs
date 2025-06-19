@@ -6,6 +6,7 @@ using ScreenTimeTracker.Models;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
+using ScreenTimeTracker.Helpers;
 
 namespace ScreenTimeTracker.Services
 {
@@ -465,6 +466,9 @@ namespace ScreenTimeTracker.Services
                         // Focus setting log removed.
                         _currentRecord.SetFocus(true);
                         
+                        // Apply generic application processing rules (handles java-based games, helper processes, etc.)
+                        ApplicationProcessingHelper.ProcessApplicationRecord(existingRecord);
+                        
                         // Invoke events safely
                         try
                         {
@@ -490,6 +494,9 @@ namespace ScreenTimeTracker.Services
                         Date = EnsureValidDate(DateTime.Now.Date),
                         ApplicationName = processName
                     };
+                    
+                    // Apply generic application processing rules before tracking/displaying
+                    ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
                     
                     _currentRecord.SetFocus(true);
                     _records.Add(_currentRecord);

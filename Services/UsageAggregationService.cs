@@ -2,6 +2,7 @@ using ScreenTimeTracker.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ScreenTimeTracker.Helpers;
 
 namespace ScreenTimeTracker.Services
 {
@@ -37,8 +38,13 @@ namespace ScreenTimeTracker.Services
 
             // --- ① database roll-up (already aggregated via SQL) ---
             var dbReport = _databaseService.GetUsageReportForDateRange(startDate, endDate);
-            foreach (var (processName, totalDuration) in dbReport)
+            foreach (var (processNameRaw, totalDuration) in dbReport)
             {
+                // Canonicalise name (e.g., strip ".Root", helper suffixes, etc.)
+                var temp = new AppUsageRecord { ProcessName = processNameRaw };
+                ApplicationProcessingHelper.ProcessApplicationRecord(temp);
+                var processName = temp.ProcessName;
+
                 unique[processName] = new AppUsageRecord
                 {
                     ProcessName          = processName,
@@ -60,7 +66,13 @@ namespace ScreenTimeTracker.Services
                 {
                     if (liveRec.Duration.TotalSeconds <= 0) continue;
 
-                    if (unique.TryGetValue(liveRec.ProcessName, out var existing))
+                    var canonicalLive = liveRec.ProcessName;
+                    // Extra safety: normalise again in case historical record wasn't processed
+                    var tmpLive = new AppUsageRecord { ProcessName = canonicalLive, WindowTitle = liveRec.WindowTitle };
+                    ApplicationProcessingHelper.ProcessApplicationRecord(tmpLive);
+                    canonicalLive = tmpLive.ProcessName;
+
+                    if (unique.TryGetValue(canonicalLive, out var existing))
                     {
                         existing._accumulatedDuration += liveRec.Duration;
                         existing.WindowHandle          = liveRec.WindowHandle;
@@ -72,7 +84,7 @@ namespace ScreenTimeTracker.Services
                         // clone to decouple from tracking collection
                         var clone = new AppUsageRecord
                         {
-                            ProcessName          = liveRec.ProcessName,
+                            ProcessName          = canonicalLive,
                             ApplicationName      = liveRec.ApplicationName,
                             WindowTitle          = liveRec.WindowTitle,
                             WindowHandle         = liveRec.WindowHandle,
@@ -146,11 +158,16 @@ namespace ScreenTimeTracker.Services
 
             foreach (var rec in list)
             {
+                // Canonicalise name first
+                var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
+                ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
+                var canonical = tmp.ProcessName;
+
                 // Skip Screeny itself and known system processes
-                if (IsWindowsSystemProcess(rec.ProcessName) || rec.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                if (IsWindowsSystemProcess(canonical) || canonical.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (byProcess.TryGetValue(rec.ProcessName, out var existing))
+                if (byProcess.TryGetValue(canonical, out var existing))
                 {
                     // Merge – accumulate duration, keep earliest start time and latest end time
                     existing._accumulatedDuration += rec.Duration;
@@ -163,7 +180,9 @@ namespace ScreenTimeTracker.Services
                 }
                 else
                 {
-                    byProcess[rec.ProcessName] = rec;
+                    // Update record's canonical name before storing
+                    rec.ProcessName = canonical;
+                    byProcess[canonical] = rec;
                 }
             }
 
@@ -191,10 +210,16 @@ namespace ScreenTimeTracker.Services
 
             foreach (var rec in source)
             {
-                if (IsWindowsSystemProcess(rec.ProcessName) || rec.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                // Canonicalise name first
+                var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
+                ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
+                var canonical = tmp.ProcessName;
+
+                // Skip Screeny itself and known system processes
+                if (IsWindowsSystemProcess(canonical) || canonical.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (merged.TryGetValue(rec.ProcessName, out var existing))
+                if (merged.TryGetValue(canonical, out var existing))
                 {
                     existing._accumulatedDuration += rec.Duration;
                     if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
@@ -205,7 +230,8 @@ namespace ScreenTimeTracker.Services
                 }
                 else
                 {
-                    merged[rec.ProcessName] = rec;
+                    rec.ProcessName = canonical;
+                    merged[canonical] = rec;
                 }
             }
 
