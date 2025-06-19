@@ -932,8 +932,17 @@ namespace ScreenTimeTracker
         private void TrayIcon_ExitClicked(object? sender, EventArgs e)
         {
             Debug.WriteLine("Tray Icon Exit Clicked");
-            // Ensure proper cleanup and exit
-            // Using Application.Current.Exit() is generally preferred for WinUI 3
+            // Persist current session before exiting.
+            try
+            {
+                PrepareForSuspend();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error preparing for suspend on exit: {ex.Message}");
+            }
+
+            // Ensure proper cleanup and exit on the UI thread
             DispatcherQueue?.TryEnqueue(() =>
             {
                 try
@@ -941,7 +950,7 @@ namespace ScreenTimeTracker
                     Application.Current.Exit();
                 }
                 catch (Exception ex)
-                {                    
+                {
                     Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
                 }
             });

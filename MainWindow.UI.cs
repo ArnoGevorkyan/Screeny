@@ -517,12 +517,34 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    // Replace or add the updated record in the UI collection
-                    var existing = _usageRecords.FirstOrDefault(r => r == record);
+                    // Replace or merge by process name so the UI shows only one row per app.
+                    var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+
                     if (existing == null)
+                    {
+                        // First time we encounter this app – add directly.
                         _usageRecords.Add(record);
-                    else
+                    }
+                    else if (!ReferenceEquals(existing, record))
+                    {
+                        // Same app already present – merge runtime info and avoid duplicates.
+                        existing.MergeWith(record);
+
+                        // Sync focus / window metadata so subsequent updates hit the same object.
+                        existing.WindowHandle = record.WindowHandle;
+                        existing.WindowTitle  = record.WindowTitle;
+                        existing.ProcessId    = record.ProcessId;
+
+                        if (record.IsFocused)
+                            existing.SetFocus(true);
+
                         existing.RaiseDurationChanged();
+                    }
+                    else
+                    {
+                        // Reference already in list – just refresh its duration.
+                        existing.RaiseDurationChanged();
+                    }
 
                     // Refresh chart & summary quickly
                     UpdateUsageChart();

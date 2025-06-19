@@ -220,10 +220,7 @@ namespace ScreenTimeTracker.Services
             
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ===== Timer_Elapsed at {DateTime.Now:HH:mm:ss.fff} =====");
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] IsTracking: {IsTracking}");
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Current records count: {_records.Count}");
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Current record: {(_currentRecord != null ? _currentRecord.ProcessName : "null")}");
+                // Verbose per-tick diagnostics removed.
                 
                 CheckActiveWindow();
                 
@@ -231,29 +228,29 @@ namespace ScreenTimeTracker.Services
                 var now = DateTime.Now;
                 var recordsToRemove = new List<AppUsageRecord>();
                 
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Checking {_records.Count} records for cleanup...");
+                // Removed verbose cleanup diagnostics.
                 foreach (var record in _records)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Record: {record.ProcessName}, IsFocused: {record.IsFocused}, EndTime: {record.EndTime}, Duration: {record.Duration.TotalSeconds:F1}s");
+                    // Verbose per-record diagnostics removed.
                     
                     // Skip the current record and focused records
                     if (record == _currentRecord || record.IsFocused)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Skipping {record.ProcessName} (current or focused)");
+                        // Skipping log removed.
                         continue;
                     }
                     
                     // If record has an end time and it's been more than 5 minutes, save and remove it
                     if (record.EndTime.HasValue && (now - record.EndTime.Value).TotalMinutes > 5)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Marking {record.ProcessName} for removal (ended {(now - record.EndTime.Value).TotalMinutes:F1} minutes ago)");
+                        // Removal marker log removed.
                         recordsToRemove.Add(record);
                     }
                     // If record doesn't have end time but hasn't been updated in 5 minutes, close it
                     else if (!record.EndTime.HasValue && record.Duration.TotalSeconds > 0 && 
                              (now - record.StartTime - record.Duration).TotalMinutes > 5)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Marking {record.ProcessName} for removal (inactive for {((now - record.StartTime - record.Duration).TotalMinutes):F1} minutes)");
+                        // Removal marker log removed.
                         record.EndTime = record.StartTime + record.Duration;
                         recordsToRemove.Add(record);
                     }
@@ -264,21 +261,21 @@ namespace ScreenTimeTracker.Services
                 {
                     try
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Saving and removing old record: {record.ProcessName} (Duration: {record.Duration.TotalSeconds:F1}s)");
+                        // Save/remove log removed.
                         lock (_databaseService)
                         {
                             _databaseService.SaveRecord(record);
                         }
                         _records.Remove(record);
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] Successfully removed {record.ProcessName}");
+                        // Save/remove success log removed.
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ERROR saving old record {record.ProcessName}: {ex.Message}");
+                        // Save/remove error log removed (retained critical error below).
+                        System.Diagnostics.Debug.WriteLine($"CRITICAL ERROR: Failed to save record during cleanup: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                     }
                 }
-                
-                System.Diagnostics.Debug.WriteLine($"[SERVICE_TIMER_LOG] ===== Timer_Elapsed complete, records count now: {_records.Count} =====");
             }
             catch (Exception ex)
             {
@@ -415,24 +412,14 @@ namespace ScreenTimeTracker.Services
                 var windowTitle = GetActiveWindowTitle(foregroundWindow);
                 var processName = GetProcessName(foregroundWindow);
 
-                System.Diagnostics.Debug.WriteLine($"CheckActiveWindow - Detected window: {processName} ({processId}) - '{windowTitle}'");
-                System.Diagnostics.Debug.WriteLine($"  Window Handle: {foregroundWindow}");
-                System.Diagnostics.Debug.WriteLine($"  Current Record: {_currentRecord?.ProcessName ?? "None"}");
-                System.Diagnostics.Debug.WriteLine($"  Total Records in List: {_records.Count}");
-
-                // Debug: Show all currently tracked records
-                System.Diagnostics.Debug.WriteLine("  Currently tracked records:");
-                foreach (var r in _records)
-                {
-                    System.Diagnostics.Debug.WriteLine($"    - {r.ProcessName}: IsFocused={r.IsFocused}, Duration={r.Duration.TotalSeconds:F1}s");
-                }
+                // Removed per-call window detection diagnostics.
 
                 if (_currentRecord != null && 
                     (_currentRecord.WindowHandle != foregroundWindow || 
                      _currentRecord.ProcessId != (int)processId || 
                      _currentRecord.WindowTitle != windowTitle))
                 {
-                    System.Diagnostics.Debug.WriteLine($"Unfocusing previous window: {_currentRecord.ProcessName} - {_currentRecord.WindowTitle}");
+                    // Unfocus log removed.
                     _currentRecord.SetFocus(false);
                     _currentRecord = null;
                 }
@@ -442,23 +429,40 @@ namespace ScreenTimeTracker.Services
                 {
                     if (record.IsFocused)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Unfocusing background window: {record.ProcessName}");
+                        // Background unfocus log removed.
                         record.SetFocus(false);
                     }
                 }
 
-                var existingRecord = _records.FirstOrDefault(r => 
-                    r.ProcessId == (int)processId && 
+                // Prefer exact match (pid + title + handle). If not found, fall back to
+                // any record with the same ProcessName to avoid duplicate rows when a
+                // window title changes (e.g., Telegram chat switch)
+                var existingRecord = _records.FirstOrDefault(r =>
+                    r.ProcessId == (int)processId &&
                     r.WindowTitle == windowTitle &&
                     r.WindowHandle == foregroundWindow);
 
+                if (existingRecord == null)
+                {
+                    existingRecord = _records.FirstOrDefault(r =>
+                        r.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
+
+                    if (existingRecord != null)
+                    {
+                        // Update handle/title so future exact-match checks succeed
+                        existingRecord.WindowHandle = foregroundWindow;
+                        existingRecord.WindowTitle  = windowTitle;
+                        existingRecord.ProcessId    = (int)processId;
+                    }
+                }
+
                 if (existingRecord != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Found existing record for: {processName} - {windowTitle}");
+                    // Existing record found log removed.
                     _currentRecord = existingRecord;
                     if (!_currentRecord.IsFocused)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Setting focus to existing record: {processName}");
+                        // Focus setting log removed.
                         _currentRecord.SetFocus(true);
                         
                         // Invoke events safely
@@ -475,7 +479,7 @@ namespace ScreenTimeTracker.Services
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine($"Creating new record for: {processName} - {windowTitle}");
+                    // Creating new record log removed.
                     _currentRecord = new AppUsageRecord
                     {
                         ProcessName = processName,
@@ -490,7 +494,7 @@ namespace ScreenTimeTracker.Services
                     _currentRecord.SetFocus(true);
                     _records.Add(_currentRecord);
                     
-                    System.Diagnostics.Debug.WriteLine($"Firing UsageRecordUpdated event for: {processName}");
+                    // Event firing log removed.
                     
                     // Invoke events safely
                     try
@@ -502,8 +506,6 @@ namespace ScreenTimeTracker.Services
                     {
                         System.Diagnostics.Debug.WriteLine($"ERROR invoking events: {ex.Message}");
                     }
-                    
-                    System.Diagnostics.Debug.WriteLine($"Total records tracked: {_records.Count}");
                 }
             }
             catch (Exception ex)

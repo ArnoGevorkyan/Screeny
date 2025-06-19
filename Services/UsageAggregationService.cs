@@ -130,17 +130,46 @@ namespace ScreenTimeTracker.Services
 
         public List<AppUsageRecord> GetDetailRecordsForDate(DateTime date)
         {
-            // database records for a single day
             var list = _databaseService.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
 
+            // Append live records when looking at today so the UI shows ongoing activity.
             if (date.Date == DateTime.Today)
             {
-                // merge live records for today
-                var live = _trackingService.GetRecords().Where(r => r.IsFromDate(date)).ToList();
+                var live = _trackingService.GetRecords()
+                                             .Where(r => r.IsFromDate(date))
+                                             .ToList();
                 list.AddRange(live);
             }
 
-            return list;
+            // ----  Deduplicate and filter unwanted rows  ----
+            var byProcess = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rec in list)
+            {
+                // Skip Screeny itself and known system processes
+                if (IsWindowsSystemProcess(rec.ProcessName) || rec.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (byProcess.TryGetValue(rec.ProcessName, out var existing))
+                {
+                    // Merge – accumulate duration, keep earliest start time and latest end time
+                    existing._accumulatedDuration += rec.Duration;
+
+                    if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
+                    if (rec.EndTime.HasValue)
+                    {
+                        if (!existing.EndTime.HasValue || rec.EndTime > existing.EndTime) existing.EndTime = rec.EndTime;
+                    }
+                }
+                else
+                {
+                    byProcess[rec.ProcessName] = rec;
+                }
+            }
+
+            return byProcess.Values
+                             .OrderByDescending(r => r.Duration.TotalSeconds)
+                             .ToList();
         }
 
         public List<AppUsageRecord> GetDetailRecordsForDateRange(DateTime startDate, DateTime endDate)
@@ -148,16 +177,41 @@ namespace ScreenTimeTracker.Services
             if (startDate > endDate)
                 (startDate, endDate) = (endDate, startDate);
 
-            var records = _databaseService.GetRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
+            var source = _databaseService.GetRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
 
             if (endDate.Date >= DateTime.Today)
             {
                 var live = _trackingService.GetRecords()
                     .Where(r => r.Date >= startDate && r.Date <= endDate)
                     .ToList();
-                records.AddRange(live);
+                source.AddRange(live);
             }
-            return records;
+
+            var merged = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rec in source)
+            {
+                if (IsWindowsSystemProcess(rec.ProcessName) || rec.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (merged.TryGetValue(rec.ProcessName, out var existing))
+                {
+                    existing._accumulatedDuration += rec.Duration;
+                    if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
+                    if (rec.EndTime.HasValue)
+                    {
+                        if (!existing.EndTime.HasValue || rec.EndTime > existing.EndTime) existing.EndTime = rec.EndTime;
+                    }
+                }
+                else
+                {
+                    merged[rec.ProcessName] = rec;
+                }
+            }
+
+            return merged.Values
+                         .OrderByDescending(r => r.Duration.TotalSeconds)
+                         .ToList();
         }
     }
 } 

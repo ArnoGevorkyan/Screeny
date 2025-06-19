@@ -134,14 +134,8 @@ namespace ScreenTimeTracker.Helpers
                         totalHr += (iv.End - iv.Start).TotalHours;
                     }
 
-                    // Clamp to [0,1] and apply a small floor so that tiny but real usage
-                    // (a few seconds) still shows up as a visible bar instead of appearing
-                    // empty.  0.02 h ≈ 1 min – visually perceptible but not misleading.
+                    // Clamp to [0,1] – do not artificially floor small values.
                     totalHr = Math.Clamp(totalHr, 0, 1);
-                    if (totalHr > 0 && totalHr < 0.02)
-                    {
-                        totalHr = 0.02;
-                    }
                     hourlyUsage[hr] = totalHr;
                 }
 
