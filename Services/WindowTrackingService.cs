@@ -424,7 +424,7 @@ namespace ScreenTimeTracker.Services
                     _currentRecord.SetFocus(false);
                     _currentRecord = null;
                 }
-
+    
                 // IMPORTANT: Unfocus ALL records first to ensure only one is tracking
                 foreach (var record in _records)
                 {

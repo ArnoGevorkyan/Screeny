@@ -110,6 +110,7 @@ namespace ScreenTimeTracker
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
                 _autoSaveTimer?.Stop();
+                _chartRefreshTimer?.Stop();
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
 
                 // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
@@ -253,9 +254,11 @@ namespace ScreenTimeTracker
                 // Start timers
                 _updateTimer.Start();
                 _autoSaveTimer.Start();
+                _chartRefreshTimer.Start();
+                _isChartDirty = true; // force initial chart render
 
-                // Immediate chart refresh
                 UpdateUsageChart();
+                UpdateSummaryTab(_usageRecords.ToList());
 
                 // Sync ViewModel state
                 _viewModel.IsTracking = true;
@@ -298,6 +301,7 @@ namespace ScreenTimeTracker
             // Stop timers
             _updateTimer.Stop();
             _autoSaveTimer.Stop();
+            _chartRefreshTimer.Stop();
 
             // Persist session data
             SaveRecordsToDatabase();
@@ -425,7 +429,11 @@ namespace ScreenTimeTracker
                     });
                 }
 
-                foreach (var rec in records.OrderByDescending(r => r.Duration)) _usageRecords.Add(rec);
+                foreach (var rec in records.OrderByDescending(r => r.Duration))
+                {
+                    rec.LoadAppIconIfNeeded();
+                    _usageRecords.Add(rec);
+                }
 
                 CleanupSystemProcesses();
 
@@ -480,6 +488,7 @@ namespace ScreenTimeTracker
                 // For list view we want the granular list (allRecords)
                 foreach (var rec in allRecords.OrderByDescending(r => r.Duration))
                 {
+                    rec.LoadAppIconIfNeeded();
                     _usageRecords.Add(rec);
                 }
 

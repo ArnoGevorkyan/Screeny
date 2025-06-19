@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
 using ScreenTimeTracker.Models;
 using System.Linq;
+using System.Collections.Generic;
 
 namespace ScreenTimeTracker.Services
 {
@@ -86,13 +87,24 @@ namespace ScreenTimeTracker.Services
                 resolved = await TryLoadIconFromWindowsAppsAsync(record, ct);
             }
 
-            // NOTE: Simplified pipeline – start-menu (.lnk) fallback removed
+            // 4) Start-menu (.lnk) shortcut lookup – helps Store/UWP apps that register a link.
+            if (resolved == null)
+            {
+                resolved = await TryLoadIconFromStartMenuAsync(record, ct);
+            }
 
-            // 4) DLL resource (some games store icons in DLLs)
-            // NOTE: Simplified pipeline – DLL resource fallback removed
+            // 5) DLL resource (some games store icons in DLLs)
+            if (resolved == null)
+            {
+                string dllPath = ResolveExecutablePath(record) ?? record.ProcessName;
+                resolved = await TryLoadIconFromDllAsync(dllPath, ct);
+            }
 
-            // 5) Well-known custom fallbacks (WhatsApp etc.) – placeholder
-            // NOTE: Simplified pipeline – custom well-known fallbacks removed
+            // 6) Well-known custom fallbacks (WhatsApp etc.) – placeholder
+            if (resolved == null)
+            {
+                resolved = await TryGetWellKnownSystemIconAsync(record, ct);
+            }
 
             if (resolved != null)
             {
@@ -263,10 +275,15 @@ namespace ScreenTimeTracker.Services
 
             try
             {
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string windowsAppsPath = System.IO.Path.Combine(localAppData, "Microsoft", "WindowsApps");
+                var searchRoots = new List<string>
+                {
+                    System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps"),
+                    System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps")
+                };
 
-                if (!System.IO.Directory.Exists(windowsAppsPath)) return null;
+                foreach (var windowsAppsPath in searchRoots)
+                {
+                    if (!System.IO.Directory.Exists(windowsAppsPath)) continue;
 
                 var matchingDirs = System.IO.Directory.GetDirectories(windowsAppsPath, $"*{record.ProcessName}*", System.IO.SearchOption.TopDirectoryOnly);
                 foreach (var dir in matchingDirs)
@@ -278,7 +295,6 @@ namespace ScreenTimeTracker.Services
                         if (bmp != null) return bmp;
                     }
 
-                    // fallback: any exe/ico/png inside dir
                     foreach (var file in System.IO.Directory.EnumerateFiles(dir, "*.*", System.IO.SearchOption.AllDirectories))
                     {
                         if (file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
@@ -290,6 +306,7 @@ namespace ScreenTimeTracker.Services
                         {
                             var bmp = await LoadImageFromFileAsync(file, ct);
                             if (bmp != null) return bmp;
+                            }
                         }
                     }
                 }
@@ -308,6 +325,7 @@ namespace ScreenTimeTracker.Services
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)
                 };
 
+                bool anySuccess = false;
                 foreach (var dir in startMenuDirs)
                 {
                     if (!System.IO.Directory.Exists(dir)) continue;
@@ -315,11 +333,27 @@ namespace ScreenTimeTracker.Services
                     var lnkFiles = System.IO.Directory.GetFiles(dir, "*.lnk", System.IO.SearchOption.AllDirectories);
                     foreach (var lnk in lnkFiles)
                     {
-                        if (!System.IO.Path.GetFileNameWithoutExtension(lnk).Contains(record.ProcessName, StringComparison.OrdinalIgnoreCase))
-                            continue;
+                        var nameNoExt = System.IO.Path.GetFileNameWithoutExtension(lnk);
+                        if (nameNoExt.Contains(record.ProcessName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var bmp = await TryLoadIconWithSHGetFileInfoAsync(lnk, ct);
+                            if (bmp != null) return bmp;
+                            anySuccess = true;
+                        }
+                    }
+                }
 
+                // Fallback: first .lnk with a valid icon if none matched by name
+                if (!anySuccess)
+                {
+                    foreach (var dir in startMenuDirs)
+                    {
+                        var lnkFiles = System.IO.Directory.GetFiles(dir, "*.lnk", System.IO.SearchOption.AllDirectories);
+                        foreach (var lnk in lnkFiles)
+                        {
                         var bmp = await TryLoadIconWithSHGetFileInfoAsync(lnk, ct);
                         if (bmp != null) return bmp;
+                        }
                     }
                 }
             }
@@ -355,7 +389,19 @@ namespace ScreenTimeTracker.Services
                                 string manifestPath = System.IO.Path.Combine(pkgPath.ToString(), "AppxManifest.xml");
                                 if (System.IO.File.Exists(manifestPath))
                                 {
-                                    // Quick heuristic: first PNG file containing "logo" in its name inside package root.
+                                    // Parse manifest for explicit logo path (more reliable for Arc/Spotify)
+                                    var logo = GetLogoPathFromManifest(manifestPath);
+                                    if (!string.IsNullOrEmpty(logo))
+                                    {
+                                        string logoPath = System.IO.Path.Combine(pkgPath.ToString(), logo.Replace("/", System.IO.Path.DirectorySeparatorChar.ToString()).Replace("\\", System.IO.Path.DirectorySeparatorChar.ToString()));
+                                        if (System.IO.File.Exists(logoPath))
+                                        {
+                                            var img = await LoadImageFromFileAsync(logoPath, ct);
+                                            if (img != null) return img;
+                                        }
+                                    }
+
+                                    // Fallback: any PNG with "logo" in filename
                                     var png = System.IO.Directory.EnumerateFiles(pkgPath.ToString(), "*logo*.png", System.IO.SearchOption.AllDirectories)
                                                          .FirstOrDefault();
                                     if (png != null)
@@ -437,6 +483,23 @@ namespace ScreenTimeTracker.Services
                 return bitmapImage.PixelWidth > 0 ? bitmapImage : null;
             }
             catch { return null; }
+        }
+
+        static string? GetLogoPathFromManifest(string manifestPath)
+        {
+            try
+            {
+                var xdoc = System.Xml.Linq.XDocument.Load(manifestPath);
+                // VisualElements live under namespace "http://schemas.microsoft.com/appx/manifest/uap/windows10"
+                var visualElements = xdoc.Descendants().FirstOrDefault(e => e.Name.LocalName == "VisualElements");
+                if (visualElements != null)
+                {
+                    var logoAttr = visualElements.Attribute("Square44x44Logo") ?? visualElements.Attribute("Logo");
+                    return logoAttr?.Value;
+                }
+            }
+            catch { /* ignore */ }
+            return null;
         }
 
         #endregion

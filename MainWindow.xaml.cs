@@ -61,8 +61,12 @@ namespace ScreenTimeTracker
 
         private DispatcherTimer _updateTimer;
         private DispatcherTimer _autoSaveTimer;
+        private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
+        private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
         private bool _disposed;
         private bool _iconsRefreshedOnce = false;
+        // Counter used by UpdateTimer_Tick to decide when to mark the chart dirty again
+        private int _chartStaleSeconds = 0;
         
         // Static constructor to configure LiveCharts
         static MainWindow()
@@ -250,6 +254,11 @@ namespace ScreenTimeTracker
             // Configure auto-save/maintenance timer (5-minute pulse)
             _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
             _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+
+            // NEW: configure batched chart refresh timer (5-second pulse)
+            _chartRefreshTimer = new DispatcherTimer();
+            _chartRefreshTimer.Interval = TimeSpan.FromSeconds(5); // slower, reduces CPU
+            _chartRefreshTimer.Tick += ChartRefreshTimer_Tick;
 
             // Hook ViewModel command events
             _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
@@ -950,7 +959,7 @@ namespace ScreenTimeTracker
                     Application.Current.Exit();
                 }
                 catch (Exception ex)
-                {
+                {                    
                     Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
                 }
             });
@@ -972,6 +981,26 @@ namespace ScreenTimeTracker
             public POINT_WIN32 ptMaxPosition;
             public POINT_WIN32 ptMinTrackSize;
             public POINT_WIN32 ptMaxTrackSize;
+        }
+
+        private void ChartRefreshTimer_Tick(object? sender, object e)
+        {
+            if (_disposed) return;
+
+            // Skip if nothing changed since last refresh
+            if (!_isChartDirty) return;
+            _isChartDirty = false;
+
+            try
+            {
+                UpdateUsageChart();
+                UpdateSummaryTab(_usageRecords.ToList());
+                _chartStaleSeconds = 0; // reset counter after refresh
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in ChartRefreshTimer_Tick: {ex.Message}");
+            }
         }
     }
 }

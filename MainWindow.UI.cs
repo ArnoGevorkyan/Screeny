@@ -491,9 +491,8 @@ namespace ScreenTimeTracker
                 if (_disposed || _usageRecords == null) return;
                 if (_trackingService == null || !_trackingService.IsTracking) return;
 
-                // Pull current focused record to keep UI list in sync
-                var liveFocusedApp = _trackingService.CurrentRecord;
-                UpdateUsageChart(liveFocusedApp);
+                // Keep ListView focus flags in sync – but no heavy chart work
+                _ = _trackingService.CurrentRecord;
 
                 // Increment live durations in UI collection
                 foreach (var rec in _usageRecords)
@@ -502,6 +501,14 @@ namespace ScreenTimeTracker
                     {
                         rec.RaiseDurationChanged();
                     }
+                }
+
+                // Throttle chart rebuild requests – only every 15 s unless something else
+                _chartStaleSeconds++;
+                if (_chartStaleSeconds >= 15)
+                {
+                    _isChartDirty     = true;
+                    _chartStaleSeconds = 0;
                 }
             }
             catch (Exception ex)
@@ -529,6 +536,8 @@ namespace ScreenTimeTracker
                         // First time we encounter this app – add directly.
                         _usageRecords.Add(record);
                         existing = record;
+
+                        existing.LoadAppIconIfNeeded();
                     }
                     else if (!ReferenceEquals(existing, record))
                     {
@@ -544,6 +553,9 @@ namespace ScreenTimeTracker
                             existing.SetFocus(true);
 
                         existing.RaiseDurationChanged();
+
+                        // Ensure icon requested once we know canonical record
+                        existing.LoadAppIconIfNeeded();
                     }
                     else
                     {
@@ -555,9 +567,8 @@ namespace ScreenTimeTracker
                     var dupes = _usageRecords.Where(r => r.ProcessName.Equals(existing.ProcessName, StringComparison.OrdinalIgnoreCase) && !ReferenceEquals(r, existing)).ToList();
                     foreach (var d in dupes) _usageRecords.Remove(d);
 
-                    // Refresh chart & summary quickly
-                    UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
+                    // Mark chart for deferred refresh
+                    _isChartDirty = true;
                 }
                 catch (Exception ex)
                 {
@@ -581,7 +592,7 @@ namespace ScreenTimeTracker
                         var uiRec = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
                         uiRec?.SetFocus(true);
                     }
-                    UpdateUsageChart();
+                    _isChartDirty = true;
                 }
                 catch (Exception ex)
                 {

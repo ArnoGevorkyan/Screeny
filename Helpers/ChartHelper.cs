@@ -103,7 +103,7 @@ namespace ScreenTimeTracker.Helpers
                 }
 
                 // Collect fragments per hour without summing yet (avoids double counting)
-                System.Diagnostics.Debug.WriteLine($"Processing {usageRecords.Count} records for hourly chart with overlap merging");
+                // Diagnostics removed for performance
                 foreach (var record in usageRecords)
                 {
                     var start = record.StartTime;
@@ -119,7 +119,6 @@ namespace ScreenTimeTracker.Helpers
                         if (overlapEnd > overlapStart)
                         {
                             hourlyIntervals[hr].Add((overlapStart, overlapEnd));
-                            System.Diagnostics.Debug.WriteLine($"Record: {record.ProcessName}, Hour: {hr}, Fragment: {(overlapEnd - overlapStart).TotalMinutes:F1}m");
                         }
                     }
                 }
@@ -158,7 +157,6 @@ namespace ScreenTimeTracker.Helpers
                 {
                     int currentHour = DateTime.Now.Hour;
                     hourlyUsage[currentHour] = 0.001; // Add a tiny value
-                    System.Diagnostics.Debug.WriteLine($"Added tiny value to hour {currentHour}");
                 }
 
                 // MODIFICATION: Filter to only include hours with usage
@@ -174,104 +172,81 @@ namespace ScreenTimeTracker.Helpers
                     nonZeroHours.Add(DateTime.Now.Hour);
                 }
                 
-                // Add padding hours before and after to provide context
-                int earliestHour = nonZeroHours.First();
-                int latestHour = nonZeroHours.Last();
-                
-                // Ensure we have at least 6 hours visible or expand to include all non-zero hours plus padding
-                int filteredStartHour, filteredEndHour;
-                
-                if (nonZeroHours.Count <= 3)
-                {
-                    // For very few data points, show a reasonable window centered on the data
-                    int middleHour = (earliestHour + latestHour) / 2;
-                    filteredStartHour = Math.Max(0, middleHour - 3);
-                    filteredEndHour = Math.Min(23, middleHour + 3);
-                }
-                else
-                {
-                    // Add padding before and after
-                    filteredStartHour = Math.Max(0, earliestHour - 1);  
-                    filteredEndHour = Math.Min(23, latestHour + 1);
-                }
-                
-                // Ensure minimum range of hours for context
-                if (filteredEndHour - filteredStartHour < 5)
-                {
-                    // Expand the range to show at least 6 hours
-                    while (filteredEndHour - filteredStartHour < 5 && (filteredStartHour > 0 || filteredEndHour < 23))
-                    {
-                        if (filteredStartHour > 0) filteredStartHour--;
-                        if (filteredEndHour < 23 && filteredEndHour - filteredStartHour < 5) filteredEndHour++;
-                    }
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"Filtered to hours {filteredStartHour}-{filteredEndHour} based on usage");
-                
-                // Only limit to current hour if we're viewing TODAY's data
-                // For historical dates, show all hours that have data
-                if (selectedDate.Date == DateTime.Today)
-                {
-                    // Do not include future hours beyond now (only for today)
-                    int nowHour = DateTime.Now.Hour;
-                    if (filteredEndHour > nowHour) 
-                    {
-                        filteredEndHour = nowHour;
-                        System.Diagnostics.Debug.WriteLine($"Limited end hour to current hour {nowHour} for today's data");
-                    }
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"Showing full day for historical date {selectedDate:yyyy-MM-dd}");
-                }
+                // Determine if we should show a compact view (no empty bars)
+                bool showCompact = selectedEndDate == null &&
+                                   (selectedDate.Date == DateTime.Today || selectedDate.Date == DateTime.Today.AddDays(-1));
 
-                // Set up series and labels for the chart
-                var values = new List<double>();
-                var labels = new List<string>();
-                
-                // Create a more concise label format for narrow windows
-                bool useShortLabels = chart.ActualWidth < 500;
-                
-                // Add values and labels for each hour in our filtered range
-                for (int i = filteredStartHour; i <= filteredEndHour; i++)
+                List<int> displayHours;
+                int filteredStartHour = 0;
+                int filteredEndHour   = 23;
+
+                if (showCompact)
                 {
-                    values.Add(hourlyUsage[i]);
-                    
-                    // Use spacing logic to prevent label crowding
-                    // For narrow screens, we only show labels every 2 or 3 hours
-                    if (useShortLabels)
+                    // Show only hours that actually have usage
+                    displayHours = nonZeroHours;
+                }
+                else
+                {
+                    // Original padding/min-range logic ----------------------
+                    int earliestHour = nonZeroHours.First();
+                    int latestHour   = nonZeroHours.Last();
+
+                    if (nonZeroHours.Count <= 3)
                     {
-                        // Very narrow: show label only for specific hours
-                        if ((i % 3 == 0) || i == filteredStartHour || i == filteredEndHour)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "p" : "a")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
-                    }
-                    else if (chart.ActualWidth < 700)
-                    {
-                        // Narrow: show label every 3 hours or start/end
-                        if (i % 2 == 0 || i == filteredStartHour || i == filteredEndHour)
-                        {
-                            labels.Add($"{(i % 12 == 0 ? 12 : i % 12)}{(i >= 12 ? "PM" : "AM")}");
-                        }
-                        else
-                        {
-                            labels.Add(""); // Empty label for hours we're skipping
-                        }
+                        int middleHour       = (earliestHour + latestHour) / 2;
+                        filteredStartHour    = Math.Max(0, middleHour - 3);
+                        filteredEndHour      = Math.Min(23, middleHour + 3);
                     }
                     else
                     {
-                        // Wide: show all hour labels
-                        labels.Add($"{(i % 12 == 0 ? 12 : i % 12)} {(i >= 12 ? "PM" : "AM")}");
+                        filteredStartHour    = Math.Max(0, earliestHour - 1);
+                        filteredEndHour      = Math.Min(23, latestHour + 1);
                     }
-                    
-                    System.Diagnostics.Debug.WriteLine($"Hour {i}: {hourlyUsage[i]:F4} hours -> {labels[values.Count-1]}");
+
+                    // Ensure at least 6 visible hours
+                    while (filteredEndHour - filteredStartHour < 5 && (filteredStartHour > 0 || filteredEndHour < 23))
+                    {
+                        if (filteredStartHour > 0) filteredStartHour--; else filteredEndHour++;
+                    }
+
+                    // For today, never show future hours
+                    if (selectedDate.Date == DateTime.Today)
+                    {
+                        int nowHour = DateTime.Now.Hour;
+                        if (filteredEndHour > nowHour) filteredEndHour = nowHour;
+                    }
+
+                    displayHours = Enumerable.Range(filteredStartHour, filteredEndHour - filteredStartHour + 1).ToList();
                 }
 
+                // Build values + labels ---------------------------------------------------
+                var values = new List<double>();
+                var labels = new List<string>();
+
+                bool useShortLabels = chart.ActualWidth < 500;
+
+                foreach (int hr in displayHours)
+                {
+                    values.Add(hourlyUsage[hr]);
+
+                    string label = "";
+                    if (useShortLabels)
+                    {
+                        label = $"{(hr % 12 == 0 ? 12 : hr % 12)}{(hr >= 12 ? "p" : "a")}";
+                    }
+                    else if (chart.ActualWidth < 700)
+                    {
+                        label = $"{(hr % 12 == 0 ? 12 : hr % 12)}{(hr >= 12 ? "PM" : "AM")}";
+                    }
+                    else
+                    {
+                        label = $"{(hr % 12 == 0 ? 12 : hr % 12)} {(hr >= 12 ? "PM" : "AM")}";
+                    }
+                    labels.Add(label);
+                }
+
+                maxValue = values.Count > 0 ? values.Max() : 0;
+                
                 // Determine a good Y-axis maximum based on the actual data
                 double yAxisMax = maxValue;
                 if (yAxisMax < 0.005) yAxisMax = 0.01;  // Very small values
@@ -369,6 +344,7 @@ namespace ScreenTimeTracker.Helpers
 
                 var values = new List<double>();
                 var labels = new List<string>();
+                double maxValue = 0;
                 DateTime currentDate = DateTime.Now.Date; // Use Today's date for labeling
 
                 // First, prepare a dictionary with all dates in the range initialized to zero
@@ -468,7 +444,7 @@ namespace ScreenTimeTracker.Helpers
 
                 // If all values are zero, add a tiny value to make the chart visible
                 bool allZero = values.All(v => v < 0.0001);
-                double maxValue = values.Count > 0 ? values.Max() : 0;
+                maxValue = values.Count > 0 ? values.Max() : 0;
                 
                 if (allZero || maxValue < 0.001)
                 {
