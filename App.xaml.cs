@@ -132,11 +132,11 @@ public partial class App : Application
                 return true;
             }
 
-            // Check if started shortly after system boot (less than 2 minutes)
+            // Fallback: if system just booted (within 20 s), assume startup
             TimeSpan systemUptime = TimeSpan.FromMilliseconds(Environment.TickCount);
-            if (systemUptime.TotalMinutes < 2)
+            if (systemUptime.TotalSeconds < 20)
             {
-                WriteToLog($"System uptime: {systemUptime.TotalMinutes:F1} minutes - likely startup");
+                WriteToLog($"System uptime: {systemUptime.TotalSeconds:F0} seconds - likely startup");
                 return true;
             }
 
