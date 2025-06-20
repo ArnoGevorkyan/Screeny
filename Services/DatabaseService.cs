@@ -507,10 +507,8 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public bool SaveRecord(AppUsageRecord record)
         {
-            System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING SaveRecord for {record.ProcessName}");
             if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Database not initialized or using in-memory fallback, skipping.");
                 return false;
             }
             
@@ -520,18 +518,11 @@ namespace ScreenTimeTracker.Services
             {
                 _connection.Open();
                 transaction = _connection.BeginTransaction(); // Start transaction
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection opened and transaction started.");
 
                 // Validate date to prevent future dates
                 DateTime validatedStartTime = ValidateDate(record.StartTime);
                 DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
                 string dateString = validatedStartTime.ToString("yyyy-MM-dd");
-
-                // Log if there was validation
-                if (validatedStartTime != record.StartTime)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
-                }
 
                 // Validate and cap duration
                 long durationMs = (long)record.Duration.TotalMilliseconds;
@@ -540,14 +531,12 @@ namespace ScreenTimeTracker.Services
                 const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
                 if (durationMs > maxSessionDurationMs)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Duration {durationMs}ms exceeds 8 hours for {record.ProcessName}. Capping at 8 hours.");
                     durationMs = maxSessionDurationMs;
                 }
                 
                 // Ensure duration is not negative
                 if (durationMs < 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Negative duration {durationMs}ms for {record.ProcessName}. Setting to 0.");
                     durationMs = 0;
                 }
                 
@@ -557,7 +546,6 @@ namespace ScreenTimeTracker.Services
                     var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
                     if (calculatedDuration >= 0 && calculatedDuration < durationMs)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Using calculated duration {calculatedDuration}ms instead of {durationMs}ms");
                         durationMs = (long)calculatedDuration;
                     }
                 }
@@ -575,39 +563,26 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
                     command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
                     
-                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: BEFORE ExecuteScalar...");
                     var result = command.ExecuteScalar();
-                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: AFTER ExecuteScalar.");
                     
                     if (result != null)
                     {
                         long id = Convert.ToInt64(result);
                         record.Id = (int)id;
-                        System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Saved record {record.ProcessName} with ID {record.Id}");
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: Date={record.Date:yyyy-MM-dd}, StartTime={record.StartTime:yyyy-MM-dd HH:mm:ss}, Duration={durationMs}ms");
                         success = true;
-                    }
-                    else
-                    {
-                         System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: ExecuteScalar returned null, save failed?");
                     }
                 }
                 
                 transaction.Commit(); // Commit transaction if successful
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Transaction committed.");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: **** ERROR **** saving record for {record.ProcessName}: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                 try
                 {
                     transaction?.Rollback(); // Rollback transaction on error
-                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Transaction rolled back.");
                 }
-                catch (Exception rbEx)
+                catch (Exception)
                 {
-                     System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecord: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
                 }
                 success = false; // Ensure success is false on error
             }
@@ -616,9 +591,7 @@ namespace ScreenTimeTracker.Services
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
-                    System.Diagnostics.Debug.WriteLine("[LOG] SaveRecord: Connection closed.");
                 }
-                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING SaveRecord for {record.ProcessName}, Success: {success}");
             }
             return success;
         }
@@ -628,10 +601,8 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void UpdateRecord(AppUsageRecord record)
         {
-            System.Diagnostics.Debug.WriteLine($"[LOG] ENTERING UpdateRecord for ID {record.Id} ({record.ProcessName})");
             if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
             {
-                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Database not initialized or using in-memory fallback, skipping.");
                 return;
             }
             
@@ -640,18 +611,11 @@ namespace ScreenTimeTracker.Services
             {
                 _connection.Open();
                 transaction = _connection.BeginTransaction(); // Start transaction
-                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection opened and transaction started.");
 
                 // Validate date to prevent future dates
                 DateTime validatedStartTime = ValidateDate(record.StartTime);
                 DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
                 string dateString = validatedStartTime.ToString("yyyy-MM-dd");
-
-                // Log if there was validation
-                if (validatedStartTime != record.StartTime)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Corrected future start date from {record.StartTime:yyyy-MM-dd} to {validatedStartTime:yyyy-MM-dd}");
-                }
 
                 // Validate and cap duration (same logic as SaveRecord)
                 long durationMs = (long)record.Duration.TotalMilliseconds;
@@ -660,14 +624,12 @@ namespace ScreenTimeTracker.Services
                 const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
                 if (durationMs > maxSessionDurationMs)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Duration {durationMs}ms exceeds 8 hours for {record.ProcessName}. Capping at 8 hours.");
                     durationMs = maxSessionDurationMs;
                 }
                 
                 // Ensure duration is not negative
                 if (durationMs < 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Negative duration {durationMs}ms for {record.ProcessName}. Setting to 0.");
                     durationMs = 0;
                 }
                 
@@ -677,7 +639,6 @@ namespace ScreenTimeTracker.Services
                     var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
                     if (calculatedDuration >= 0 && calculatedDuration < durationMs)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Using calculated duration {calculatedDuration}ms instead of {durationMs}ms");
                         durationMs = (long)calculatedDuration;
                     }
                 }
@@ -695,33 +656,24 @@ namespace ScreenTimeTracker.Services
                     command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
                     command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
                     
-                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: BEFORE ExecuteNonQuery for ID {record.Id}...");
                     int rowsAffected = command.ExecuteNonQuery();
-                    System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: AFTER ExecuteNonQuery for ID {record.Id}. Rows affected: {rowsAffected}.");
                     
                     if (rowsAffected <= 0)
                     {
-                         System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: ExecuteNonQuery affected 0 rows, ID {record.Id} not found? Update failed.");
                          throw new InvalidOperationException($"Update failed, record with ID {record.Id} not found."); // Force rollback
                     }
-                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: Updated record {record.ProcessName} with ID {record.Id}");
                 }
                 
                 transaction.Commit(); // Commit transaction
-                System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Transaction committed.");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: **** ERROR **** updating record ID {record.Id} ({record.ProcessName}): {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                 try
                 {
                     transaction?.Rollback(); // Rollback transaction on error
-                     System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Transaction rolled back.");
                 }
-                catch (Exception rbEx)
+                catch (Exception)
                 {
-                     System.Diagnostics.Debug.WriteLine($"[LOG] UpdateRecord: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
                 }
             }
             finally
@@ -729,9 +681,7 @@ namespace ScreenTimeTracker.Services
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
-                    System.Diagnostics.Debug.WriteLine("[LOG] UpdateRecord: Connection closed.");
                 }
-                System.Diagnostics.Debug.WriteLine($"[LOG] EXITING UpdateRecord for ID {record.Id}");
             }
         }
 
@@ -1132,7 +1082,6 @@ namespace ScreenTimeTracker.Services
 
                 _connection.Open();
                 transaction = _connection.BeginTransaction();
-                Debug.WriteLine("[LOG] CleanupExpiredRecords: Connection opened and transaction started.");
 
                 string deleteSql = @"DELETE FROM app_usage WHERE date < @CutoffDate;";
                 int rowsDeleted = 0;
@@ -1141,52 +1090,37 @@ namespace ScreenTimeTracker.Services
                 {
                     command.Parameters.AddWithValue("@CutoffDate", cutoffDateString);
                     rowsDeleted = command.ExecuteNonQuery();
-                    System.Diagnostics.Debug.WriteLine($"Deleted {rowsDeleted} expired records older than {cutoffDateString}");
                 }
 
                 // Only run VACUUM if records were actually deleted
                 if (rowsDeleted > 0)
                 {
-                    Debug.WriteLine("[LOG] CleanupExpiredRecords: Running VACUUM...");
                     using (var command = _connection.CreateCommand())
                     {
                         command.Transaction = transaction; // Assign transaction to VACUUM command
                         command.CommandText = "VACUUM;";
                         command.ExecuteNonQuery();
-                        System.Diagnostics.Debug.WriteLine("Database vacuumed to reclaim space");
                     }
-                }
-                else
-                {
-                    Debug.WriteLine("[LOG] CleanupExpiredRecords: No records deleted, skipping VACUUM.");
                 }
 
                 transaction.Commit(); // Commit transaction
-                Debug.WriteLine("[LOG] CleanupExpiredRecords: Transaction committed.");
-
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                System.Diagnostics.Debug.WriteLine($"Error cleaning up expired records: {ex.Message}");
-                 try
-                 {
-                     transaction?.Rollback(); // Rollback transaction on error
-                     Debug.WriteLine("[LOG] CleanupExpiredRecords: Transaction rolled back.");
-                 }
-                 catch (Exception rbEx)
-                 {
-                      Debug.WriteLine($"[LOG] CleanupExpiredRecords: **** CRITICAL ERROR **** during rollback: {rbEx.Message}");
-                 }
-                 // Consider rethrowing if cleanup is critical, otherwise just log
+                try
+                {
+                    transaction?.Rollback(); // Rollback transaction on error
+                }
+                catch (Exception)
+                {
+                }
             }
             finally
             {
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
-                    Debug.WriteLine("[LOG] CleanupExpiredRecords: Connection closed.");
                 }
-                 Debug.WriteLine("[LOG] EXITING CleanupExpiredRecords");
             }
         }
 

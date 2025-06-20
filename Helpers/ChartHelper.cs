@@ -37,11 +37,8 @@ namespace ScreenTimeTracker.Helpers
             DateTime? selectedEndDate = null,
             AppUsageRecord? liveFocusedRecord = null)
         {
-            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart CALLED ===");
-
             if (chart == null)
             {
-                System.Diagnostics.Debug.WriteLine("Chart is null, exiting");
                 return TimeSpan.Zero;
             }
 
@@ -51,8 +48,6 @@ namespace ScreenTimeTracker.Helpers
             {
                 totalTime += record.Duration;
             }
-            
-            System.Diagnostics.Debug.WriteLine($"Total time for chart: {totalTime}");
             
             // Get system accent color for chart series
             SKColor seriesColor;
@@ -86,8 +81,6 @@ namespace ScreenTimeTracker.Helpers
             
             if (viewMode == ChartViewMode.Hourly)
             {
-                System.Diagnostics.Debug.WriteLine("Building HOURLY chart");
-                
                 // We keep two data structures:
                 // 1) hourlyIntervals  : list of all [start, end] fragments for each hour
                 // 2) hourlyUsage      : final merged, non-overlapping total in hours for each hour
@@ -149,8 +142,6 @@ namespace ScreenTimeTracker.Helpers
                     }
                     maxValue = Math.Max(maxValue, value);
                 }
-                
-                System.Diagnostics.Debug.WriteLine($"All values zero? {allZero}, Max value: {maxValue:F4}");
                 
                 // If all values are zero, add a tiny value to the current hour to make the chart visible
                 if (allZero || maxValue < 0.001)
@@ -254,8 +245,6 @@ namespace ScreenTimeTracker.Helpers
                 else if (yAxisMax < 0.5) yAxisMax = 1;  // Medium values
                 else yAxisMax = Math.Ceiling(yAxisMax * 1.2);  // Large values
                 
-                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
-
                 // Create column series for hourly usage (values already clamped to max 1h)
                 var columnSeries = new ColumnSeries<double>
                 {
@@ -316,13 +305,9 @@ namespace ScreenTimeTracker.Helpers
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100))
                     }
                 };
-
-                System.Diagnostics.Debug.WriteLine("Hourly chart updated with rectangle annotations");
             }
             else // Daily view
             {
-                System.Diagnostics.Debug.WriteLine("Building DAILY chart");
-
                 int daysToShow;
                 DateTime rangeStartDate; // Use a specific variable for the range start
 
@@ -331,7 +316,6 @@ namespace ScreenTimeTracker.Helpers
                     // Handle custom date range or "Last 7 Days" selection
                     rangeStartDate = selectedDate.Date;
                     daysToShow = (selectedEndDate.Value.Date - selectedDate.Date).Days + 1;
-                    System.Diagnostics.Debug.WriteLine($"Date Range selected: {rangeStartDate:d} to {selectedEndDate.Value.Date:d} ({daysToShow} days)");
                 }
                 else // Single date or standard weekly view based on selectedDate
                 {
@@ -339,7 +323,6 @@ namespace ScreenTimeTracker.Helpers
                     daysToShow = (timePeriod == TimePeriod.Weekly) ? 7 : 1;
                     // Calculate start date based on the END date (selectedDate) for standard views
                     rangeStartDate = selectedDate.Date.AddDays(-(daysToShow - 1));
-                    System.Diagnostics.Debug.WriteLine($"Single Date/Weekly selected: {selectedDate:d}, TimePeriod: {timePeriod}, StartDate: {rangeStartDate:d} ({daysToShow} days)");
                 }
 
                 var values = new List<double>();
@@ -376,8 +359,6 @@ namespace ScreenTimeTracker.Helpers
                     // Initialize with zero usage
                     dayData[date.Date] = 0;
                     dayLabels[date.Date] = label;
-                    
-                    System.Diagnostics.Debug.WriteLine($"Initialized day {i} ({date:M/d}) with zero usage");
                 }
 
                 // Now process all records and add their durations to the appropriate days
@@ -397,21 +378,11 @@ namespace ScreenTimeTracker.Helpers
                             {
                                 double hours = record.Duration.TotalHours;
                                 dayData[recordDate] += hours;
-                                System.Diagnostics.Debug.WriteLine($"Added {hours:F2} hours for {record.ProcessName} on {recordDate:yyyy-MM-dd} (StartTime: {record.StartTime:HH:mm:ss}), Total: {dayData[recordDate]:F2}h");
                             }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Warning: Day {recordDate:yyyy-MM-dd} not found in chart days dictionary");
-                            }
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Record for {record.ProcessName} on {recordDate:yyyy-MM-dd} (StartTime: {record.StartTime:HH:mm:ss}) is outside the chart range");
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Error processing record for chart: {ex.Message}");
                     }
                 }
 
@@ -425,21 +396,7 @@ namespace ScreenTimeTracker.Helpers
                     {
                         values.Add(hours);
                         labels.Add(lbl);
-                        System.Diagnostics.Debug.WriteLine($"Added to chart: Day {i} ({date:M/d}): {hours:F2} hours -> {lbl}");
                     }
-                    else
-                    {
-                        // This should never happen with our initialization, but just in case
-                        values.Add(0);
-                        labels.Add(date.ToString("MMM d"));
-                        System.Diagnostics.Debug.WriteLine($"WARNING: Missing data or label for date {date:M/d}");
-                    }
-                }
-
-                // Debug all values to check
-                for (int i = 0; i < values.Count; i++)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Chart value at index {i} ({labels[i]}): {values[i]:F4} hours");
                 }
 
                 // If all values are zero, add a tiny value to make the chart visible
@@ -448,7 +405,6 @@ namespace ScreenTimeTracker.Helpers
                 
                 if (allZero || maxValue < 0.001)
                 {
-                    System.Diagnostics.Debug.WriteLine("All values are zero, adding tiny value to make chart visible");
                     // Only add the tiny value to today or the last day if today isn't in range
                     int todayIndex = labels.IndexOf("Today");
                     if (todayIndex >= 0)
@@ -474,8 +430,6 @@ namespace ScreenTimeTracker.Helpers
                 {
                     yAxisMax = Math.Ceiling(yAxisMax / 2) * 2;
                 }
-
-                System.Diagnostics.Debug.WriteLine($"Setting Y-axis max to {yAxisMax:F4}");
 
                 // Create the column series with system accent color
                 var columnSeries = new ColumnSeries<double>
@@ -534,15 +488,10 @@ namespace ScreenTimeTracker.Helpers
 
                 // Update the chart with new series
                 chart.Series = new ISeries[] { columnSeries };
-                
-                System.Diagnostics.Debug.WriteLine("Daily chart updated with values");
             }
             
             // Set additional chart properties for better appearance
             chart.LegendPosition = LiveChartsCore.Measure.LegendPosition.Hidden;
-            
-            System.Diagnostics.Debug.WriteLine($"Chart updated with {chart.Series?.Count() ?? 0} series");
-            System.Diagnostics.Debug.WriteLine("=== UpdateUsageChart COMPLETED ===");
             
             return totalTime;
         }
@@ -565,19 +514,6 @@ namespace ScreenTimeTracker.Helpers
             DateTime selectedDate,
             DateTime? selectedEndDate = null)
         {
-            System.Diagnostics.Debug.WriteLine("Force refreshing chart...");
-            
-            // Log the current state of data
-            System.Diagnostics.Debug.WriteLine($"Current records in collection: {usageRecords.Count}");
-            if (usageRecords.Count > 0)
-            {
-                System.Diagnostics.Debug.WriteLine("First 3 records:");
-                foreach (var record in usageRecords.Take(3))
-                {
-                    System.Diagnostics.Debug.WriteLine($"  - {record.ProcessName}: {record.Duration.TotalMinutes:F1}m, Start={record.StartTime}");
-                }
-            }
-            
             // Manually clear and rebuild the chart
             if (chart != null)
             {
@@ -587,12 +523,10 @@ namespace ScreenTimeTracker.Helpers
                 // Then update it
                 var totalTime = UpdateUsageChart(chart, usageRecords, viewMode, timePeriod, selectedDate, selectedEndDate);
                 
-                System.Diagnostics.Debug.WriteLine("Chart refresh completed");
                 return totalTime;
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine("ERROR: Chart is null, cannot refresh chart");
                 return TimeSpan.Zero;
             }
         }
@@ -657,7 +591,6 @@ namespace ScreenTimeTracker.Helpers
             
             if (time.TotalDays > MaxReasonableDays)
             {
-                System.Diagnostics.Debug.WriteLine($"WARNING: Capping unrealistic duration of {time.TotalDays:F1} days to {MaxReasonableDays} days");
                 // Create a new TimeSpan capped at the maximum
                 time = TimeSpan.FromDays(MaxReasonableDays);
             }
