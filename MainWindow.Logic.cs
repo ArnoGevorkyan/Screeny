@@ -424,7 +424,20 @@ namespace ScreenTimeTracker
                                 Content = $"No usage data found for {DateDisplay?.Text ?? "the selected date"}.",
                                 CloseButtonText = "OK",
                                 XamlRoot = Content.XamlRoot
-                            }; await dlg.ShowAsync();
+                            };
+
+                            // Snap immediately to today *before* showing the dialog so live data is displayed under the correct day even if the user never presses OK.
+                            if (date.Date != DateTime.Today)
+                            {
+                                _selectedDate        = DateTime.Today;
+                                _selectedEndDate     = null;
+                                _isDateRangeSelected = false;
+
+                                UpdateDatePickerButtonText(); // defined in UI partial
+                                LoadRecordsForDate(DateTime.Today);
+                            }
+
+                            await dlg.ShowAsync();
                         }
                     });
                 }

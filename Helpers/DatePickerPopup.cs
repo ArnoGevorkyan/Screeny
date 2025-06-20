@@ -15,6 +15,10 @@ namespace ScreenTimeTracker.Helpers
     {
         // Global scale factor to shrink the popup uniformly (1.0 = original size)
         private const double POPUP_SCALE = 0.85; // 85 % of original dimensions
+        // Base (unscaled) width of the entire popup – bump this a bit to give the calendar extra room
+        private const double POPUP_BASE_WIDTH = 600; // previously hard-coded as 550
+        // Slightly narrower preset-button column to avoid clipping the Sunday column in the calendar
+        private const double PRESET_COLUMN_WIDTH = 150; // narrower to fully show Sunday column
 
         private Popup? _datePickerPopup;
         private Button? _todayButton;
@@ -151,7 +155,7 @@ namespace ScreenTimeTracker.Helpers
                 double verticalOffset = pointBelow.Y + 12;
 
                 // Popup width for horizontal boundary checks (scaled)
-                double popupWidth = 550 * POPUP_SCALE;
+                double popupWidth = POPUP_BASE_WIDTH * POPUP_SCALE;
 
                 // Get window dimensions
                 var windowWidth = _owner.Bounds.Width;
@@ -211,15 +215,15 @@ namespace ScreenTimeTracker.Helpers
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(16 * POPUP_SCALE, 16, 16 * POPUP_SCALE, 16),
-                    Width = 550 * POPUP_SCALE,    // scaled popup width
+                    Width = POPUP_BASE_WIDTH * POPUP_SCALE,    // scaled popup width
                     MaxHeight = 540 // keep original height to avoid clipping
                 };
                 // Add spacing between the two main columns
-                rootGrid.ColumnSpacing = 16 * POPUP_SCALE;
+                rootGrid.ColumnSpacing = 12 * POPUP_SCALE; // slightly tighter gap
 
                 // Two columns: calendar (flex) on the left, preset buttons fixed on the right
                 rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // calendar column
-                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180 * POPUP_SCALE) }); // presets column
+                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(PRESET_COLUMN_WIDTH * POPUP_SCALE) }); // presets column (reduced)
 
                 // Create a vertical StackPanel for buttons (reuse buttonsGrid)
                 var buttonsGrid = new StackPanel
