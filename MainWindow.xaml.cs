@@ -146,6 +146,8 @@ namespace ScreenTimeTracker
 
         private readonly UsageAggregationService _aggregationService;
 
+        private DispatcherTimer? _missingIconTimer; // retries missing app icons
+
         public MainWindow()
         {
             _disposed = false;
@@ -259,6 +261,11 @@ namespace ScreenTimeTracker
             _chartRefreshTimer = new DispatcherTimer();
             _chartRefreshTimer.Interval = TimeSpan.FromSeconds(5); // slower, reduces CPU
             _chartRefreshTimer.Tick += ChartRefreshTimer_Tick;
+
+            // Timer to retry loading icons that are still null
+            _missingIconTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _missingIconTimer.Tick += MissingIconTimer_Tick;
+            _missingIconTimer.Start();
 
             // Hook ViewModel command events
             _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
@@ -1005,6 +1012,21 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine($"Error in deferred ChartRefresh: {ex.Message}");
                 }
             });
+        }
+
+        private void MissingIconTimer_Tick(object? sender, object e)
+        {
+            try
+            {
+                foreach (var rec in _usageRecords)
+                {
+                    if (rec.AppIcon == null)
+                    {
+                        rec.LoadAppIconIfNeeded();
+                    }
+                }
+            }
+            catch { /* ignore */ }
         }
     }
 }

@@ -57,13 +57,20 @@ namespace ScreenTimeTracker
             foreach (var rec in aggregatedRecords)
                 total += rec.Duration;
 
-            // Calculate daily average.
-            var avg = TimeSpan.FromSeconds(total.TotalSeconds / dayCount);
+            // Determine how many days actually have usage
+            int activeDayCount = _usageRecords
+                                 .Where(r => r.Duration.TotalSeconds > 0)
+                                 .Select(r => r.StartTime.Date)
+                                 .Distinct()
+                                 .Count();
+            if (activeDayCount <= 0) activeDayCount = 1; // safeguard
+
+            var avg = TimeSpan.FromSeconds(total.TotalSeconds / activeDayCount);
 
             DailyAverage.Text = ChartHelper.FormatTimeSpan(avg);
 
-            // Show panel only when selection spans more than one day.
-            AveragePanel.Visibility = dayCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+            // Always show average panel for multi-day views
+            AveragePanel.Visibility = Visibility.Visible;
         }
 
         private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
@@ -494,6 +501,12 @@ namespace ScreenTimeTracker
                 // Increment duration only for focused record to minimize UI churn
                 var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
                 activeRec?.RaiseDurationChanged();
+
+                // If the focused record still lacks icon, retry fetch (may succeed once window sets its icon)
+                if (activeRec != null && activeRec.AppIcon == null)
+                {
+                    activeRec.LoadAppIconIfNeeded();
+                }
 
                 // Lightweight live total update (avoids full chart rebuild)
                 try

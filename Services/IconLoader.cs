@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using ScreenTimeTracker.Models;
 using System.Linq;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace ScreenTimeTracker.Services
 {
@@ -58,7 +59,13 @@ namespace ScreenTimeTracker.Services
             // 1) Window-handle extraction (fast, no disk I/O)
             resolved = await TryLoadIconFromWindowHandleAsync(record, ct);
 
-            // 2) Executable-resource extraction (covers classic Win32 apps)
+            // 2) UWP/MSIX package assets (for Windows Store or packaged apps)
+            if (resolved == null)
+            {
+                resolved = await TryLoadIconFromPackageAsync(record, ct);
+            }
+
+            // 3) Executable-resource extraction (covers classic Win32 apps & fallbacks)
             if (resolved == null)
             {
                 string? exePath = ResolveExecutablePath(record);
@@ -73,12 +80,6 @@ namespace ScreenTimeTracker.Services
                         resolved = await TryLoadIconWithExtractAssociatedIconAsync(exePath, ct);
                     }
                 }
-            }
-
-            // 3) UWP/MSIX package assets (for Windows Store or packaged apps)
-            if (resolved == null)
-            {
-                resolved = await TryLoadIconFromPackageAsync(record, ct);
             }
 
             // 4) WindowsApps packaged Win32 directory (for store-installed Win32 apps)
@@ -104,6 +105,12 @@ namespace ScreenTimeTracker.Services
             if (resolved == null)
             {
                 resolved = await TryGetWellKnownSystemIconAsync(record, ct);
+            }
+
+            // 7) Absolute fallback – generic application stock icon so UI never shows gear
+            if (resolved == null)
+            {
+                resolved = await TryLoadStockApplicationIconAsync(ct);
             }
 
             if (resolved != null)
@@ -223,8 +230,18 @@ namespace ScreenTimeTracker.Services
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return null;
 
             var psfi = new Helpers.Win32Interop.SHFILEINFO();
-            uint flags = Helpers.Win32Interop.SHGFI_ICON | Helpers.Win32Interop.SHGFI_LARGEICON | Helpers.Win32Interop.SHGFI_USEFILEATTRIBUTES;
-            _ = Helpers.Win32Interop.SHGetFileInfo(path, Helpers.Win32Interop.FILE_ATTRIBUTE_NORMAL, ref psfi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(psfi), flags);
+
+            // First try without the USEFILEATTRIBUTES flag – this forces SHGetFileInfo to
+            // load the actual file and extract its embedded icon (gives correct app icon
+            // for most .exe / .lnk files).
+            uint flags = Helpers.Win32Interop.SHGFI_ICON | Helpers.Win32Interop.SHGFI_LARGEICON;
+
+            if (Helpers.Win32Interop.SHGetFileInfo(path, 0, ref psfi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(psfi), flags) == IntPtr.Zero || psfi.hIcon == IntPtr.Zero)
+            {
+                // Fallback – use file attributes only (avoids hitting disk for inaccessible paths)
+                flags |= Helpers.Win32Interop.SHGFI_USEFILEATTRIBUTES;
+                _ = Helpers.Win32Interop.SHGetFileInfo(path, Helpers.Win32Interop.FILE_ATTRIBUTE_NORMAL, ref psfi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(psfi), flags);
+            }
 
             if (psfi.hIcon != IntPtr.Zero)
             {
@@ -285,28 +302,30 @@ namespace ScreenTimeTracker.Services
                 {
                     if (!System.IO.Directory.Exists(windowsAppsPath)) continue;
 
-                var matchingDirs = System.IO.Directory.GetDirectories(windowsAppsPath, $"*{record.ProcessName}*", System.IO.SearchOption.TopDirectoryOnly);
-                foreach (var dir in matchingDirs)
-                {
-                    string exePath = System.IO.Path.Combine(dir, record.ProcessName + ".exe");
-                    if (System.IO.File.Exists(exePath))
+                    var matchingDirs = System.IO.Directory.GetDirectories(windowsAppsPath, $"*{record.ProcessName}*", System.IO.SearchOption.TopDirectoryOnly);
+                    foreach (var dir in matchingDirs)
                     {
-                        var bmp = await TryLoadIconWithSHGetFileInfoAsync(exePath, ct) ?? await TryLoadIconWithExtractAssociatedIconAsync(exePath, ct);
-                        if (bmp != null) return bmp;
-                    }
+                        // 1) Look for high-quality image assets first (avoid stub EXE generic icon)
+                        foreach (var file in System.IO.Directory.EnumerateFiles(dir, "*.ico", System.IO.SearchOption.AllDirectories)
+                                                          .Concat(System.IO.Directory.EnumerateFiles(dir, "*.png", System.IO.SearchOption.AllDirectories)))
+                        {
+                            var bmpImg = await LoadImageFromFileAsync(file, ct);
+                            if (bmpImg != null) return bmpImg;
+                        }
 
-                    foreach (var file in System.IO.Directory.EnumerateFiles(dir, "*.*", System.IO.SearchOption.AllDirectories))
-                    {
-                        if (file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        // 2) Then try the expected exe name inside that folder
+                        string exePath = System.IO.Path.Combine(dir, record.ProcessName + ".exe");
+                        if (System.IO.File.Exists(exePath))
+                        {
+                            var bmp = await TryLoadIconWithSHGetFileInfoAsync(exePath, ct) ?? await TryLoadIconWithExtractAssociatedIconAsync(exePath, ct);
+                            if (bmp != null) return bmp;
+                        }
+
+                        // 3) Finally, scan any other executables (fall-back)
+                        foreach (var file in System.IO.Directory.EnumerateFiles(dir, "*.exe", System.IO.SearchOption.AllDirectories))
                         {
                             var bmp = await TryLoadIconWithSHGetFileInfoAsync(file, ct) ?? await TryLoadIconWithExtractAssociatedIconAsync(file, ct);
                             if (bmp != null) return bmp;
-                        }
-                        else if (file.EndsWith(".ico", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var bmp = await LoadImageFromFileAsync(file, ct);
-                            if (bmp != null) return bmp;
-                            }
                         }
                     }
                 }
@@ -369,16 +388,24 @@ namespace ScreenTimeTracker.Services
             IntPtr hProcess = Helpers.Win32Interop.OpenProcess(Helpers.Win32Interop.PROCESS_QUERY_LIMITED_INFORMATION, false, record.ProcessId);
             if (hProcess == IntPtr.Zero) return null;
 
+            IntPtr hToken = IntPtr.Zero;
             try
             {
+                // Obtain an access token for the target process (required by GetPackageFullNameFromToken)
+                const uint TOKEN_QUERY = 0x0008;
+                if (!Helpers.Win32Interop.OpenProcessToken(hProcess, TOKEN_QUERY, out hToken) || hToken == IntPtr.Zero)
+                {
+                    return null;
+                }
+
                 uint length = 0;
                 var tmp = new System.Text.StringBuilder(0);
-                int res = Helpers.Win32Interop.GetPackageFullNameFromToken(hProcess, ref length, tmp);
+                int res = Helpers.Win32Interop.GetPackageFullNameFromToken(hToken, ref length, tmp);
                 const int ERROR_INSUFFICIENT_BUFFER = 15700;
                 if (res == ERROR_INSUFFICIENT_BUFFER)
                 {
                     var pkgFullName = new System.Text.StringBuilder((int)length);
-                    if (Helpers.Win32Interop.GetPackageFullNameFromToken(hProcess, ref length, pkgFullName) == 0)
+                    if (Helpers.Win32Interop.GetPackageFullNameFromToken(hToken, ref length, pkgFullName) == 0)
                     {
                         uint pathLen = 0;
                         if (Helpers.Win32Interop.GetPackagePathByFullName(pkgFullName.ToString(), ref pathLen, tmp) == ERROR_INSUFFICIENT_BUFFER)
@@ -417,6 +444,7 @@ namespace ScreenTimeTracker.Services
             catch { /* ignore */ }
             finally
             {
+                if (hToken != IntPtr.Zero) Helpers.Win32Interop.CloseHandle(hToken);
                 Helpers.Win32Interop.CloseHandle(hProcess);
             }
             return null;
@@ -503,5 +531,25 @@ namespace ScreenTimeTracker.Services
         }
 
         #endregion
+
+        private static async Task<BitmapImage?> TryLoadStockApplicationIconAsync(CancellationToken ct)
+        {
+            try
+            {
+                var sii = new Helpers.Win32Interop.SHSTOCKICONINFO();
+                sii.cbSize = (uint)Marshal.SizeOf(typeof(Helpers.Win32Interop.SHSTOCKICONINFO));
+                int hr = Helpers.Win32Interop.SHGetStockIconInfo(Helpers.Win32Interop.SIID_APPLICATION,
+                                                                 Helpers.Win32Interop.SHGSI_ICON | Helpers.Win32Interop.SHGSI_LARGEICON,
+                                                                 ref sii);
+                if (hr == 0 && sii.hIcon != IntPtr.Zero)
+                {
+                    using var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(sii.hIcon).Clone();
+                    var bmp = icon.ToBitmap();
+                    return await ConvertBitmapToBitmapImageAsync(bmp, ct);
+                }
+            }
+            catch { /* ignore */ }
+            return null;
+        }
     }
 } 

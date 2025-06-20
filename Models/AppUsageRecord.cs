@@ -292,19 +292,31 @@ namespace ScreenTimeTracker.Models
         }
 
         public async void LoadAppIconIfNeeded()
-                                        {
-            if (AppIcon != null) return;
+        {
+            if (AppIcon != null || _loadingIcon) return;
 
+            _loadingIcon = true;
             try
             {
                 var icon = await ScreenTimeTracker.Services.IconLoader.Instance.GetIconAsync(this);
                 if (icon != null)
+                {
+                    // Ensure assignment takes place on UI thread
+                    if (!DispatcherHelper.EnqueueOnUIThread(() => AppIcon = icon))
                     {
-                    AppIcon = icon;
+                        // If we are already on UI thread or dispatcher not ready
+                        AppIcon = icon;
+                    }
                 }
             }
             catch { /* ignore icon failures */ }
+            finally
+            {
+                _loadingIcon = false;
+            }
         }
+
+        private bool _loadingIcon = false;
 
         public void ClearIcon()
         {

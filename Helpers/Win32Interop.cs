@@ -96,5 +96,29 @@ namespace ScreenTimeTracker.Helpers
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         internal static extern int GetPackagePathByFullName(string packageFullName, ref uint pathLength, StringBuilder path);
+
+        // For process token access (UWP package detection)
+        [DllImport("advapi32.dll", SetLastError = true)]
+        internal static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+        // ---------- Stock icons ----------
+        internal const uint SHGSI_ICON = 0x000000100;
+        internal const uint SHGSI_LARGEICON = 0x000000000; // 'Large icon'
+        internal const uint SHGSI_SMALLICON = 0x000000001; // 'Small icon'
+        internal const uint SIID_APPLICATION = 0x002;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        internal struct SHSTOCKICONINFO
+        {
+            public uint cbSize;
+            public IntPtr hIcon;
+            public int iSysImageIndex;
+            public int iIcon;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szPath;
+        }
+
+        [DllImport("Shell32.dll", SetLastError = false)]
+        internal static extern int SHGetStockIconInfo(uint siid, uint uFlags, ref SHSTOCKICONINFO psii);
     }
 } 
