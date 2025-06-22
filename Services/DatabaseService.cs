@@ -1298,5 +1298,56 @@ namespace ScreenTimeTracker.Services
             // Reuse existing raw retrieval method. Caller is responsible for any aggregation.
             return GetRawRecordsForDateRange(startDate, endDate);
         }
+
+        public bool WipeDatabase()
+        {
+            try
+            {
+                // If we are running in in-memory fallback mode, just clear the in-memory list
+                if (_useInMemoryFallback)
+                {
+                    _memoryFallbackRecords.Clear();
+                    return true;
+                }
+
+                if (_connection == null)
+                    return false;
+
+                // Open the connection if required
+                var needClose = false;
+                if (_connection.State != System.Data.ConnectionState.Open)
+                {
+                    _connection.Open();
+                    needClose = true;
+                }
+
+                // 1) Delete all rows inside an explicit transaction
+                using (var tx = _connection.BeginTransaction())
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = "DELETE FROM app_usage;";
+                    cmd.ExecuteNonQuery();
+                    tx.Commit(); // Commit BEFORE running VACUUM – it cannot execute inside a transaction
+                }
+
+                // 2) Reclaim file space – now that we are outside the transaction
+                using (var vacuumCmd = _connection.CreateCommand())
+                {
+                    vacuumCmd.CommandText = "VACUUM;";
+                    vacuumCmd.ExecuteNonQuery();
+                }
+
+                if (needClose)
+                    _connection.Close();
+
+                return true;
+            }
+            catch (Exception)
+            {
+                // Swallow any exception – caller receives failure via 'false'
+                return false;
+            }
+        }
     }
 } 

@@ -498,6 +498,29 @@ namespace ScreenTimeTracker
                 if (_disposed || _usageRecords == null) return;
                 if (_trackingService == null || !_trackingService.IsTracking) return;
 
+                // -------------------------------------------------------------
+                // Guard: only apply live updates if the active view includes today
+                // -------------------------------------------------------------
+                bool viewIncludesToday;
+                if (_isDateRangeSelected)
+                {
+                    if (_selectedEndDate == null)
+                    {
+                        viewIncludesToday = false;
+                    }
+                    else
+                    {
+                        viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                    }
+                }
+                else
+                {
+                    viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                }
+
+                if (!viewIncludesToday)
+                    return; // Ignore live tracking updates for historic views
+
                 // Increment duration only for focused record to minimize UI churn
                 var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
                 activeRec?.RaiseDurationChanged();
@@ -538,6 +561,29 @@ namespace ScreenTimeTracker
             {
                 try
                 {
+                    // -------------------------------------------------------------
+                    // Guard: only apply live updates if the active view includes today
+                    // -------------------------------------------------------------
+                    bool viewIncludesToday;
+                    if (_isDateRangeSelected)
+                    {
+                        if (_selectedEndDate == null)
+                        {
+                            viewIncludesToday = false;
+                        }
+                        else
+                        {
+                            viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                        }
+                    }
+                    else
+                    {
+                        viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                    }
+
+                    if (!viewIncludesToday)
+                        return; // Ignore live tracking updates for historic views
+
                     // Skip unwanted/system processes.
                     if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName))
                         return;
@@ -598,6 +644,29 @@ namespace ScreenTimeTracker
             {
                 try
                 {
+                    // -------------------------------------------------------------
+                    // Guard: only apply live updates if the active view includes today
+                    // -------------------------------------------------------------
+                    bool viewIncludesToday;
+                    if (_isDateRangeSelected)
+                    {
+                        if (_selectedEndDate == null)
+                        {
+                            viewIncludesToday = false;
+                        }
+                        else
+                        {
+                            viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                        }
+                    }
+                    else
+                    {
+                        viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                    }
+
+                    if (!viewIncludesToday)
+                        return; // Ignore live tracking updates for historic views
+
                     // Clear focus flags then set on the current record
                     foreach (var rec in _usageRecords) rec.SetFocus(false);
                     var current = _trackingService?.CurrentRecord;

@@ -452,6 +452,7 @@ namespace ScreenTimeTracker
                     {
                         _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
                         _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
+                        _trayIconHelper.ResetClicked += OnResetDataRequested;
                     }
                 }
                 else
@@ -970,6 +971,54 @@ namespace ScreenTimeTracker
                     Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
                 }
             });
+        }
+
+        private async void OnResetDataRequested(object? sender, EventArgs e)
+        {
+            if (_disposed) return;
+
+            var confirm = new ContentDialog
+            {
+                Title             = "Erase all screen-time data?",
+                Content           = "This permanently deletes every recorded session. Tracking will restart from zero.",
+                PrimaryButtonText = "Delete",
+                CloseButtonText   = "Cancel",
+                DefaultButton     = ContentDialogButton.Close,
+                XamlRoot          = this.Content?.XamlRoot
+            };
+
+            var res = await confirm.ShowAsync();
+            if (res != ContentDialogResult.Primary) return;
+
+            try
+            {
+                _trackingService.StopTracking();
+                bool ok = _databaseService?.WipeDatabase() ?? false;
+                _trackingService.StartTracking();
+
+                _usageRecords.Clear();
+                UpdateUsageChart();
+                UpdateSummaryTab();
+
+                await new ContentDialog
+                {
+                    Title           = ok ? "Data deleted" : "Deletion failed",
+                    Content         = ok ? "All records were removed." : "Could not clear the database.",
+                    CloseButtonText = "OK",
+                    XamlRoot        = this.Content?.XamlRoot
+                }.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error wiping database: {ex.Message}");
+                await new ContentDialog
+                {
+                    Title           = "Error",
+                    Content         = $"Could not delete data: {ex.Message}",
+                    CloseButtonText = "OK",
+                    XamlRoot        = this.Content?.XamlRoot
+                }.ShowAsync();
+            }
         }
 
         // Structures for WM_GETMINMAXINFO

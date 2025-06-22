@@ -31,8 +31,9 @@ namespace ScreenTimeTracker.Helpers
         private const uint TPM_RETURNCMD = 0x0100;
 
         // Menu command IDs
-        private const uint IDM_SHOW = 1001;
-        private const uint IDM_EXIT = 1002;
+        private const uint IDM_SHOW   = 1001;
+        private const uint IDM_EXIT   = 1002;
+        private const uint IDM_RESET  = 1003; // delete all data
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct NOTIFYICONDATA
@@ -107,6 +108,7 @@ namespace ScreenTimeTracker.Helpers
 
         public event EventHandler? ShowClicked;
         public event EventHandler? ExitClicked;
+        public event EventHandler? ResetClicked; // raised when user picks "Delete all data…"
 
         public TrayIconHelper(IntPtr ownerHwnd)
         {
@@ -218,9 +220,11 @@ namespace ScreenTimeTracker.Helpers
                 Debug.WriteLine("Failed to create context menu.");
                 return;
             }
-            AppendMenu(_hContextMenu, MF_STRING, IDM_SHOW, "Show");
-            AppendMenu(_hContextMenu, MF_SEPARATOR, 0, string.Empty);
-            AppendMenu(_hContextMenu, MF_STRING, IDM_EXIT, "Exit");
+            AppendMenu(_hContextMenu, MF_STRING, IDM_SHOW,  "Show");
+            AppendMenu(_hContextMenu, MF_SEPARATOR, 0,        string.Empty);
+            AppendMenu(_hContextMenu, MF_STRING, IDM_RESET, "Delete all data…");
+            AppendMenu(_hContextMenu, MF_SEPARATOR, 0,        string.Empty);
+            AppendMenu(_hContextMenu, MF_STRING, IDM_EXIT,  "Exit");
              Debug.WriteLine("Context menu created.");
         }
 
@@ -234,6 +238,10 @@ namespace ScreenTimeTracker.Helpers
             if (command == IDM_SHOW)
             {
                 ShowClicked?.Invoke(this, EventArgs.Empty);
+            }
+            else if (command == IDM_RESET)
+            {
+                ResetClicked?.Invoke(this, EventArgs.Empty);
             }
             else if (command == IDM_EXIT)
             {
