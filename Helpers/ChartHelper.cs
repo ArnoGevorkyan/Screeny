@@ -42,12 +42,8 @@ namespace ScreenTimeTracker.Helpers
                 return TimeSpan.Zero;
             }
 
-            // Calculate total time for the chart title
-            TimeSpan totalTime = TimeSpan.Zero;
-            foreach (var record in usageRecords)
-            {
-                totalTime += record.Duration;
-            }
+            // Use unique-time calculation to avoid double-counting overlapping apps
+            TimeSpan totalTime = CalculateUniqueTotalTime(usageRecords);
             
             // Get system accent color for chart series
             SKColor seriesColor;
@@ -100,7 +96,22 @@ namespace ScreenTimeTracker.Helpers
                 foreach (var record in usageRecords)
                 {
                     var start = record.StartTime;
-                    var end   = start + record.Duration;
+
+                    DateTime end;
+                    if (record.EndTime.HasValue)
+                    {
+                        end = record.EndTime.Value;
+                    }
+                    else if (record.IsFocused)
+                    {
+                        end = DateTime.Now;
+                    }
+                    else
+                    {
+                        end = start + record.Duration;
+                    }
+
+                    if (end < start) end = start; // safety guard
 
                     for (int hr = start.Hour; hr <= end.Hour; hr++)
                     {
@@ -621,7 +632,7 @@ namespace ScreenTimeTracker.Helpers
         /// <summary>
         /// Merges a list of time intervals and returns a new list without overlaps.
         /// </summary>
-        private static List<(DateTime Start, DateTime End)> MergeIntervals(List<(DateTime Start, DateTime End)> intervals)
+        internal static List<(DateTime Start, DateTime End)> MergeIntervals(List<(DateTime Start, DateTime End)> intervals)
         {
             if (intervals == null || intervals.Count == 0) return new List<(DateTime, DateTime)>();
 
@@ -644,6 +655,45 @@ namespace ScreenTimeTracker.Helpers
             }
 
             return merged;
+        }
+
+        /// <summary>
+        /// Calculates the total unique (non-overlapping) screen-time represented by the supplied records.
+        /// </summary>
+        /// <param name="records">Collection of <see cref="AppUsageRecord"/> instances.</param>
+        /// <returns>Total time after merging all overlapping intervals.</returns>
+        public static TimeSpan CalculateUniqueTotalTime(IEnumerable<AppUsageRecord> records)
+        {
+            if (records == null) return TimeSpan.Zero;
+
+            var now = DateTime.Now;
+            var intervals = records.Select(r =>
+            {
+                var start = r.StartTime;
+                DateTime end;
+
+                // Determine end timestamp
+                if (r.EndTime.HasValue)
+                {
+                    end = r.EndTime.Value;
+                }
+                else
+                {
+                    end = r.IsFocused ? now : r.StartTime + r.Duration;
+                }
+
+                if (end < start) end = start; // Guard against corrupt data
+                return (Start: start, End: end);
+            }).ToList();
+
+            var merged = MergeIntervals(intervals);
+            TimeSpan total = TimeSpan.Zero;
+            foreach (var iv in merged)
+            {
+                total += iv.End - iv.Start;
+            }
+
+            return total;
         }
     }
 } 

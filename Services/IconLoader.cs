@@ -353,7 +353,7 @@ namespace ScreenTimeTracker.Services
                     foreach (var lnk in lnkFiles)
                     {
                         var nameNoExt = System.IO.Path.GetFileNameWithoutExtension(lnk);
-                        if (nameNoExt.Contains(record.ProcessName, StringComparison.OrdinalIgnoreCase))
+                        if (IsStartMenuNameMatch(record.ProcessName, nameNoExt))
                         {
                             var bmp = await TryLoadIconWithSHGetFileInfoAsync(lnk, ct);
                             if (bmp != null) return bmp;
@@ -379,6 +379,31 @@ namespace ScreenTimeTracker.Services
             catch { /* ignore */ }
 
             return null;
+        }
+
+        private static bool IsStartMenuNameMatch(string processName, string shortcutName)
+        {
+            // Fast path – exact substring (already case-insensitive)
+            if (shortcutName.Contains(processName, StringComparison.OrdinalIgnoreCase))
+                return true;
+            
+            // Normalised comparison: keep only alphanumerics and lower-case
+            string Normalize(string s)
+            {
+                if (string.IsNullOrEmpty(s)) return string.Empty;
+                var sb = new System.Text.StringBuilder(s.Length);
+                foreach (var ch in s)
+                {
+                    if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+                }
+                return sb.ToString();
+            }
+
+            var normProcess = Normalize(processName);
+            var normShortcut = Normalize(shortcutName);
+
+            // Two-way containment handles "GitHubDesktop" vs "github desktop"
+            return normShortcut.Contains(normProcess) || normProcess.Contains(normShortcut);
         }
 
         private static async Task<BitmapImage?> TryLoadIconFromPackageAsync(AppUsageRecord record, CancellationToken ct)

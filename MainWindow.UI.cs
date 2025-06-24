@@ -397,12 +397,43 @@ namespace ScreenTimeTracker
         {
             try
             {
-                // Calculate total screen time by summing individual durations
-                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, rec) => sum + rec.Duration);
+                // Calculate total screen time without double-counting overlapping focus intervals
+                TimeSpan totalTime = TimeSpan.Zero;
+                TimeSpan absoluteMaxDuration = TimeSpan.Zero;
+
+                try
+                {
+                    var now = DateTime.Now;
+
+                    // Build interval list for every record
+                    var intervals = recordsToSummarize.Select(r =>
+                    {
+                        DateTime start = r.StartTime;
+                        DateTime end;
+
+                        if (r.EndTime.HasValue)
+                        {
+                            end = r.EndTime.Value;
+                        }
+                        else
+                        {
+                            // Live or aggregated record without explicit end -> derive from Duration or current time
+                            end = r.IsFocused ? now : r.StartTime + r.Duration;
+                        }
+
+                        // Guard against corrupt data
+                        if (end < start) end = start;
+
+                        return (Start: start, End: end);
+                    }).ToList();
+
+                    // Merge overlapping slices and sum their lengths
+                    var merged = ChartHelper.MergeIntervals(intervals);
+                    totalTime = merged.Aggregate(TimeSpan.Zero, (span, iv) => span + (iv.End - iv.Start));
 
                 // Cap to a realistic maximum: 24 h per day * days in period
                 int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
-                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
+                    absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
                 if (totalTime > absoluteMaxDuration)
                 {
                     System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
@@ -413,6 +444,11 @@ namespace ScreenTimeTracker
                 if (TotalScreenTime != null)
                 {
                     TotalScreenTime.Text = FormatTimeSpan(totalTime);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error computing merged totalTime: {ex.Message}");
                 }
 
                 // Determine most-used application within the supplied list
@@ -531,14 +567,14 @@ namespace ScreenTimeTracker
                     activeRec.LoadAppIconIfNeeded();
                 }
 
-                // Lightweight live total update (avoids full chart rebuild)
+                // Update total time using unified helper (avoids code duplication & flicker)
                 try
                 {
-                    var liveTotal = TimeSpan.FromSeconds(_usageRecords.Sum(r => r.Duration.TotalSeconds));
-                    if (ChartTimeValue != null)       ChartTimeValue.Text = ChartHelper.FormatTimeSpan(liveTotal);
-                    if (TotalScreenTime != null)      TotalScreenTime.Text = ChartHelper.FormatTimeSpan(liveTotal);
+                    var liveTotal = ChartHelper.CalculateUniqueTotalTime(_usageRecords);
+
+                    if (ChartTimeValue != null) ChartTimeValue.Text = ChartHelper.FormatTimeSpan(liveTotal);
                 }
-                catch { /* ignore in case of race */ }
+                catch { /* swallow race conditions */ }
 
                 // Throttle chart refresh scheduling: no change but we'll modify ChartRefreshTimer_Tick.
                 _chartStaleSeconds++;
