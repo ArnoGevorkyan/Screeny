@@ -6,6 +6,7 @@ using System;
 using ScreenTimeTracker.Helpers;
 using System.Collections.Generic;
 using ScreenTimeTracker.Services;
+using System.Collections.ObjectModel;
 
 namespace ScreenTimeTracker
 {
@@ -525,6 +526,8 @@ namespace ScreenTimeTracker
             // Timers were configured in constructor; ensure delegates attached
             _updateTimer.Tick += UpdateTimer_Tick;
             _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+
+            // _usageRecords and _recordManager are already initialised in MainWindow constructor.
         }
 
         private void UpdateTimer_Tick(object? sender, object e)
@@ -597,71 +600,13 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    // -------------------------------------------------------------
-                    // Guard: only apply live updates if the active view includes today
-                    // -------------------------------------------------------------
-                    bool viewIncludesToday;
-                    if (_isDateRangeSelected)
-                    {
-                        if (_selectedEndDate == null)
-                        {
-                            viewIncludesToday = false;
-                        }
-                        else
-                        {
-                            viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
-                        }
-                    }
-                    else
-                    {
-                        viewIncludesToday = _selectedDate.Date == DateTime.Today;
-                    }
+                    // --- keep check whether current view includes today ---
+                    bool viewIncludesToday = !_isDateRangeSelected ? _selectedDate.Date == DateTime.Today : (_selectedEndDate != null && _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today);
+                    if (!viewIncludesToday) return;
+                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
 
-                    if (!viewIncludesToday)
-                        return; // Ignore live tracking updates for historic views
-
-                    // Skip unwanted/system processes.
-                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName))
-                        return;
-
-                    // Replace or merge by process name so the UI shows only one row per app.
-                    var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
-
-                    if (existing == null)
-                    {
-                        // First time we encounter this app – add directly.
-                        _usageRecords.Add(record);
-                        existing = record;
-
-                        existing.LoadAppIconIfNeeded();
-                    }
-                    else if (!ReferenceEquals(existing, record))
-                    {
-                        // Same app already present – merge runtime info and avoid duplicates.
-                        existing.MergeWith(record);
-
-                        // Sync focus / window metadata so subsequent updates hit the same object.
-                        existing.WindowHandle = record.WindowHandle;
-                        existing.WindowTitle  = record.WindowTitle;
-                        existing.ProcessId    = record.ProcessId;
-
-                        if (record.IsFocused)
-                            existing.SetFocus(true);
-
-                        existing.RaiseDurationChanged();
-
-                        // Ensure icon requested once we know canonical record
-                        existing.LoadAppIconIfNeeded();
-                    }
-                    else
-                    {
-                        // Reference already in list – just refresh its duration.
-                        existing.RaiseDurationChanged();
-                    }
-
-                    // Purge any leftover duplicates (same ProcessName but different reference)
-                    var dupes = _usageRecords.Where(r => r.ProcessName.Equals(existing.ProcessName, StringComparison.OrdinalIgnoreCase) && !ReferenceEquals(r, existing)).ToList();
-                    foreach (var d in dupes) _usageRecords.Remove(d);
+                    // Delegate to central manager – guarantees duplicate-free updates
+                    _recordManager.AddOrUpdate(record);
 
                     // Mark chart for deferred refresh
                     _isChartDirty = true;
@@ -708,6 +653,7 @@ namespace ScreenTimeTracker
                     var current = _trackingService?.CurrentRecord;
                     if (current != null)
                     {
+                        ApplicationProcessingHelper.ProcessApplicationRecord(current);
                         var uiRec = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
                         uiRec?.SetFocus(true);
                     }

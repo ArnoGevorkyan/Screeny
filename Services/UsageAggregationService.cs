@@ -74,7 +74,9 @@ namespace ScreenTimeTracker.Services
 
                     if (unique.TryGetValue(canonicalLive, out var existing))
                     {
-                        existing._accumulatedDuration += liveRec.Duration;
+                        // Use the longer of the two durations (avoids double-counting live slice already saved)
+                        var longer = existing.Duration > liveRec.Duration ? existing.Duration : liveRec.Duration;
+                        existing._accumulatedDuration = longer;
                         existing.WindowHandle          = liveRec.WindowHandle;
                         if (!string.IsNullOrEmpty(liveRec.WindowTitle)) existing.WindowTitle = liveRec.WindowTitle;
                         if (liveRec.StartTime < existing.StartTime)      existing.StartTime  = liveRec.StartTime;
@@ -158,6 +160,7 @@ namespace ScreenTimeTracker.Services
 
             foreach (var rec in list)
             {
+                if (rec.Duration.TotalSeconds < 5) continue; // Skip micro slices
                 // Canonicalise name first
                 var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
                 ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
@@ -169,8 +172,9 @@ namespace ScreenTimeTracker.Services
 
                 if (byProcess.TryGetValue(canonical, out var existing))
                 {
-                    // Merge – accumulate duration, keep earliest start time and latest end time
-                    existing._accumulatedDuration += rec.Duration;
+                    // Use the longer of the two durations (avoids double-counting live slice already saved)
+                    var longer = existing.Duration > rec.Duration ? existing.Duration : rec.Duration;
+                    existing._accumulatedDuration = longer;
 
                     if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
                     if (rec.EndTime.HasValue)
@@ -210,6 +214,7 @@ namespace ScreenTimeTracker.Services
 
             foreach (var rec in source)
             {
+                if (rec.Duration.TotalSeconds < 5) continue; // Skip micro slices
                 // Canonicalise name first
                 var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
                 ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
@@ -221,7 +226,9 @@ namespace ScreenTimeTracker.Services
 
                 if (merged.TryGetValue(canonical, out var existing))
                 {
-                    existing._accumulatedDuration += rec.Duration;
+                    // Use the longer of the two durations (avoids double-counting live slice already saved)
+                    var longer = existing.Duration > rec.Duration ? existing.Duration : rec.Duration;
+                    existing._accumulatedDuration = longer;
                     if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
                     if (rec.EndTime.HasValue)
                     {

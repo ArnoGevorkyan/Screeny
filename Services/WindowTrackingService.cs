@@ -62,6 +62,24 @@ namespace ScreenTimeTracker.Services
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool IsWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LASTINPUTINFO
+        {
+            public uint cbSize;
+            public uint dwTime;
+        }
+
+        // Helper – returns user idle time in seconds
+        private static int GetIdleSeconds()
+        {
+            LASTINPUTINFO li = new LASTINPUTINFO();
+            li.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+            return GetLastInputInfo(ref li) ? (Environment.TickCount - (int)li.dwTime) / 1000 : 0;
+        }
+
         public event EventHandler<AppUsageRecord>? UsageRecordUpdated;
         public event EventHandler? WindowChanged;
         
@@ -254,6 +272,16 @@ namespace ScreenTimeTracker.Services
             
             try
             {
+                // Pause tracking if the user is idle beyond the configured threshold
+                if (GetIdleSeconds() > DurationLimits.IdlePauseSeconds)
+                {
+                    if (_currentRecord != null && _currentRecord.IsFocused)
+                    {
+                        _currentRecord.SetIdleAnchor(DateTime.Now);
+                    }
+                    return; // Skip this tick – no active interaction
+                }
+
                 // Verbose per-tick diagnostics removed.
                 
                 CheckActiveWindow();
@@ -612,16 +640,52 @@ namespace ScreenTimeTracker.Services
                 // Unfocus previous if different
                 if (_currentRecord != null &&
                     (_currentRecord.WindowHandle != foregroundWindow ||
-                     _currentRecord.ProcessId != processId ||
-                     _currentRecord.WindowTitle != windowTitle))
+                     _currentRecord.ProcessId    != processId         ||
+                     _currentRecord.WindowTitle  != windowTitle))
                 {
+                    // Finalise previous slice and persist immediately
                     _currentRecord.SetFocus(false);
-                    _currentRecord = null;
+                    _currentRecord.EndTime = DateTime.Now;
+                    try
+                    {
+                        lock (_databaseService)
+                        {
+                            if (_currentRecord.Id > 0)
+                                _databaseService.UpdateRecord(_currentRecord);
+                            else
+                                _databaseService.SaveRecord(_currentRecord);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"ERROR saving record on focus change: {ex.Message}");
+                    }
+
+                    _currentRecord = null; // Clear reference so a fresh slice can start
                 }
 
-                foreach (var record in _records)
+                // Ensure all other records are unfocused and finalised
+                foreach (var record in _records.ToList())
                 {
-                    if (record.IsFocused) record.SetFocus(false);
+                    if (!record.IsFocused) continue;
+
+                    record.SetFocus(false);
+                    record.EndTime = DateTime.Now;
+
+                    try
+                    {
+                        lock (_databaseService)
+                        {
+                            if (record.Id > 0)
+                                _databaseService.UpdateRecord(record);
+                            else
+                                _databaseService.SaveRecord(record);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"ERROR saving record during unfocus sweep: {ex.Message}");
+                    }
                 }
 
                 var existingRecord = _records.FirstOrDefault(r => r.ProcessId == processId && r.WindowTitle == windowTitle && r.WindowHandle == foregroundWindow);

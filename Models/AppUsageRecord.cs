@@ -207,6 +207,18 @@ namespace ScreenTimeTracker.Models
             }
         }
 
+        /// <summary>
+        /// Freezes live accumulation when the user is idle by anchoring <see cref="_lastFocusTime"/> to <paramref name="timestamp"/>.
+        /// This prevents the Duration getter from adding idle seconds.
+        /// </summary>
+        /// <param name="timestamp">Current time when idle was detected.</param>
+        internal void SetIdleAnchor(DateTime timestamp)
+        {
+            _lastFocusTime = timestamp;
+            NotifyPropertyChanged(nameof(Duration));
+            NotifyPropertyChanged(nameof(FormattedDuration));
+        }
+
         public void MergeWith(AppUsageRecord other)
         {
             if (other.EndTime.HasValue)

@@ -13,5 +13,8 @@ namespace ScreenTimeTracker.Helpers
 
         /// <summary>Records older than this become stale and are purged or archived.</summary>
         public const int DaysToKeepRawRecords = 30;
+
+        /// <summary>Number of seconds of user inactivity after which live tracking pauses (generic idle guard).</summary>
+        public const int IdlePauseSeconds = 120;
     }
 } 

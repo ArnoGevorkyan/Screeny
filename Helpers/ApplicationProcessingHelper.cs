@@ -2,6 +2,7 @@ using ScreenTimeTracker.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Diagnostics;
 
 namespace ScreenTimeTracker.Helpers
 {
@@ -16,6 +17,25 @@ namespace ScreenTimeTracker.Helpers
         public static void ProcessApplicationRecord(AppUsageRecord record)
         {
             if (record == null) return;
+            
+            // Try to use the executable's ProductName as a friendly label (generic solution)
+            try
+            {
+                if (record.ProcessId > 0)
+                {
+                    using var proc = System.Diagnostics.Process.GetProcessById(record.ProcessId);
+                    var modulePath = proc?.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(modulePath))
+                    {
+                        var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(modulePath);
+                        if (!string.IsNullOrWhiteSpace(info.ProductName))
+                        {
+                            record.ProcessName = info.ProductName;
+                        }
+                    }
+                }
+            }
+            catch { /* best-effort – ignore failures (permissions, 32/64-bit, etc.) */ }
             
             // First handle special cases (specific application logic)
             HandleSpecialCases(record);
@@ -219,6 +239,7 @@ namespace ScreenTimeTracker.Helpers
                     record.ProcessName = detectedBrowser;
                     System.Diagnostics.Debug.WriteLine($"Detected browser: {detectedBrowser}");
                 }
+                return; // Do not run further renaming – browser already resolved
             }
             // Handle Java applications
             else if (record.ProcessName.Equals("javaw", StringComparison.OrdinalIgnoreCase) ||
@@ -311,6 +332,8 @@ namespace ScreenTimeTracker.Helpers
         /// </summary>
         private static void RenameCommonApplications(AppUsageRecord record)
         {
+            // Preserve browser names resolved earlier
+            if (IsBrowser(record.ProcessName)) return;
             // A generic approach to rename common applications to better names
 
             // WhatsApp related processes

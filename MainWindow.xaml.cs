@@ -3,7 +3,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Media;
-using MicrosoftUI = Microsoft.UI; // Alias to avoid ambiguity
 using WinRT.Interop;
 using System.Collections.ObjectModel;
 using ScreenTimeTracker.Services;
@@ -27,42 +26,6 @@ namespace ScreenTimeTracker
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
         private ObservableCollection<AppUsageRecord> _usageRecords;
-
-        // --- ViewModel-backed state properties (replace former duplicate fields) ---
-        private DateTime _selectedDate
-        {
-            get => _viewModel.SelectedDate;
-            set => _viewModel.SelectedDate = value;
-        }
-
-        private DateTime? _selectedEndDate
-        {
-            get => _viewModel.SelectedEndDate;
-            set => _viewModel.SelectedEndDate = value;
-        }
-
-        private bool _isDateRangeSelected
-        {
-            get => _viewModel.IsDateRangeSelected;
-            set => _viewModel.IsDateRangeSelected = value;
-        }
-
-        private TimePeriod _currentTimePeriod
-        {
-            get => _viewModel.CurrentTimePeriod;
-            set => _viewModel.CurrentTimePeriod = value;
-        }
-
-        private ChartViewMode _currentChartViewMode
-        {
-            get => _viewModel.CurrentChartViewMode;
-            set => _viewModel.CurrentChartViewMode = value;
-        }
-
-        private DispatcherTimer _updateTimer;
-        private DispatcherTimer _autoSaveTimer;
-        private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
-        private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
         private bool _disposed;
         private bool _iconsRefreshedOnce = false;
         // Counter used by UpdateTimer_Tick to decide when to mark the chart dirty again
@@ -148,6 +111,45 @@ namespace ScreenTimeTracker
 
         private DispatcherTimer? _missingIconTimer; // retries missing app icons
 
+        // --- ViewModel-backed state properties ---
+        private DateTime _selectedDate
+        {
+            get => _viewModel.SelectedDate;
+            set => _viewModel.SelectedDate = value;
+        }
+
+        private DateTime? _selectedEndDate
+        {
+            get => _viewModel.SelectedEndDate;
+            set => _viewModel.SelectedEndDate = value;
+        }
+
+        private bool _isDateRangeSelected
+        {
+            get => _viewModel.IsDateRangeSelected;
+            set => _viewModel.IsDateRangeSelected = value;
+        }
+
+        private TimePeriod _currentTimePeriod
+        {
+            get => _viewModel.CurrentTimePeriod;
+            set => _viewModel.CurrentTimePeriod = value;
+        }
+
+        private ChartViewMode _currentChartViewMode
+        {
+            get => _viewModel.CurrentChartViewMode;
+            set => _viewModel.CurrentChartViewMode = value;
+        }
+
+        private DispatcherTimer _updateTimer;
+        private DispatcherTimer _autoSaveTimer;
+        private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
+        private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
+
+        // Add central collection manager field
+        private readonly UsageRecordCollectionManager _recordManager;
+
         public MainWindow()
         {
             _disposed = false;
@@ -169,6 +171,8 @@ namespace ScreenTimeTracker
 
             // Alias local collection to ViewModel collection
             _usageRecords = _viewModel.Records;
+            // Initialise central collection manager (field declared in UI partial)
+            _recordManager = new UsageRecordCollectionManager(_usageRecords);
 
             // Get window handle AFTER InitializeComponent
             _hWnd = WindowNative.GetWindowHandle(this);
