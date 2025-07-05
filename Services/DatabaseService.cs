@@ -263,6 +263,20 @@ namespace ScreenTimeTracker.Services
                     command.ExecuteNonQuery();
                 }
 
+                // Create aggregated VIEW for per-day per-process totals
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = @"
+                        CREATE VIEW IF NOT EXISTS vw_daily_app_usage AS
+                        SELECT
+                            date,
+                            process_name,
+                            SUM(duration) AS total_duration_ms
+                        FROM app_usage
+                        GROUP BY date, process_name;";
+                    command.ExecuteNonQuery();
+                }
+
                 // Check if we need to perform any migrations
                 CheckAndPerformMigrations();
 
@@ -954,112 +968,50 @@ namespace ScreenTimeTracker.Services
                 return new List<(string, TimeSpan)>();
             }
 
-            var usageDataGrouped = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
+            var results = new List<(string, TimeSpan)>();
             string startDateString = startDate.ToString("yyyy-MM-dd");
-            string endDateString = endDate.ToString("yyyy-MM-dd");
+            string endDateString   = endDate.ToString("yyyy-MM-dd");
 
             try
             {
                 _connection.Open();
+                const string sql = @"
+                    SELECT
+                        process_name,
+                        SUM(total_duration_ms) AS total_ms
+                    FROM vw_daily_app_usage
+                    WHERE date >= @StartDate AND date <= @EndDate
+                    GROUP BY process_name;";
 
-                // --- MODIFIED SQL: Select individual durations, not SUM --- 
-                string selectSql = @"
-                SELECT 
-                    process_name, 
-                    duration
-                FROM app_usage 
-                WHERE date >= @StartDate AND date <= @EndDate;";
-
-                using (var command = new SqliteCommand(selectSql, _connection))
+                using (var cmd = new SqliteCommand(sql, _connection))
                 {
-                    command.Parameters.AddWithValue("@StartDate", startDateString);
-                    command.Parameters.AddWithValue("@EndDate", endDateString);
+                    cmd.Parameters.AddWithValue("@StartDate", startDateString);
+                    cmd.Parameters.AddWithValue("@EndDate",   endDateString);
 
-                    // --- Add detailed logging --- 
-                    System.Diagnostics.Debug.WriteLine($"--- Executing SQL ---");
-                    System.Diagnostics.Debug.WriteLine($"SQL: {command.CommandText}");
-                    System.Diagnostics.Debug.WriteLine($"Param @StartDate: {startDateString}");
-                    System.Diagnostics.Debug.WriteLine($"Param @EndDate: {endDateString}");
-                    System.Diagnostics.Debug.WriteLine($"---------------------");
-                    // --- End detailed logging ---
-                    
-                    using (var reader = command.ExecuteReader())
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
                     {
-                        while (reader.Read())
-                        {
-                            string processName = reader.GetString(0);
-                            long durationMs = reader.GetInt64(1);
-
-                            if (!usageDataGrouped.ContainsKey(processName))
-                            {
-                                usageDataGrouped[processName] = new List<long>();
-                            }
-                            usageDataGrouped[processName].Add(durationMs);
-                        }
+                        var processName = reader.GetString(0);
+                        long totalMs    = reader.GetInt64(1);
+                        results.Add((processName, TimeSpan.FromMilliseconds(totalMs)));
                     }
                 }
 
                 _connection.Close();
 
-                // --- Aggregate in C# with overflow check --- 
-                var finalUsageData = new List<(string, TimeSpan)>();
-                foreach (var kvp in usageDataGrouped)
-                {
-                    string processName = kvp.Key;
-                    long totalMs = 0;
-                    bool overflow = false;
-
-                    foreach (long ms in kvp.Value)
-                    {
-                        // Check for potential overflow BEFORE adding
-                        if (long.MaxValue - ms < totalMs)
-                        {
-                            totalMs = long.MaxValue; // Cap at MaxValue
-                            overflow = true;
-                            Debug.WriteLine($"WARNING: Potential long overflow during C# aggregation for {processName}. Capping total milliseconds.");
-                            break; // Stop summing for this process if overflow detected
-                        }
-                        totalMs += ms;
-                    }
-
-                    // Further capping similar to before (optional but safe)
-                    int daysBetween = (int)(endDate - startDate).TotalDays + 1;
-                    long maxReasonableDurationMs = (long)daysBetween * 86400000; // Ensure cast to long
-                    long maxAllowedMs = (long)(TimeSpan.MaxValue.TotalMilliseconds * 0.9);
-
-                    if (!overflow && (totalMs < 0 || totalMs > maxReasonableDurationMs))
-                    {
-                        Debug.WriteLine($"WARNING: Unrealistic duration calculated in C# for {processName}: {totalMs}ms. Capping.");
-                        totalMs = maxReasonableDurationMs;
-                    }
-                    if (totalMs > maxAllowedMs)
-                    {
-                        Debug.WriteLine($"WARNING: C# calculated duration exceeds TimeSpan.MaxValue limits for {processName}. Capping.");
-                        totalMs = maxAllowedMs;
-                    }
-                    
-                    TimeSpan duration = TimeSpan.FromMilliseconds(totalMs);
-                    finalUsageData.Add((processName, duration));
-                }
-                
-                // --- Re-introduce the 5-minute filter --- 
-                var filteredData = finalUsageData
-                    .Where(d => d.Item2.TotalSeconds >= 300)
-                    .OrderByDescending(d => d.Item2)
-                    .ToList();
-                
-                System.Diagnostics.Debug.WriteLine($"Retrieved and aggregated usage report with {filteredData.Count} entries in C# after filtering");
-                return filteredData;
+                // Filter entries shorter than 5 minutes and sort descending.
+                return results.Where(r => r.Item2.TotalSeconds >= 300)
+                               .OrderByDescending(r => r.Item2)
+                               .ToList();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error retrieving/aggregating usage report: {ex.Message}");
-                // Ensure connection is closed on error
+                Debug.WriteLine($"Error retrieving usage report: {ex.Message}");
                 if (_connection.State != System.Data.ConnectionState.Closed)
                 {
                     _connection.Close();
                 }
-                throw; // Rethrow the exception
+                throw;
             }
         }
 

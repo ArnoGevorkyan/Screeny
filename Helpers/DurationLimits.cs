@@ -15,6 +15,6 @@ namespace ScreenTimeTracker.Helpers
         public const int DaysToKeepRawRecords = 30;
 
         /// <summary>Number of seconds of user inactivity after which live tracking pauses (generic idle guard).</summary>
-        public const int IdlePauseSeconds = 120;
+        public const int IdlePauseSeconds = 300; // 5 minutes
     }
 } 

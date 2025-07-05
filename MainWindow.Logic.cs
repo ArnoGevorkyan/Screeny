@@ -341,7 +341,7 @@ namespace ScreenTimeTracker
                         if (record.IsFocused) record.SetFocus(false);
                         record._accumulatedDuration = totalDuration;
                         if (record.Id > 0)
-                            _databaseService.UpdateRecord(record);
+                            _databaseService!.UpdateRecord(record);
                         else
                             _databaseService.SaveRecord(record);
                     }
@@ -396,16 +396,27 @@ namespace ScreenTimeTracker
                     case TimePeriod.Weekly:
                         var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
                         var endOfWeek   = startOfWeek.AddDays(6);
-                        records = _aggregationService.GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek);
+                        records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startOfWeek, endOfWeek));
+
+                        var aggregatedWeekly = _aggregationService.GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek, includeLiveRecords: false);
                         _viewModel.AggregatedRecords.Clear();
-                        foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
+                        foreach (var r in aggregatedWeekly) _viewModel.AggregatedRecords.Add(r);
                         if (DateDisplay != null) DateDisplay.Text = $"{startOfWeek:MMM d} - {endOfWeek:MMM d}";
                         SummaryTitle.Text = "Weekly Screen Time Summary";
                         AveragePanel.Visibility = Visibility.Visible;
                         break;
                     case TimePeriod.Daily:
                     default:
-                        records = BuildRecords(() => _aggregationService.GetDetailRecordsForDate(date));
+                        records = BuildRecords(() =>
+                        {
+                            var raw = _databaseService!.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+                            if (date.Date == DateTime.Today)
+                            {
+                                var live = _trackingService?.GetRecords()?.Where(r => r.IsFromDate(date)).ToList() ?? new List<AppUsageRecord>();
+                                raw.AddRange(live);
+                            }
+                            return raw;
+                        });
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";
@@ -446,7 +457,7 @@ namespace ScreenTimeTracker
                 foreach (var rec in records.OrderByDescending(r => r.Duration))
                 {
                     rec.LoadAppIconIfNeeded();
-                    _recordManager.AddOrUpdate(rec);
+                    _usageRecords.Add(rec);
                 }
 
                 CleanupSystemProcesses();
@@ -454,6 +465,7 @@ namespace ScreenTimeTracker
                 DispatcherQueue?.TryEnqueue(() =>
                 {
                     // Binding handles ItemsSource updates
+                    _isReloading = false;
                 });
 
                 UpdateSummaryTab(_usageRecords.ToList());
@@ -496,14 +508,14 @@ namespace ScreenTimeTracker
 
             try
             {
-                // Fetch all records (detailed) via aggregation service
-                var allRecords = BuildRecords(() => _aggregationService.GetDetailRecordsForDateRange(startDate, endDate));
+                // Use raw records rather than per-process aggregates so the daily chart gets correct totals
+                var records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startDate, endDate));
 
                 // For list view we want the granular list (allRecords)
-                foreach (var rec in allRecords.OrderByDescending(r => r.Duration))
+                foreach (var rec in records.OrderByDescending(r => r.Duration))
                 {
                     rec.LoadAppIconIfNeeded();
-                    _recordManager.AddOrUpdate(rec);
+                    _usageRecords.Add(rec);
                 }
 
                 // Build aggregated list for summary tab and average
@@ -513,6 +525,7 @@ namespace ScreenTimeTracker
                 CleanupSystemProcesses();
                 UpdateAveragePanel(aggregated, startDate, endDate);
                 UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
+                _isReloading = false;
 
                 // Publish aggregated list to ViewModel
                 _viewModel.AggregatedRecords.Clear();
@@ -523,6 +536,8 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
                 ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
             }
+
+            DispatcherQueue?.TryEnqueue(() => { _isReloading = false; });
         }
 
         // ---------------- Date-period helpers migrated from MainWindow.xaml.cs ----------------
@@ -592,10 +607,12 @@ namespace ScreenTimeTracker
 
                 _usageRecords.Clear();
 
+                _isReloading = true;
+
                 foreach (var r in records.OrderByDescending(r => r.Duration))
                 {
                     r.LoadAppIconIfNeeded();
-                    _recordManager.AddOrUpdate(r);
+                    _usageRecords.Add(r);
                 }
 
                 // Refresh UI elements on dispatcher
@@ -611,6 +628,7 @@ namespace ScreenTimeTracker
 
                     UpdateUsageChart();
                     UpdateSummaryTab(_usageRecords.ToList());
+                    _isReloading = false;
                 });
 
                 return records;

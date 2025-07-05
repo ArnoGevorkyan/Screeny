@@ -146,9 +146,7 @@ namespace ScreenTimeTracker
         private DispatcherTimer _autoSaveTimer;
         private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
         private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
-
-        // Add central collection manager field
-        private readonly UsageRecordCollectionManager _recordManager;
+        private bool _isReloading = false;  // true while usage records are being regenerated
 
         public MainWindow()
         {
@@ -171,8 +169,6 @@ namespace ScreenTimeTracker
 
             // Alias local collection to ViewModel collection
             _usageRecords = _viewModel.Records;
-            // Initialise central collection manager (field declared in UI partial)
-            _recordManager = new UsageRecordCollectionManager(_usageRecords);
 
             // Get window handle AFTER InitializeComponent
             _hWnd = WindowNative.GetWindowHandle(this);
@@ -998,11 +994,14 @@ namespace ScreenTimeTracker
             {
                 _trackingService.StopTracking();
                 bool ok = _databaseService?.WipeDatabase() ?? false;
-                _trackingService.StartTracking();
 
+                // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
                 _usageRecords.Clear();
+                _viewModel.AggregatedRecords.Clear();
                 UpdateUsageChart();
                 UpdateSummaryTab();
+
+                _trackingService.StartTracking();
 
                 await new ContentDialog
                 {

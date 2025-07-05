@@ -33,7 +33,7 @@ namespace ScreenTimeTracker
             // Update UI text block with formatted total time if available
             if (ChartTimeValue != null)
             {
-                ChartTimeValue.Text = Helpers.ChartHelper.FormatTimeSpan(totalTime);
+                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
             }
         }
 
@@ -68,7 +68,7 @@ namespace ScreenTimeTracker
 
             var avg = TimeSpan.FromSeconds(total.TotalSeconds / activeDayCount);
 
-            DailyAverage.Text = ChartHelper.FormatTimeSpan(avg);
+            DailyAverage.Text = TimeUtil.FormatTimeSpan(avg);
 
             // Always show average panel for multi-day views
             AveragePanel.Visibility = Visibility.Visible;
@@ -228,7 +228,7 @@ namespace ScreenTimeTracker
                 _selectedEndDate);
 
             if (ChartTimeValue != null)
-                ChartTimeValue.Text = ChartHelper.FormatTimeSpan(totalTime);
+                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
         }
 
         private void UpdateDatePickerButtonText()
@@ -391,50 +391,36 @@ namespace ScreenTimeTracker
 
         private void UpdateSummaryTab()
         {
-            UpdateSummaryTab(_usageRecords.ToList());
+            // Always recalc from authoritative source: the aggregation service + live slice
+            var (start, end) = GetCurrentViewDateRange();
+            var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(start, end);
+            UpdateSummaryTab(aggregated);
+        }
+
+        // Helper returns the date-span currently shown in the UI
+        private (DateTime Start, DateTime End) GetCurrentViewDateRange()
+        {
+            if (_isDateRangeSelected && _selectedEndDate != null)
+            {
+                return (_selectedDate.Date, _selectedEndDate.Value.Date);
+            }
+
+            return (_selectedDate.Date, _selectedDate.Date);
         }
 
         private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
         {
             try
             {
-                // Calculate total screen time without double-counting overlapping focus intervals
-                TimeSpan totalTime = TimeSpan.Zero;
-                TimeSpan absoluteMaxDuration = TimeSpan.Zero;
+                // With records already aggregated (unique per process), the total screen
+                // time is simply the sum of their durations. This removes the odd double-
+                // counting we saw when we tried to rebuild intervals for every tick.
 
-                try
-                {
-                    var now = DateTime.Now;
-
-                    // Build interval list for every record
-                    var intervals = recordsToSummarize.Select(r =>
-                    {
-                        DateTime start = r.StartTime;
-                        DateTime end;
-
-                        if (r.EndTime.HasValue)
-                        {
-                            end = r.EndTime.Value;
-                        }
-                        else
-                        {
-                            // Live or aggregated record without explicit end -> derive from Duration or current time
-                            end = r.IsFocused ? now : r.StartTime + r.Duration;
-                        }
-
-                        // Guard against corrupt data
-                        if (end < start) end = start;
-
-                        return (Start: start, End: end);
-                    }).ToList();
-
-                    // Merge overlapping slices and sum their lengths
-                    var merged = ChartHelper.MergeIntervals(intervals);
-                    totalTime = merged.Aggregate(TimeSpan.Zero, (span, iv) => span + (iv.End - iv.Start));
+                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
 
                 // Cap to a realistic maximum: 24 h per day * days in period
                 int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
-                    absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
+                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
                 if (totalTime > absoluteMaxDuration)
                 {
                     System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
@@ -444,18 +430,32 @@ namespace ScreenTimeTracker
                 // Update summary UI – total screen time block
                 if (TotalScreenTime != null)
                 {
-                    TotalScreenTime.Text = FormatTimeSpan(totalTime);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error computing merged totalTime: {ex.Message}");
+                    TotalScreenTime.Text = TimeUtil.FormatTimeSpan(totalTime);
                 }
 
-                // Determine most-used application within the supplied list
+                // Compute idle time and update IdleRow visibility
+                var idleTotal = recordsToSummarize
+                                    .Where(r => r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase))
+                                    .Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
+
+                if (IdleRow != null && IdleTimeValue != null)
+                {
+                    if (idleTotal.TotalSeconds >= 5)
+                    {
+                        IdleRow.Visibility = Visibility.Visible;
+                        IdleTimeValue.Text = TimeUtil.FormatTimeSpan(idleTotal);
+                    }
+                    else
+                    {
+                        IdleRow.Visibility = Visibility.Collapsed;
+                    }
+                }
+
+                // Determine most-used application within the supplied list (excluding idle)
                 AppUsageRecord? mostUsedApp = null;
                 foreach (var record in recordsToSummarize)
                 {
+                    if (record.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase)) continue;
                     var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
                     if (mostUsedApp == null || capped > mostUsedApp.Duration)
                         mostUsedApp = record;
@@ -464,7 +464,7 @@ namespace ScreenTimeTracker
                 if (mostUsedApp != null)
                 {
                     if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
-                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = FormatTimeSpan(mostUsedApp.Duration);
+                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsedApp.Duration);
 
                     // Ensure icon is loaded (deferred)
                     mostUsedApp.LoadAppIconIfNeeded();
@@ -487,7 +487,7 @@ namespace ScreenTimeTracker
                 else
                 {
                     if (MostUsedApp != null)       MostUsedApp.Text = "None";
-                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = FormatTimeSpan(TimeSpan.Zero);
+                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(TimeSpan.Zero);
                     if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
                     {
                         MostUsedAppIcon.Visibility = Visibility.Collapsed;
@@ -500,8 +500,6 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
             }
         }
-
-        private string FormatTimeSpan(TimeSpan time) => ChartHelper.FormatTimeSpan(time);
 
         // ---------------- TitleBar & DatePicker button handlers ----------------
         private void MinimizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MinimizeWindow();
@@ -527,7 +525,7 @@ namespace ScreenTimeTracker
             _updateTimer.Tick += UpdateTimer_Tick;
             _autoSaveTimer.Tick += AutoSaveTimer_Tick;
 
-            // _usageRecords and _recordManager are already initialised in MainWindow constructor.
+            // _usageRecords collection already initialised in MainWindow constructor.
         }
 
         private void UpdateTimer_Tick(object? sender, object e)
@@ -535,6 +533,7 @@ namespace ScreenTimeTracker
             try
             {
                 if (_disposed || _usageRecords == null) return;
+                if (_isReloading) return; // avoid live updates during dataset rebuild
                 if (_trackingService == null || !_trackingService.IsTracking) return;
 
                 // -------------------------------------------------------------
@@ -573,9 +572,10 @@ namespace ScreenTimeTracker
                 // Update total time using unified helper (avoids code duplication & flicker)
                 try
                 {
-                    var liveTotal = ChartHelper.CalculateUniqueTotalTime(_usageRecords);
-
-                    if (ChartTimeValue != null) ChartTimeValue.Text = ChartHelper.FormatTimeSpan(liveTotal);
+                    var (start,end) = GetCurrentViewDateRange();
+                    var agg = _aggregationService.GetAggregatedRecordsForDateRange(start,end);
+                    var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
+                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
                 }
                 catch { /* swallow race conditions */ }
 
@@ -605,11 +605,8 @@ namespace ScreenTimeTracker
                     if (!viewIncludesToday) return;
                     if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
 
-                    // Delegate to central manager – guarantees duplicate-free updates
-                    _recordManager.AddOrUpdate(record);
-
                     // Mark chart for deferred refresh
-                    _isChartDirty = true;
+                    UpdateOrAddLiveRecord(record);
                 }
                 catch (Exception ex)
                 {
@@ -664,6 +661,71 @@ namespace ScreenTimeTracker
                     System.Diagnostics.Debug.WriteLine($"Error in WindowChanged handler: {ex.Message}");
                 }
             });
+        }
+
+        // Helper: update or insert a live record without rebuilding the entire list (reduces flicker)
+        private void UpdateOrAddLiveRecord(AppUsageRecord record)
+        {
+            try
+            {
+                ApplicationProcessingHelper.ProcessApplicationRecord(record);
+
+                var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+
+                if (existing == null)
+                {
+                    // New app appearing – add once
+                    record.LoadAppIconIfNeeded();
+                    _usageRecords.Add(record);
+                }
+                else
+                {
+                    // Update duration & focus flag even if same instance
+                    if (!ReferenceEquals(existing, record))
+                    {
+                        if (record.Duration > existing.Duration)
+                            existing._accumulatedDuration = record.Duration;
+                    }
+
+                    if (record.IsFocused)
+                    {
+                        foreach (var r in _usageRecords) r.SetFocus(false);
+                        existing.SetFocus(true);
+                    }
+
+                    existing.RaiseDurationChanged();
+                }
+
+                // Mark chart for refresh in deferred timer
+                _isChartDirty = true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateOrAddLiveRecord: {ex.Message}");
+            }
+        }
+
+        // Helper: rebuild live records list for today (used on initial load)
+        private void RefreshLiveRecords()
+        {
+            try
+            {
+                var live = _aggregationService.GetDetailRecordsForDate(DateTime.Today);
+                _usageRecords.Clear();
+                foreach (var r in live.OrderByDescending(r => r.Duration))
+                {
+                    r.LoadAppIconIfNeeded();
+                    _usageRecords.Add(r);
+                }
+
+                // Ensure chart and summary refresh
+                _isChartDirty = true;
+                UpdateSummaryTab(_usageRecords.ToList());
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in RefreshLiveRecords: {ex.Message}");
+            }
         }
     }
 } 

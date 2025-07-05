@@ -143,6 +143,10 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="8"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="8"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="8"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 
                 <!-- Chart Section -->
@@ -254,6 +258,8 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="12"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="12"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         
                         <!-- Date Display (moved from header) -->
@@ -317,10 +323,20 @@
                             </StackPanel>
                         </Grid>
                         
+                        <!-- Idle/Away Time -->
+                        <Grid Grid.Row="6" x:Name="IdleRow" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Idle:" Style="{ThemeResource BodyTextBlockStyle}" VerticalAlignment="Center" Grid.Column="0"/>
+                            <TextBlock x:Name="IdleTimeValue" Text="0h 0m" Style="{ThemeResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" Grid.Column="1"/>
+                        </Grid>
+                        
                         <!-- Daily Average (for weekly/monthly views) -->
-                        <Grid Grid.Row="6"
-                             x:Name="AveragePanel"
-                             Visibility="Collapsed">
+                        <Grid Grid.Row="8"
+                              x:Name="AveragePanel"
+                              Visibility="Collapsed">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="100"/>
                                 <ColumnDefinition Width="*"/>

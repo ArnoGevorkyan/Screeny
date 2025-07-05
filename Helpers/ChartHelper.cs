@@ -43,7 +43,7 @@ namespace ScreenTimeTracker.Helpers
             }
 
             // Use unique-time calculation to avoid double-counting overlapping apps
-            TimeSpan totalTime = CalculateUniqueTotalTime(usageRecords);
+            TimeSpan totalTime = TimeUtil.CalculateUniqueTotalTime(usageRecords);
             
             // Get system accent color for chart series
             SKColor seriesColor;
@@ -130,7 +130,7 @@ namespace ScreenTimeTracker.Helpers
                 // Merge overlaps inside each hour and compute the total unique time
                 for (int hr = 0; hr < 24; hr++)
                 {
-                    var merged = MergeIntervals(hourlyIntervals[hr]);
+                    var merged = TimeUtil.MergeIntervals(hourlyIntervals[hr]);
                     double totalHr = 0;
                     foreach (var iv in merged)
                     {
@@ -312,7 +312,7 @@ namespace ScreenTimeTracker.Helpers
                         MaxLimit        = 1,
                         ForceStepToMin  = true,
                         MinStep         = 0.25,
-                        Labeler         = FormatHoursForYAxis,
+                        Labeler         = TimeUtil.FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100))
                     }
                 };
@@ -372,29 +372,30 @@ namespace ScreenTimeTracker.Helpers
                     dayLabels[date.Date] = label;
                 }
 
-                // Now process all records and add their durations to the appropriate days
+                // --- Build per-day interval lists to avoid double-counting overlaps ---
+                var perDayIntervals = new Dictionary<DateTime, List<(DateTime Start, DateTime End)>>();
+                foreach (var key in dayData.Keys)
+                    perDayIntervals[key] = new List<(DateTime, DateTime)>();
+
                 foreach (var record in usageRecords)
                 {
-                    try
-                    {
-                        // Get the correct date for this record - use StartTime's date not the Date property
-                        // This is more reliable for determining which day this record belongs to
-                        DateTime recordDate = record.StartTime.Date;
-                        
-                        // Check if this record's date is within our range
-                        if (recordDate >= rangeStartDate.Date && recordDate <= (rangeStartDate.AddDays(daysToShow - 1)).Date)
-                        {
-                            // Add this record's duration to the appropriate day
-                            if (dayData.ContainsKey(recordDate))
-                            {
-                                double hours = record.Duration.TotalHours;
-                                dayData[recordDate] += hours;
-                            }
-                        }
-                    }
-                    catch (Exception)
-                    {
-                    }
+                    var start = record.StartTime;
+                    var end   = record.EndTime ?? (record.IsFocused ? DateTime.Now : record.StartTime + record.Duration);
+                    if (end <= start) continue;
+
+                    var day = start.Date;
+                    if (day < rangeStartDate || day > rangeStartDate.AddDays(daysToShow-1)) continue;
+
+                    perDayIntervals[day].Add((start, end));
+                }
+
+                // Merge intervals per day and convert to hours
+                foreach (var kvp in perDayIntervals)
+                {
+                    var merged = TimeUtil.MergeIntervals(kvp.Value);
+                    double hrs  = merged.Sum(iv => (iv.End - iv.Start).TotalHours);
+                    if (hrs > 24) hrs = 24; // safety clamp – a single day cannot exceed 24 h
+                    dayData[kvp.Key] = hrs;
                 }
 
                 // Now add the data and labels to the chart in chronological order
@@ -492,7 +493,7 @@ namespace ScreenTimeTracker.Helpers
                         MaxLimit        = yAxisMax,
                         ForceStepToMin  = true,
                         MinStep         = timePeriod == TimePeriod.Weekly ? 2 : (yAxisMax > 4 ? 2 : (yAxisMax < 0.1 ? 0.05 : 0.5)),
-                        Labeler         = FormatHoursForYAxis,
+                        Labeler         = TimeUtil.FormatHoursForYAxis,
                         SeparatorsPaint = new SolidColorPaint(SKColors.LightGray.WithAlpha(100)) // Subtle grid lines
                     }
                 };
@@ -540,160 +541,6 @@ namespace ScreenTimeTracker.Helpers
             {
                 return TimeSpan.Zero;
             }
-        }
-
-        /// <summary>
-        /// Formats a TimeSpan for chart display
-        /// </summary>
-        /// <param name="time">The TimeSpan to format</param>
-        /// <returns>Formatted time string</returns>
-        public static string FormatTimeSpanForChart(TimeSpan time)
-        {
-            if (time.TotalDays >= 1)
-            {
-                return $"{(int)time.TotalDays}d {time.Hours}h {time.Minutes}m";
-            }
-            else if (time.TotalHours >= 1)
-            {
-                return $"{(int)time.TotalHours}h {time.Minutes}m";
-            }
-            else
-            {
-                return $"{(int)time.TotalMinutes}m";
-            }
-        }
-
-        /// <summary>
-        /// Formats hours for Y-axis labels
-        /// </summary>
-        /// <param name="value">The value in hours</param>
-        /// <returns>Formatted time string</returns>
-        public static string FormatHoursForYAxis(double value)
-        {
-            var time = TimeSpan.FromHours(value);
-            
-            if (time.TotalMinutes < 1)
-            {
-                // Show seconds for very small values
-                return $"{time.TotalSeconds:F0}s";
-            }
-            else if (time.TotalHours < 1)
-            {
-                // Show only minutes for less than an hour
-                return $"{time.TotalMinutes:F0}m";
-            }
-            else
-            {
-                // Just show hour value without minutes for cleaner display
-                return $"{Math.Floor(time.TotalHours)}h";
-            }
-        }
-
-        /// <summary>
-        /// Formats a TimeSpan for general UI display
-        /// </summary>
-        /// <param name="time">The TimeSpan to format</param>
-        /// <returns>Formatted time string</returns>
-        public static string FormatTimeSpan(TimeSpan time)
-        {
-            // Cap extremely large durations to prevent unrealistic display values
-            // 365 days as reasonable maximum (1 year)
-            const int MaxReasonableDays = 365;
-            
-            if (time.TotalDays > MaxReasonableDays)
-            {
-                // Create a new TimeSpan capped at the maximum
-                time = TimeSpan.FromDays(MaxReasonableDays);
-            }
-            
-            int days = (int)time.TotalDays;
-            int hours = time.Hours;
-            int minutes = time.Minutes;
-            int seconds = time.Seconds;
-
-            if (days > 0)
-            {
-                return $"{days}d {hours}h {minutes}m"; // Show d/h/m for multiple days
-            }
-            else if (hours > 0)
-            {
-                return $"{hours}h {minutes}m {seconds}s"; // Show h/m/s for multiple hours
-            }
-            else if (minutes > 0)
-            {
-                return $"{minutes}m {seconds}s"; // Show m/s for multiple minutes
-            }
-            else
-            {
-                return $"{seconds}s"; // Show s for seconds only
-            }
-        }
-
-        /// <summary>
-        /// Merges a list of time intervals and returns a new list without overlaps.
-        /// </summary>
-        internal static List<(DateTime Start, DateTime End)> MergeIntervals(List<(DateTime Start, DateTime End)> intervals)
-        {
-            if (intervals == null || intervals.Count == 0) return new List<(DateTime, DateTime)>();
-
-            var ordered = intervals.OrderBy(iv => iv.Start).ToList();
-            var merged  = new List<(DateTime Start, DateTime End)> { ordered[0] };
-
-            for (int i = 1; i < ordered.Count; i++)
-            {
-                var current = ordered[i];
-                var last    = merged[^1];
-
-                if (current.Start <= last.End) // overlap
-                {
-                    merged[^1] = (last.Start, current.End > last.End ? current.End : last.End);
-                }
-                else
-                {
-                    merged.Add(current);
-                }
-            }
-
-            return merged;
-        }
-
-        /// <summary>
-        /// Calculates the total unique (non-overlapping) screen-time represented by the supplied records.
-        /// </summary>
-        /// <param name="records">Collection of <see cref="AppUsageRecord"/> instances.</param>
-        /// <returns>Total time after merging all overlapping intervals.</returns>
-        public static TimeSpan CalculateUniqueTotalTime(IEnumerable<AppUsageRecord> records)
-        {
-            if (records == null) return TimeSpan.Zero;
-
-            var now = DateTime.Now;
-            var intervals = records.Select(r =>
-            {
-                var start = r.StartTime;
-                DateTime end;
-
-                // Determine end timestamp
-                if (r.EndTime.HasValue)
-                {
-                    end = r.EndTime.Value;
-                }
-                else
-                {
-                    end = r.IsFocused ? now : r.StartTime + r.Duration;
-                }
-
-                if (end < start) end = start; // Guard against corrupt data
-                return (Start: start, End: end);
-            }).ToList();
-
-            var merged = MergeIntervals(intervals);
-            TimeSpan total = TimeSpan.Zero;
-            foreach (var iv in merged)
-            {
-                total += iv.End - iv.Start;
-            }
-
-            return total;
         }
     }
 } 
