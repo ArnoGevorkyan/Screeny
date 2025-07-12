@@ -1150,8 +1150,8 @@ namespace ScreenTimeTracker.Services
 
                     if (unique.TryGetValue(canonicalLive, out var existing))
                     {
-                        var longer = existing.Duration > liveRec.Duration ? existing.Duration : liveRec.Duration;
-                        existing._accumulatedDuration = longer;
+                        // Add live duration to existing database duration instead of replacing
+                        existing._accumulatedDuration += liveRec.Duration;
                         existing.WindowHandle = liveRec.WindowHandle;
                         if (!string.IsNullOrEmpty(liveRec.WindowTitle)) existing.WindowTitle = liveRec.WindowTitle;
                         if (liveRec.StartTime < existing.StartTime) existing.StartTime = liveRec.StartTime;
@@ -1211,8 +1211,8 @@ namespace ScreenTimeTracker.Services
 
                 if (byProcess.TryGetValue(canonical, out var existing))
                 {
-                    var longer = existing.Duration > rec.Duration ? existing.Duration : rec.Duration;
-                    existing._accumulatedDuration = longer;
+                    // Add durations instead of taking the longer one to avoid losing data
+                    existing._accumulatedDuration += rec.Duration;
                     if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
                     if (rec.EndTime.HasValue)
                     {

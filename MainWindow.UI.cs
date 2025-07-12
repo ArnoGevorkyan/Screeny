@@ -293,7 +293,7 @@ namespace ScreenTimeTracker
                 DateTime today = DateTime.Today;
                 DateTime startDate = today.AddDays(-6);
 
-                var weekRecords = _databaseService.GetAggregatedRecordsWithLive(startDate, today, _trackingService);
+                var weekRecords = _databaseService?.GetAggregatedRecordsWithLive(startDate, today, _trackingService) ?? new List<AppUsageRecord>();
 
                 UpdateRecordListView(weekRecords);
                 SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {today:MMM d}, {today.Year})");
@@ -393,7 +393,12 @@ namespace ScreenTimeTracker
         {
             // Always recalc from authoritative source: the aggregation service + live slice
             var (start, end) = GetCurrentViewDateRange();
-            var aggregated = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
+            var aggregated = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
+            
+            // Reset cache when view changes to ensure accurate totals
+            _cachedTotalTime = TimeSpan.Zero;
+            _lastFullRefresh = DateTime.MinValue;
+            
             UpdateSummaryTab(aggregated);
         }
 
@@ -566,6 +571,9 @@ namespace ScreenTimeTracker
             }
         }
 
+        private TimeSpan _cachedTotalTime = TimeSpan.Zero;
+        private DateTime _lastFullRefresh = DateTime.MinValue;
+
         private void DoLiveUpdates()
         {
             // Guard: only apply live updates if the active view includes today
@@ -590,20 +598,34 @@ namespace ScreenTimeTracker
                 return; // Ignore live tracking updates for historic views
 
             // Increment duration only for focused record to minimize UI churn
-            var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
+            var activeRec = _usageRecords?.FirstOrDefault(r => r.IsFocused);
             activeRec?.RaiseDurationChanged();
 
-            // Update total time using unified helper (avoids code duplication & flicker)
-            try
+            // Optimize total time updates - only do expensive database calls every 10 seconds
+            bool shouldDoFullRefresh = (DateTime.Now - _lastFullRefresh).TotalSeconds >= 10;
+            
+            if (shouldDoFullRefresh)
             {
-                var (start,end) = GetCurrentViewDateRange();
-                var agg = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
-                var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
-                if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
+                // Full database aggregation refresh (expensive, but only every 10 seconds)
+                try
+                {
+                    var (start,end) = GetCurrentViewDateRange();
+                    var agg = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
+                    _cachedTotalTime = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
+                    _lastFullRefresh = DateTime.Now;
+                    
+                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
+                }
+                catch (Exception ex) 
+                { 
+                    System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
+                }
             }
-            catch (Exception ex) 
-            { 
-                System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
+            else if (activeRec != null && _trackingService?.IsTracking == true)
+            {
+                // Fast update: just increment cached total by 1 second for the focused app
+                _cachedTotalTime = _cachedTotalTime.Add(TimeSpan.FromSeconds(1));
+                if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
             }
 
             // Mark chart as dirty every 15 seconds for less frequent but coordinated refreshes
@@ -661,7 +683,12 @@ namespace ScreenTimeTracker
                     // --- keep check whether current view includes today ---
                     bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
                     if (!viewIncludesToday) return;
-                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
+                    
+                    // Only filter out true system processes and the app itself during live updates
+                    // Allow most user apps to show live tracking
+                    if (record.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase) ||
+                        record.ProcessName.Equals("ScreenTimeTracker", StringComparison.OrdinalIgnoreCase))
+                        return;
 
                     // Mark chart for deferred refresh
                     UpdateOrAddLiveRecord(record);
@@ -732,13 +759,13 @@ namespace ScreenTimeTracker
             {
                 ApplicationProcessingHelper.ProcessApplicationRecord(record);
 
-                var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+                var existing = _usageRecords?.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
 
                 if (existing == null)
                 {
                     // New app appearing – add once
                     record.LoadAppIconIfNeeded();
-                    _usageRecords.Add(record);
+                    _usageRecords?.Add(record);
                 }
                 else
                 {
@@ -751,7 +778,10 @@ namespace ScreenTimeTracker
 
                     if (record.IsFocused)
                     {
-                        foreach (var r in _usageRecords) r.SetFocus(false);
+                        if (_usageRecords != null)
+                        {
+                            foreach (var r in _usageRecords) r.SetFocus(false);
+                        }
                         existing.SetFocus(true);
                     }
 

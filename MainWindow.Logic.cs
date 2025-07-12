@@ -386,7 +386,7 @@ namespace ScreenTimeTracker
                         var endOfWeek   = startOfWeek.AddDays(6);
                         records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startOfWeek, endOfWeek));
 
-                        var aggregatedWeekly = _databaseService.GetAggregatedRecordsWithLive(startOfWeek, endOfWeek, _trackingService, includeLiveRecords: false);
+                        var aggregatedWeekly = _databaseService?.GetAggregatedRecordsWithLive(startOfWeek, endOfWeek, _trackingService, includeLiveRecords: false) ?? new List<AppUsageRecord>();
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in aggregatedWeekly) _viewModel.AggregatedRecords.Add(r);
                         if (DateDisplay != null) DateDisplay.Text = $"{startOfWeek:MMM d} - {endOfWeek:MMM d}";
@@ -507,7 +507,7 @@ namespace ScreenTimeTracker
                 }
 
                 // Build aggregated list for summary tab and average
-                var aggregated = _databaseService.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false);
+                var aggregated = _databaseService?.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false) ?? new List<AppUsageRecord>();
 
                 // Update UI helpers
                 CleanupSystemProcesses();

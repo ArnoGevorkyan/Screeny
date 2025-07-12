@@ -113,6 +113,12 @@ namespace ScreenTimeTracker.Services
                 resolved = await TryLoadStockApplicationIconAsync(ct);
             }
 
+            // 8) Ultimate fallback - create a simple app icon programmatically if everything fails
+            if (resolved == null)
+            {
+                resolved = await CreateSimpleAppIconAsync(ct);
+            }
+
             if (resolved != null)
             {
                 _iconCache[cacheKey]  = resolved; // store by name
@@ -588,6 +594,38 @@ namespace ScreenTimeTracker.Services
             }
             catch { /* ignore */ }
             return null;
+        }
+
+        /// <summary>
+        /// Creates a simple application icon when all other methods fail
+        /// This ensures the UI never shows gear icons
+        /// </summary>
+        private static async Task<BitmapImage?> CreateSimpleAppIconAsync(CancellationToken ct)
+        {
+            try
+            {
+                using var bitmap = new System.Drawing.Bitmap(32, 32);
+                using var g = System.Drawing.Graphics.FromImage(bitmap);
+                
+                // Create a simple, recognizable app icon
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                
+                // Light blue background circle
+                g.FillEllipse(System.Drawing.Brushes.LightSteelBlue, 2, 2, 28, 28);
+                g.DrawEllipse(System.Drawing.Pens.SteelBlue, 2, 2, 28, 28);
+                
+                // Simple app window representation
+                g.FillRectangle(System.Drawing.Brushes.White, 8, 10, 16, 12);
+                g.DrawRectangle(System.Drawing.Pens.DarkBlue, 8, 10, 16, 12);
+                g.FillRectangle(System.Drawing.Brushes.CornflowerBlue, 8, 10, 16, 3);
+                
+                return await ConvertBitmapToBitmapImageAsync(bitmap, ct);
+            }
+            catch
+            {
+                // If even this fails, return null and let the gear icon show
+                return null;
+            }
         }
     }
 } 
