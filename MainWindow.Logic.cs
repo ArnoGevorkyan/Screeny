@@ -108,10 +108,10 @@ namespace ScreenTimeTracker
 
                 // Stop services
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services...");
-                _trackingService?.StopTracking();
+                EndTracking();
                 _updateTimer?.Stop();
                 _autoSaveTimer?.Stop();
-                _chartRefreshTimer?.Stop();
+                // _chartRefreshTimer removed – no handler to detach
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
 
                 // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
@@ -129,11 +129,8 @@ namespace ScreenTimeTracker
                 // Remove event handlers
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Removing event handlers...");
                 if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
-                if (_trackingService != null)
-                {
-                    _trackingService.WindowChanged -= TrackingService_WindowChanged;
-                    _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
-                }
+                _busSubA?.Dispose();
+                _busSubB?.Dispose();
                 if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
                 if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded;
                 if (_trayIconHelper != null)
@@ -169,9 +166,9 @@ namespace ScreenTimeTracker
 
                 if (_trackingService != null && _trackingService.IsTracking)
                 {
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE StopTracking()");
-                    _trackingService.StopTracking();
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER StopTracking()");
+                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE EndTracking()");
+                    _trackingService.EndTracking();
+                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER EndTracking()");
                 }
 
                 System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE SaveRecordsToDatabase()");
@@ -221,7 +218,16 @@ namespace ScreenTimeTracker
                 else
                 {
                     UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
+                    // Replace UpdateSummaryTab with ViewModel update
+                    List<AppUsageRecord> allRecords = _usageRecords.ToList();
+                    TimeSpan totalTime = CalculateTotalActiveTime(allRecords);
+                    double idleSeconds = allRecords.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+                    TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+                    var mostUsedApp = allRecords.OrderByDescending(r => r.Duration).FirstOrDefault();
+                    string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+                    TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+                    TimeSpan? dailyAverage = null;
+                    _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage);
                 }
             }
             catch (Exception ex)
@@ -231,7 +237,7 @@ namespace ScreenTimeTracker
         }
 
         // ---------------- Tracking control logic ----------------
-        private void StartTracking()
+        private void BeginTracking()
         {
             ThrowIfDisposed();
             try
@@ -255,11 +261,22 @@ namespace ScreenTimeTracker
                 // Start timers
                 _updateTimer.Start();
                 _autoSaveTimer.Start();
-                _chartRefreshTimer.Start();
-                _isChartDirty = true; // force initial chart render
+                // Chart refresh consolidated into 1-s UI timer – no separate start needed
+                // _isChartDirty = true; // force initial chart render
 
+                // Update chart
                 UpdateUsageChart();
-                UpdateSummaryTab(_usageRecords.ToList());
+
+                // Calculate and update summary
+                List<AppUsageRecord> allRecords = _usageRecords.ToList();
+                TimeSpan totalTime = CalculateTotalActiveTime(allRecords);
+                double idleSeconds = allRecords.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+                TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+                var mostUsedApp = allRecords.OrderByDescending(r => r.Duration).FirstOrDefault();
+                string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+                TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+                TimeSpan? dailyAverage = null;
+                _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage);
 
                 // Sync ViewModel state
                 _viewModel.IsTracking = true;
@@ -282,11 +299,11 @@ namespace ScreenTimeTracker
             }
         }
 
-        private void StopTracking()
+        private void EndTracking()
         {
             ThrowIfDisposed();
             System.Diagnostics.Debug.WriteLine("Stopping tracking");
-            _trackingService.StopTracking();
+            _trackingService.EndTracking();
 
             _viewModel.IsTracking = false;
 
@@ -302,14 +319,22 @@ namespace ScreenTimeTracker
             // Stop timers
             _updateTimer.Stop();
             _autoSaveTimer.Stop();
-            _chartRefreshTimer.Stop();
+            // Chart refresh handled by UI timer – nothing to stop
 
             // Persist session data
             SaveRecordsToDatabase();
             CleanupSystemProcesses();
 
             // Update summary and chart
-            UpdateSummaryTab(_usageRecords.ToList());
+            List<AppUsageRecord> allRecords = _usageRecords.ToList();
+            TimeSpan totalTime = CalculateTotalActiveTime(allRecords);
+            double idleSeconds = allRecords.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+            TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+            var mostUsedApp = allRecords.OrderByDescending(r => r.Duration).FirstOrDefault();
+            string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+            TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+            TimeSpan? dailyAverage = null;
+            _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage);
             UpdateUsageChart();
             // Tracking indicator handled via binding; no imperative call.
         }
@@ -340,10 +365,13 @@ namespace ScreenTimeTracker
                         var record        = processGroup.OrderByDescending(r => r.Duration).First();
                         if (record.IsFocused) record.SetFocus(false);
                         record._accumulatedDuration = totalDuration;
-                        if (record.Id > 0)
-                            _databaseService!.UpdateRecord(record);
-                        else
-                            _databaseService.SaveRecord(record);
+                        if (_databaseService != null)
+                        {
+                            if (record.Id > 0)
+                                _databaseService.UpdateRecord(record);
+                            else
+                                _databaseService.SaveRecord(record);
+                        }
                     }
                     catch (Exception pe)
                     {
@@ -378,166 +406,108 @@ namespace ScreenTimeTracker
 
             _usageRecords.Clear();
 
-            // Update header text (Today/Yesterday/etc.)
-            if (DateDisplay != null)
-            {
-                var today = DateTime.Today;
-                var yesterday = today.AddDays(-1);
-                if (date == today)      DateDisplay.Text = "Today";
-                else if (date == yesterday) DateDisplay.Text = "Yesterday";
-                else DateDisplay.Text = date.ToString("MMMM d");
-            }
+            _currentTimePeriod = TimePeriod.Daily;
+            _currentChartViewMode = ChartViewMode.Hourly;
 
             List<AppUsageRecord> records = new();
             try
             {
-                switch (_currentTimePeriod)
-                {
-                    case TimePeriod.Weekly:
-                        var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
-                        var endOfWeek   = startOfWeek.AddDays(6);
-                        records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startOfWeek, endOfWeek));
-
-                        var aggregatedWeekly = _aggregationService.GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek, includeLiveRecords: false);
-                        _viewModel.AggregatedRecords.Clear();
-                        foreach (var r in aggregatedWeekly) _viewModel.AggregatedRecords.Add(r);
-                        if (DateDisplay != null) DateDisplay.Text = $"{startOfWeek:MMM d} - {endOfWeek:MMM d}";
-                        SummaryTitle.Text = "Weekly Screen Time Summary";
-                        AveragePanel.Visibility = Visibility.Visible;
-                        break;
-                    case TimePeriod.Daily:
-                    default:
-                        records = BuildRecords(() =>
-                        {
-                            var raw = _databaseService!.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
-                            if (date.Date == DateTime.Today)
-                            {
-                                var live = _trackingService?.GetRecords()?.Where(r => r.IsFromDate(date)).ToList() ?? new List<AppUsageRecord>();
-                                raw.AddRange(live);
-                            }
-                            return raw;
-                        });
-                        _viewModel.AggregatedRecords.Clear();
-                        foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
-                        SummaryTitle.Text      = "Daily Screen Time Summary";
-                        AveragePanel.Visibility = Visibility.Collapsed;
-                        break;
-                }
-
-                if (records.Count == 0 && date.Date != DateTime.Today)
-                {
-                    DispatcherQueue?.TryEnqueue(async () =>
-                    {
-                        if (Content != null)
-                        {
-                            var dlg = new ContentDialog
-                            {
-                                Title = "No Data Available",
-                                Content = $"No usage data found for {DateDisplay?.Text ?? "the selected date"}.",
-                                CloseButtonText = "OK",
-                                XamlRoot = Content.XamlRoot
-                            };
-
-                            // Snap immediately to today *before* showing the dialog so live data is displayed under the correct day even if the user never presses OK.
-                            if (date.Date != DateTime.Today)
-                            {
-                                _selectedDate        = DateTime.Today;
-                                _selectedEndDate     = null;
-                                _isDateRangeSelected = false;
-
-                                UpdateDatePickerButtonText(); // defined in UI partial
-                                LoadRecordsForDate(DateTime.Today);
-                            }
-
-                            await dlg.ShowAsync();
-                        }
-                    });
-                }
-
-                foreach (var rec in records.OrderByDescending(r => r.Duration))
-                {
-                    rec.LoadAppIconIfNeeded();
-                    _usageRecords.Add(rec);
-                }
-
-                CleanupSystemProcesses();
-
-                DispatcherQueue?.TryEnqueue(() =>
-                {
-                    // Binding handles ItemsSource updates
-                    _isReloading = false;
-                });
-
-                UpdateSummaryTab(_usageRecords.ToList());
-                UpdateChartViewMode();
+                records = LoadRecordsForSpecificDay(date);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
-                DispatcherQueue?.TryEnqueue(async () =>
-                {
-                    if (Content != null)
-                    {
-                        var dlg = new ContentDialog
-                        {
-                            Title = "Error Loading Data",
-                            Content = $"Failed to load screen time data: {ex.Message}",
-                            CloseButtonText = "OK",
-                            XamlRoot = Content.XamlRoot
-                        }; await dlg.ShowAsync();
-                    }
-                });
+                System.Diagnostics.Debug.WriteLine($"Error loading records for {date:yyyy-MM-dd}: {ex.Message}");
+                ShowErrorDialog($"Error loading data for {date:yyyy-MM-dd}: {ex.Message}");
+                return;
             }
+
+            if (records.Any())
+            {
+                foreach (var r in records)
+                {
+                    _usageRecords.Add(r);
+                }
+            }
+            else
+            {
+                ShowNoDataDialog(date, date);
+            }
+
+            CleanupSystemProcesses();
+
+            // Calculate summary metrics
+            TimeSpan totalTime = CalculateTotalActiveTime(records);
+            double idleSeconds = records.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+            TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+            var mostUsedApp = records.OrderByDescending(r => r.Duration).FirstOrDefault();
+            string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+            TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+            TimeSpan? dailyAverage = null; // Calculate if needed
+
+            // Update ViewModel
+            _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage);
+            _viewModel.SummaryTitle = (date == DateTime.Today) ? "Today's Screen Time Summary" : $"{date:MMMM d, yyyy} Screen Time Summary";
+            _viewModel.IsAverageVisible = false; // Or calculate based on logic
+
+            UpdateUsageChart();
         }
 
         // ---------------- Date range loading logic ----------------
         private void LoadRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
-            // Ensure valid input range
-            if (startDate > endDate)
-            {
-                var temp = startDate;
-                startDate = endDate;
-                endDate   = temp;
-            }
+            System.Diagnostics.Debug.WriteLine($"Loading records for range: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
 
-            _selectedDate        = startDate;
-            _selectedEndDate     = endDate;
+            _selectedDate = startDate;
+            _selectedEndDate = endDate;
             _isDateRangeSelected = true;
+
             _usageRecords.Clear();
 
+            _currentTimePeriod = TimePeriod.Custom;
+            _currentChartViewMode = ChartViewMode.Daily;
+
+            List<AppUsageRecord> records = new();
             try
             {
-                // Use raw records rather than per-process aggregates so the daily chart gets correct totals
-                var records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startDate, endDate));
-
-                // For list view we want the granular list (allRecords)
-                foreach (var rec in records.OrderByDescending(r => r.Duration))
-                {
-                    rec.LoadAppIconIfNeeded();
-                    _usageRecords.Add(rec);
-                }
-
-                // Build aggregated list for summary tab and average
-                var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(startDate, endDate, includeLiveRecords: false);
-
-                // Update UI helpers
-                CleanupSystemProcesses();
-                UpdateAveragePanel(aggregated, startDate, endDate);
-                UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
-                _isReloading = false;
-
-                // Publish aggregated list to ViewModel
-                _viewModel.AggregatedRecords.Clear();
-                foreach (var rec in aggregated) _viewModel.AggregatedRecords.Add(rec);
+                records = _aggregationService.GetDetailRecordsForDateRange(startDate, endDate);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
-                ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error loading range: {ex.Message}");
+                ShowErrorDialog($"Error loading data for range: {ex.Message}");
+                return;
             }
 
-            DispatcherQueue?.TryEnqueue(() => { _isReloading = false; });
+            if (records.Any())
+            {
+                foreach (var r in records)
+                {
+                    _usageRecords.Add(r);
+                }
+            }
+            else
+            {
+                ShowNoDataDialog(startDate, endDate);
+            }
+
+            CleanupSystemProcesses();
+
+            // Calculate summary metrics
+            TimeSpan totalTime = CalculateTotalActiveTime(records);
+            double idleSeconds = records.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+            TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+            var mostUsedApp = records.OrderByDescending(r => r.Duration).FirstOrDefault();
+            string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+            TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+            int dayCount = (endDate - startDate).Days + 1;
+            TimeSpan? dailyAverage = dayCount > 0 ? (TimeSpan?)(totalTime / dayCount) : null;
+
+            // Update ViewModel
+            _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage);
+            _viewModel.SummaryTitle = $"{startDate:MMMM d} - {endDate:MMMM d} Screen Time Summary";
+            _viewModel.IsAverageVisible = true;
+
+            UpdateUsageChart();
         }
 
         // ---------------- Date-period helpers migrated from MainWindow.xaml.cs ----------------
@@ -605,15 +575,15 @@ namespace ScreenTimeTracker
                 _selectedEndDate     = null;
                 _isDateRangeSelected = false;
 
-                _usageRecords.Clear();
-
-                _isReloading = true;
-
                 foreach (var r in records.OrderByDescending(r => r.Duration))
                 {
+                    if (r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase)) continue; // hide idle row
                     r.LoadAppIconIfNeeded();
                     _usageRecords.Add(r);
                 }
+
+                // Remove system / idle rows if any slipped through
+                CleanupSystemProcesses();
 
                 // Refresh UI elements on dispatcher
                 DispatcherQueue?.TryEnqueue(() =>
@@ -627,8 +597,6 @@ namespace ScreenTimeTracker
                     }
 
                     UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
-                    _isReloading = false;
                 });
 
                 return records;
@@ -675,6 +643,14 @@ namespace ScreenTimeTracker
                     ApplicationProcessingHelper.ProcessApplicationRecord(r);
                 return list;
             }).Result;
+        }
+
+        private void UpdateTimer_Tick(object? sender, object e)
+        {
+            // Periodic UI update logic: refresh live records, mark chart dirty if needed, etc.
+            RefreshLiveRecords();
+
+            UpdateUsageChart();
         }
     }
 } 

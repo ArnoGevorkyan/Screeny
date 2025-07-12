@@ -1,4 +1,3 @@
-using ScreenTimeTracker.Models;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
 using System.Linq;
@@ -7,6 +6,7 @@ using ScreenTimeTracker.Helpers;
 using System.Collections.Generic;
 using ScreenTimeTracker.Services;
 using System.Collections.ObjectModel;
+using ScreenTimeTracker.Models;
 
 namespace ScreenTimeTracker
 {
@@ -33,54 +33,23 @@ namespace ScreenTimeTracker
             // Update UI text block with formatted total time if available
             if (ChartTimeValue != null)
             {
-                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
+                _viewModel.SetChartTotalTime(totalTime);
             }
         }
 
         // ---------------- Restored helper methods ----------------
         private void CleanupSystemProcesses()
         {
-            // Simplified cleanup: keep only non-system processes or duration >=10s
+            // Remove transient Windows system processes (short-lived) and hide the synthetic "Idle / Away" row.
             if (_usageRecords == null) return;
-            var toRemove = _usageRecords.Where(r => IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds < 10).ToList();
-            foreach (var rec in toRemove) _usageRecords.Remove(rec);
-        }
 
-        private void UpdateAveragePanel(List<AppUsageRecord> aggregatedRecords, DateTime startDate, DateTime endDate)
-        {
-            if (AveragePanel == null || DailyAverage == null) return;
+            var toRemove = _usageRecords.Where(r =>
+                               (IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds < 10) ||
+                               r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase))
+                           .ToList();
 
-            int dayCount = (endDate.Date - startDate.Date).Days + 1;
-            if (dayCount <= 0) dayCount = 1;
-
-            // Sum total duration across all aggregated records.
-            TimeSpan total = TimeSpan.Zero;
-            foreach (var rec in aggregatedRecords)
-                total += rec.Duration;
-
-            // Determine how many days actually have usage
-            int activeDayCount = _usageRecords
-                                 .Where(r => r.Duration.TotalSeconds > 0)
-                                 .Select(r => r.StartTime.Date)
-                                 .Distinct()
-                                 .Count();
-            if (activeDayCount <= 0) activeDayCount = 1; // safeguard
-
-            var avg = TimeSpan.FromSeconds(total.TotalSeconds / activeDayCount);
-
-            DailyAverage.Text = TimeUtil.FormatTimeSpan(avg);
-
-            // Always show average panel for multi-day views
-            AveragePanel.Visibility = Visibility.Visible;
-        }
-
-        private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
-        {
-            // Minimal version: force weekly period & daily chart view then refresh
-            _currentTimePeriod    = TimePeriod.Weekly;
-            _currentChartViewMode = ChartViewMode.Daily;
-            UpdateUsageChart();
-            UpdateSummaryTab(aggregatedRecords);
+            foreach (var rec in toRemove)
+                _usageRecords.Remove(rec);
         }
 
         private void ShowNoDataDialog(DateTime startDate, DateTime endDate)
@@ -130,90 +99,6 @@ namespace ScreenTimeTracker
             Dispose();
         }
 
-        // ---------------- Additional UI helpers migrated from MainWindow.xaml.cs ----------------
-        private void UpdateChartViewMode()
-        {
-            var today = DateTime.Today;
-            var yesterday = today.AddDays(-1);
-
-            bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
-            bool isCustomRange = _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom;
-
-            if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
-            {
-                _currentChartViewMode = ChartViewMode.Hourly;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Hourly View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else if (isLast7Days)
-            {
-                _currentChartViewMode = ChartViewMode.Daily;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Daily View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else if (isCustomRange)
-            {
-                _currentChartViewMode = ChartViewMode.Daily;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Daily View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else
-            {
-                if (_currentTimePeriod == TimePeriod.Daily)
-                {
-                    _currentChartViewMode = ChartViewMode.Hourly;
-
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        if (ViewModeLabel != null)
-                            ViewModeLabel.Text = "Hourly View";
-
-                        if (ViewModePanel != null)
-                            ViewModePanel.Visibility = Visibility.Visible;
-                    });
-                }
-                else
-                {
-                    _currentChartViewMode = ChartViewMode.Daily;
-
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        if (ViewModeLabel != null)
-                            ViewModeLabel.Text = "Daily View";
-
-                        if (ViewModePanel != null)
-                            ViewModePanel.Visibility = Visibility.Visible;
-                    });
-                }
-            }
-
-            if (ViewModePanel != null)
-                ViewModePanel.Visibility = Visibility.Collapsed;
-
-            UpdateUsageChart();
-        }
-
         // Forces the LiveCharts control to refresh completely
         private void ForceChartRefresh()
         {
@@ -227,505 +112,52 @@ namespace ScreenTimeTracker
                 _selectedDate,
                 _selectedEndDate);
 
-            if (ChartTimeValue != null)
-                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
+            _viewModel.SetChartTotalTime(totalTime);
         }
 
-        private void UpdateDatePickerButtonText()
-        {
-            try
-            {
-                if (DatePickerButton == null) return;
-
-                var today = DateTime.Today;
-
-                if (_selectedDate == today && !_isDateRangeSelected)
-                {
-                    DatePickerButton.Content = "Today";
-                    return;
-                }
-
-                if (_selectedDate == today.AddDays(-1) && !_isDateRangeSelected)
-                {
-                    DatePickerButton.Content = "Yesterday";
-                    return;
-                }
-
-                if (_selectedDate == today && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Weekly)
-                {
-                    DatePickerButton.Content = "Last 7 days";
-                    return;
-                }
-
-                if (_selectedDate == today.AddDays(-29) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
-                {
-                    DatePickerButton.Content = "Last 30 days";
-                    return;
-                }
-
-                if (_selectedDate == new DateTime(today.Year, today.Month, 1) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
-                {
-                    DatePickerButton.Content = "This month";
-                    return;
-                }
-
-                if (!_isDateRangeSelected)
-                {
-                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
-                }
-                else if (_selectedEndDate.HasValue)
-                {
-                    DatePickerButton.Content = $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}";
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateDatePickerButtonText: {ex.Message}");
-                if (DatePickerButton != null)
-                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
-            }
-        }
-
-        private void LoadRecordsForLastSevenDays()
-        {
-            try
-            {
-                DateTime today = DateTime.Today;
-                DateTime startDate = today.AddDays(-6);
-
-                var weekRecords = _aggregationService.GetAggregatedRecordsForDateRange(startDate, today);
-
-                UpdateRecordListView(weekRecords);
-                SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {today:MMM d}, {today.Year})");
-
-                if (weekRecords.Any())
-                {
-                    double totalHours = weekRecords.Sum(r => r.Duration.TotalHours);
-                    double dailyAverage = totalHours / 7.0;
-                    System.Diagnostics.Debug.WriteLine($"Daily average: {dailyAverage:F1} h");
-                }
-
-                UpdateChartWithRecords(weekRecords);
-
-                for (var d = startDate; d <= today; d = d.AddDays(1))
-                    LoadRecordsForSpecificDay(d, false);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in LoadRecordsForLastSevenDays: {ex.Message}");
-            }
-        }
-
-        private void UpdateRecordListView(List<AppUsageRecord> records)
-        {
-            try
-            {
-                if (_usageRecords == null) return;
-                _usageRecords.Clear();
-
-                foreach (var r in records.OrderByDescending(r => r.Duration))
-                    _usageRecords.Add(r);
-
-                if (!_disposed && UsageListView != null)
-                {
-                    DispatcherQueue?.TryEnqueue(() =>
-                    {
-                        if (_disposed || UsageListView == null) return;
-                        // ItemsSource binding handles updates automatically
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateRecordListView: {ex.Message}");
-            }
-        }
-
-        private void UpdateChartWithRecords(List<AppUsageRecord> records)
-        {
-            try
-            {
-                _currentTimePeriod = TimePeriod.Weekly;
-                _currentChartViewMode = ChartViewMode.Daily;
-
-                DispatcherQueue?.TryEnqueue(() =>
-                {
-                    if (_disposed) return;
-
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Daily View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-
-                    UpdateUsageChart();
-                    UpdateSummaryTab(records);
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateChartWithRecords: {ex.Message}");
-            }
-        }
-
-        private void SetTimeFrameHeader(string headerText)
-        {
-            try
-            {
-                DispatcherQueue?.TryEnqueue(() =>
-                {
-                    if (_disposed) return;
-
-                    if (DateDisplay != null)
-                    {
-                        DateDisplay.Text = headerText;
-                        System.Diagnostics.Debug.WriteLine($"DateDisplay updated to: {headerText}");
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in SetTimeFrameHeader: {ex.Message}");
-            }
-        }
-
-        private void UpdateSummaryTab()
-        {
-            // Always recalc from authoritative source: the aggregation service + live slice
-            var (start, end) = GetCurrentViewDateRange();
-            var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(start, end);
-            UpdateSummaryTab(aggregated);
-        }
-
-        // Helper returns the date-span currently shown in the UI
-        private (DateTime Start, DateTime End) GetCurrentViewDateRange()
-        {
-            if (_isDateRangeSelected && _selectedEndDate != null)
-            {
-                return (_selectedDate.Date, _selectedEndDate.Value.Date);
-            }
-
-            return (_selectedDate.Date, _selectedDate.Date);
-        }
-
-        private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
-        {
-            try
-            {
-                // With records already aggregated (unique per process), the total screen
-                // time is simply the sum of their durations. This removes the odd double-
-                // counting we saw when we tried to rebuild intervals for every tick.
-
-                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
-
-                // Cap to a realistic maximum: 24 h per day * days in period
-                int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
-                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
-                if (totalTime > absoluteMaxDuration)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
-                    totalTime = absoluteMaxDuration;
-                }
-
-                // Update summary UI – total screen time block
-                if (TotalScreenTime != null)
-                {
-                    TotalScreenTime.Text = TimeUtil.FormatTimeSpan(totalTime);
-                }
-
-                // Compute idle time and update IdleRow visibility
-                var idleTotal = recordsToSummarize
-                                    .Where(r => r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase))
-                                    .Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
-
-                if (IdleRow != null && IdleTimeValue != null)
-                {
-                    if (idleTotal.TotalSeconds >= 5)
-                    {
-                        IdleRow.Visibility = Visibility.Visible;
-                        IdleTimeValue.Text = TimeUtil.FormatTimeSpan(idleTotal);
-                    }
-                    else
-                    {
-                        IdleRow.Visibility = Visibility.Collapsed;
-                    }
-                }
-
-                // Determine most-used application within the supplied list (excluding idle)
-                AppUsageRecord? mostUsedApp = null;
-                foreach (var record in recordsToSummarize)
-                {
-                    if (record.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase)) continue;
-                    var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
-                    if (mostUsedApp == null || capped > mostUsedApp.Duration)
-                        mostUsedApp = record;
-                }
-
-                if (mostUsedApp != null)
-                {
-                    if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
-                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsedApp.Duration);
-
-                    // Ensure icon is loaded (deferred)
-                    mostUsedApp.LoadAppIconIfNeeded();
-
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        if (mostUsedApp.AppIcon != null)
-                        {
-                            MostUsedAppIcon.Source = mostUsedApp.AppIcon;
-                            MostUsedAppIcon.Visibility = Visibility.Visible;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
-                        }
-                        else
-                        {
-                            MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                        }
-                    }
-                }
-                else
-                {
-                    if (MostUsedApp != null)       MostUsedApp.Text = "None";
-                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(TimeSpan.Zero);
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error updating summary tab: {ex.Message}");
-            }
-        }
-
-        // ---------------- TitleBar & DatePicker button handlers ----------------
-        private void MinimizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MinimizeWindow();
-        private void MaximizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MaximizeOrRestoreWindow();
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
-        {
-            _trackingService.StopTracking();
-            _windowHelper.CloseWindow();
-        }
-
-        private void DatePickerButton_Click(object sender, RoutedEventArgs e)
-        {
-            _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
-        }
-
-        // ---------------- UI refresh & tracking events migrated from XAML partial ----------------
-        private void SetUpUiElements()
-        {
-            // Initialize the date button text and timers
-            UpdateDatePickerButtonText();
-
-            // Timers were configured in constructor; ensure delegates attached
-            _updateTimer.Tick += UpdateTimer_Tick;
-            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-
-            // _usageRecords collection already initialised in MainWindow constructor.
-        }
-
-        private void UpdateTimer_Tick(object? sender, object e)
-        {
-            try
-            {
-                if (_disposed || _usageRecords == null) return;
-                if (_isReloading) return; // avoid live updates during dataset rebuild
-                if (_trackingService == null || !_trackingService.IsTracking) return;
-
-                // -------------------------------------------------------------
-                // Guard: only apply live updates if the active view includes today
-                // -------------------------------------------------------------
-                bool viewIncludesToday;
-                if (_isDateRangeSelected)
-                {
-                    if (_selectedEndDate == null)
-                    {
-                        viewIncludesToday = false;
-                    }
-                    else
-                    {
-                        viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
-                    }
-                }
-                else
-                {
-                    viewIncludesToday = _selectedDate.Date == DateTime.Today;
-                }
-
-                if (!viewIncludesToday)
-                    return; // Ignore live tracking updates for historic views
-
-                // Increment duration only for focused record to minimize UI churn
-                var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
-                activeRec?.RaiseDurationChanged();
-
-                // If the focused record still lacks icon, retry fetch (may succeed once window sets its icon)
-                if (activeRec != null && activeRec.AppIcon == null)
-                {
-                    activeRec.LoadAppIconIfNeeded();
-                }
-
-                // Update total time using unified helper (avoids code duplication & flicker)
-                try
-                {
-                    var (start,end) = GetCurrentViewDateRange();
-                    var agg = _aggregationService.GetAggregatedRecordsForDateRange(start,end);
-                    var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
-                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
-                }
-                catch { /* swallow race conditions */ }
-
-                // Throttle chart refresh scheduling: no change but we'll modify ChartRefreshTimer_Tick.
-                _chartStaleSeconds++;
-                if (_chartStaleSeconds >= 15)
-                {
-                    _isChartDirty     = true;
-                    _chartStaleSeconds = 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateTimer_Tick: {ex.Message}");
-            }
-        }
-
-        private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
-        {
-            if (_disposed) return;
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                try
-                {
-                    // --- keep check whether current view includes today ---
-                    bool viewIncludesToday = !_isDateRangeSelected ? _selectedDate.Date == DateTime.Today : (_selectedEndDate != null && _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today);
-                    if (!viewIncludesToday) return;
-                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
-
-                    // Mark chart for deferred refresh
-                    UpdateOrAddLiveRecord(record);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in UsageRecordUpdated handler: {ex.Message}");
-                }
-            });
-        }
-
-        private void TrackingService_WindowChanged(object? sender, EventArgs e)
-        {
-            if (_disposed) return;
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                try
-                {
-                    // -------------------------------------------------------------
-                    // Guard: only apply live updates if the active view includes today
-                    // -------------------------------------------------------------
-                    bool viewIncludesToday;
-                    if (_isDateRangeSelected)
-                    {
-                        if (_selectedEndDate == null)
-                        {
-                            viewIncludesToday = false;
-                        }
-                        else
-                        {
-                            viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
-                        }
-                    }
-                    else
-                    {
-                        viewIncludesToday = _selectedDate.Date == DateTime.Today;
-                    }
-
-                    if (!viewIncludesToday)
-                        return; // Ignore live tracking updates for historic views
-
-                    // Clear focus flags then set on the current record
-                    foreach (var rec in _usageRecords) rec.SetFocus(false);
-                    var current = _trackingService?.CurrentRecord;
-                    if (current != null)
-                    {
-                        ApplicationProcessingHelper.ProcessApplicationRecord(current);
-                        var uiRec = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
-                        uiRec?.SetFocus(true);
-                    }
-                    _isChartDirty = true;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in WindowChanged handler: {ex.Message}");
-                }
-            });
-        }
-
-        // Helper: update or insert a live record without rebuilding the entire list (reduces flicker)
-        private void UpdateOrAddLiveRecord(AppUsageRecord record)
-        {
-            try
-            {
-                ApplicationProcessingHelper.ProcessApplicationRecord(record);
-
-                var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
-
-                if (existing == null)
-                {
-                    // New app appearing – add once
-                    record.LoadAppIconIfNeeded();
-                    _usageRecords.Add(record);
-                }
-                else
-                {
-                    // Update duration & focus flag even if same instance
-                    if (!ReferenceEquals(existing, record))
-                    {
-                        if (record.Duration > existing.Duration)
-                            existing._accumulatedDuration = record.Duration;
-                    }
-
-                    if (record.IsFocused)
-                    {
-                        foreach (var r in _usageRecords) r.SetFocus(false);
-                        existing.SetFocus(true);
-                    }
-
-                    existing.RaiseDurationChanged();
-                }
-
-                // Mark chart for refresh in deferred timer
-                _isChartDirty = true;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateOrAddLiveRecord: {ex.Message}");
-            }
-        }
-
-        // Helper: rebuild live records list for today (used on initial load)
         private void RefreshLiveRecords()
         {
-            try
-            {
-                var live = _aggregationService.GetDetailRecordsForDate(DateTime.Today);
-                _usageRecords.Clear();
-                foreach (var r in live.OrderByDescending(r => r.Duration))
-                {
-                    r.LoadAppIconIfNeeded();
-                    _usageRecords.Add(r);
-                }
+            var liveRecords = _trackingService.GetRecords();
+            var focusedRecord = liveRecords.FirstOrDefault(r => r.IsFocused);
 
-                // Ensure chart and summary refresh
-                _isChartDirty = true;
-                UpdateSummaryTab(_usageRecords.ToList());
-            }
-            catch (Exception ex)
+            // Update existing records or add new ones
+            foreach (var record in liveRecords)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in RefreshLiveRecords: {ex.Message}");
+                UpdateOrAddLiveRecord(record);
             }
+
+            // Update chart
+            UpdateUsageChart(focusedRecord);
+
+            // Calculate and update summary via ViewModel
+            List<AppUsageRecord> allRecords = _usageRecords.ToList();
+            TimeSpan totalTime = CalculateTotalActiveTime(allRecords);
+            double idleSeconds = allRecords.Where(r => r.IsIdle).Sum(r => r.Duration.TotalSeconds);
+            TimeSpan idleTotal = TimeSpan.FromSeconds(idleSeconds);
+            var mostUsedApp = allRecords.OrderByDescending(r => r.Duration).FirstOrDefault();
+            string mostUsedName = mostUsedApp?.ApplicationName ?? "N/A";
+            TimeSpan mostUsedDuration = mostUsedApp?.Duration ?? TimeSpan.Zero;
+            TimeSpan? dailyAverage = null; // Adjust if needed
+            Microsoft.UI.Xaml.Media.Imaging.BitmapImage? mostUsedIcon = mostUsedApp?.AppIcon;
+
+            _viewModel.UpdateSummary(totalTime, idleTotal, mostUsedName, mostUsedDuration, dailyAverage, mostUsedIcon);
+        }
+
+        private void TrackingService_WindowChanged(object sender, EventArgs e)
+        {
+            RefreshLiveRecords();
+        }
+
+        private void TrackingService_UsageRecordUpdated(object sender, AppUsageRecord rec)
+        {
+            UpdateOrAddLiveRecord(rec);
+        }
+
+        private void UpdateOrAddLiveRecord(AppUsageRecord record)
+        {
+            if (record == null) return;
+            RecordListBinder.UpdateOrAdd(_usageRecords, record);
+            // Additional updates if needed, e.g., notify changes
         }
     }
 } 

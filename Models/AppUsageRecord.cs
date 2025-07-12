@@ -341,5 +341,7 @@ namespace ScreenTimeTracker.Models
             NotifyPropertyChanged(nameof(Duration));
             NotifyPropertyChanged(nameof(FormattedDuration));
         }
+
+        public bool IsIdle => ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase);
     }
 } 

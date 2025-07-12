@@ -8,6 +8,8 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:ScreenTimeTracker.Models"
     xmlns:lvc="using:LiveChartsCore.SkiaSharpView.WinUI"
+    xmlns:converters="using:Microsoft.UI.Xaml.Converters"
+    xmlns:conv="using:ScreenTimeTracker"
     mc:Ignorable="d"
     Closed="Window_Closed">
 
@@ -18,12 +20,13 @@
     <!-- Main container with fixed header and scrollable content -->
     <Grid Margin="20">
         <Grid.Resources>
-            <local:NullToVisibleConverter x:Key="NullToVisibleConverter"/>
-            <local:NotNullToVisibleConverter x:Key="NotNullToVisibleConverter"/>
-            <local:DateDisplayConverter x:Key="DateDisplayConverter"/>
-            <local:ChartViewModeToLabelConverter x:Key="ChartViewModeToLabelConverter"/>
-            <local:BoolToTrackingTextConverter x:Key="BoolToTrackingTextConverter"/>
-            <local:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
+            <conv:NullToVisibleConverter x:Key="NullToVisibleConverter"/>
+            <conv:NotNullToVisibleConverter x:Key="NotNullToVisibleConverter"/>
+            <conv:DateDisplayConverter x:Key="DateDisplayConverter"/>
+            <conv:ChartViewModeToLabelConverter x:Key="ChartViewModeToLabelConverter"/>
+            <conv:BoolToTrackingTextConverter x:Key="BoolToTrackingTextConverter"/>
+            <conv:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
+            <conv:BoolToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
         </Grid.Resources>
         <Grid.RowDefinitions>
             <!-- Fixed header area -->
@@ -90,7 +93,7 @@
                         Visibility="Collapsed"/>
                 <Button x:Name="StopButton"
                         Content="Stop Tracking"
-                        Command="{Binding StopTrackingCommand}"
+                        Command="{Binding EndTrackingCommand}"
                         IsEnabled="False"
                         Visibility="Collapsed"/>
 
@@ -180,7 +183,7 @@
                                       Opacity="0.8"
                                       VerticalAlignment="Center"/>
                             <TextBlock x:Name="ChartTimeValue" 
-                                      Text="0h 0m 0s"
+                                      Text="{Binding ChartTotalTimeDisplay}" 
                                       Style="{ThemeResource CaptionTextBlockStyle}"
                                       FontSize="12"
                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -188,20 +191,16 @@
                         </StackPanel>
 
                         <!-- View Toggle Buttons (similar to screenshot) -->
-                        <StackPanel x:Name="ViewModePanel" 
-                                    Orientation="Horizontal" 
+                        <Button x:Name="ViewModeToggle"
                                     Grid.Column="1"
-                                    CornerRadius="4"
-                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    Padding="4"
-                                    Visibility="Collapsed">
+                                Command="{Binding ToggleViewModeCommand}"
+                                Style="{ThemeResource SubtleButtonStyle}"
+                                Padding="8,4">
                             <TextBlock x:Name="ViewModeLabel"
                                       Text="{Binding CurrentChartViewMode, Converter={StaticResource ChartViewModeToLabelConverter}}" 
-                                      Padding="12,4"
-                                      VerticalAlignment="Center"/>
-                        </StackPanel>
+                                      VerticalAlignment="Center"
+                                      Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        </Button>
                     </Grid>
                     
                     <!-- Loading indicator overlay -->
@@ -212,8 +211,7 @@
                                 Height="50"
                                 Visibility="Collapsed"
                                 HorizontalAlignment="Center" 
-                                VerticalAlignment="Center" 
-                                Canvas.ZIndex="100"/>
+                                VerticalAlignment="Center" />
                                 
                     <!-- LiveCharts Control -->
                     <lvc:CartesianChart 
@@ -243,118 +241,99 @@
                           BorderThickness="0,0,0,1"
                           Padding="20,12">
                         <TextBlock x:Name="SummaryTitle" 
-                                  Text="Daily Screen Time Summary" 
+                                  Text="{Binding SummaryTitle}" 
                                   Style="{ThemeResource BodyStrongTextBlockStyle}"
                                   VerticalAlignment="Center"/>
                     </Grid>
                     
                     <!-- Summary Content -->
-                    <Grid Grid.Row="1" Padding="20,16">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="12"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="12"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="12"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="12"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="1" 
+                                Padding="20,16"
+                                Spacing="16">
                         
-                        <!-- Date Display (moved from header) -->
-                        <TextBlock Grid.Row="0"
-                                   x:Name="DateDisplay"
-                                   Text="{Binding SelectedDate, Converter={StaticResource DateDisplayConverter}}"
-                                   Style="{ThemeResource CaptionTextBlockStyle}"
-                                   VerticalAlignment="Center"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        
-                        <!-- Total Screen Time -->
-                        <Grid Grid.Row="2">
+                        <!-- Total Time Row -->
+                        <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Total:" 
-                                      Style="{ThemeResource BodyTextBlockStyle}"
-                                      VerticalAlignment="Center"
-                                      Grid.Column="0"/>
+                            <FontIcon Glyph="&#xE916;" FontSize="16" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="Total Screen Time" Margin="12,0,0,0" VerticalAlignment="Center"/>
                             <TextBlock x:Name="TotalScreenTime" 
-                                      Text="0h 0m" 
+                                      Grid.Column="2" 
+                                      Text="{Binding TotalScreenTimeDisplay}" 
                                       Style="{ThemeResource BodyStrongTextBlockStyle}"
-                                      Foreground="{ThemeResource AccentFillColorDefaultBrush}"
-                                      VerticalAlignment="Center"
-                                      Grid.Column="1"/>
+                                      HorizontalAlignment="Right"/>
                         </Grid>
                         
-                        <!-- Most Used App -->
-                        <Grid Grid.Row="4">
+                        <!-- Most Used App Row -->
+                        <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Most Used:" 
-                                      Style="{ThemeResource BodyTextBlockStyle}"
-                                      VerticalAlignment="Center"
-                                      Grid.Column="0"/>
-                            <StackPanel Orientation="Horizontal" Grid.Column="1">
-                                <!-- App Icon -->
-                                <Grid Width="20" Height="20" VerticalAlignment="Center" Margin="0,0,8,0">
-                                    <FontIcon x:Name="MostUsedPlaceholderIcon"
-                                              Glyph="&#xE700;"
+                            <!-- Icon updates based on view model -->
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xECAA;" 
                                               FontSize="16"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                                          Visibility="{Binding HasNoMostUsedIcon, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                     <Image x:Name="MostUsedAppIcon"
-                                           Width="20" Height="20" Stretch="Uniform"/>
+                                       Source="{Binding MostUsedAppIcon}"
+                                       Visibility="{Binding HasMostUsedIcon, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 </Grid>
+
                                 <TextBlock x:Name="MostUsedApp" 
-                                          Text="None" 
-                                          Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                       Grid.Column="1" 
+                                       Text="{Binding MostUsedAppName}" 
+                                       Margin="12,0,0,0" 
                                           VerticalAlignment="Center"/>
-                                <TextBlock Text=" " 
-                                          VerticalAlignment="Center"
-                                          Margin="4,0,0,0"/>
                                 <TextBlock x:Name="MostUsedAppTime" 
-                                          Text="0h 0m" 
-                                          Style="{ThemeResource BodyTextBlockStyle}"
-                                          VerticalAlignment="Center"/>
-                            </StackPanel>
+                                       Grid.Column="2" 
+                                       Text="{Binding MostUsedAppDurationDisplay}" 
+                                       Style="{ThemeResource BodyStrongTextBlockStyle}" 
+                                       HorizontalAlignment="Right"/>
                         </Grid>
                         
-                        <!-- Idle/Away Time -->
-                        <Grid Grid.Row="6" x:Name="IdleRow" Visibility="Collapsed">
+                        <!-- Idle Time Row -->
+                        <Grid x:Name="IdleRow" Visibility="{Binding IsIdleRowVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Idle:" Style="{ThemeResource BodyTextBlockStyle}" VerticalAlignment="Center" Grid.Column="0"/>
-                            <TextBlock x:Name="IdleTimeValue" Text="0h 0m" Style="{ThemeResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" Grid.Column="1"/>
+                            <FontIcon Glyph="&#xECCB;" FontSize="16" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="Idle Time" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="IdleTimeValue" 
+                                       Grid.Column="2" 
+                                       Text="{Binding IdleDurationDisplay}" 
+                                       Style="{ThemeResource BodyStrongTextBlockStyle}" 
+                                       HorizontalAlignment="Right"/>
                         </Grid>
                         
-                        <!-- Daily Average (for weekly/monthly views) -->
-                        <Grid Grid.Row="8"
-                              x:Name="AveragePanel"
-                              Visibility="Collapsed">
+                        <!-- Daily Average Row -->
+                        <Grid x:Name="AveragePanel" Visibility="{Binding DailyAverageDisplay, Converter={StaticResource NotNullToVisibleConverter}}">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Daily Average:" 
-                                      Style="{ThemeResource BodyTextBlockStyle}"
-                                      VerticalAlignment="Center"
-                                      Grid.Column="0"/>
+                            <FontIcon Glyph="&#xF0E3;" FontSize="16" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="Daily Average" Margin="12,0,0,0" VerticalAlignment="Center"/>
                             <TextBlock x:Name="DailyAverage" 
-                                      Text="0h 0m" 
+                                       Grid.Column="2" 
+                                       Text="{Binding DailyAverageDisplay}" 
                                       Style="{ThemeResource BodyStrongTextBlockStyle}"
-                                      VerticalAlignment="Center"
-                                      Grid.Column="1"/>
+                                       HorizontalAlignment="Right"/>
                         </Grid>
-                    </Grid>
+                    </StackPanel>
                 </Grid>
                 
-                <!-- App List -->
+                <!-- Spacer -->
+                <Grid Grid.Row="3" Height="8"/>
+
+                <!-- List Section -->
                 <ListView x:Name="UsageListView" 
                           ItemsSource="{Binding Records}"
                           Grid.Row="4"

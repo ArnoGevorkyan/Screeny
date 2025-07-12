@@ -15,6 +15,7 @@ using ScreenTimeTracker.Helpers;
 using Microsoft.UI.Dispatching;
 using System.Diagnostics; // Add for Debug.WriteLine
 using System.ComponentModel;
+using ScreenTimeTracker.Infrastructure;
 
 namespace ScreenTimeTracker
 {
@@ -25,11 +26,10 @@ namespace ScreenTimeTracker
     {
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
-        private ObservableCollection<AppUsageRecord> _usageRecords;
+        // Forward-only property – removes the redundant in-memory copy.
+        private ObservableCollection<AppUsageRecord> _usageRecords => _viewModel.Records;
         private bool _disposed;
         private bool _iconsRefreshedOnce = false;
-        // Counter used by UpdateTimer_Tick to decide when to mark the chart dirty again
-        private int _chartStaleSeconds = 0;
         
         // Static constructor to configure LiveCharts
         static MainWindow()
@@ -144,9 +144,10 @@ namespace ScreenTimeTracker
 
         private DispatcherTimer _updateTimer;
         private DispatcherTimer _autoSaveTimer;
-        private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
-        private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
-        private bool _isReloading = false;  // true while usage records are being regenerated
+
+        // Event bus subscriptions disposables
+        private IDisposable? _busSubA;
+        private IDisposable? _busSubB;
 
         public MainWindow()
         {
@@ -167,8 +168,7 @@ namespace ScreenTimeTracker
                 fe.DataContext = _viewModel;
             }
 
-            // Alias local collection to ViewModel collection
-            _usageRecords = _viewModel.Records;
+            // _usageRecords now directly references ViewModel.Records – no alias required.
 
             // Get window handle AFTER InitializeComponent
             _hWnd = WindowNative.GetWindowHandle(this);
@@ -211,12 +211,10 @@ namespace ScreenTimeTracker
             }
             _trackingService = new WindowTrackingService(_databaseService);
 
-            // Set up tracking service events
-            _trackingService.WindowChanged += TrackingService_WindowChanged;
-            _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
+            // Subscribe to central event bus instead of direct service events
+            _busSubA = ScreenTimeTracker.Infrastructure.ScreenyEventBus.Instance.Subscribe<ScreenTimeTracker.Infrastructure.WindowChangedMessage>(_ => TrackingService_WindowChanged(this, EventArgs.Empty));
+            _busSubB = ScreenTimeTracker.Infrastructure.ScreenyEventBus.Instance.Subscribe<ScreenTimeTracker.Models.AppUsageRecord>(rec => TrackingService_UsageRecordUpdated(this, rec));
             
-            System.Diagnostics.Debug.WriteLine("MainWindow: Tracking service events registered");
-
             // Handle window closing
             this.Closed += (sender, args) =>
             {
@@ -227,8 +225,6 @@ namespace ScreenTimeTracker
             FrameworkElement root = (FrameworkElement)Content;
             root.Loaded += MainWindow_Loaded;
             
-            System.Diagnostics.Debug.WriteLine("MainWindow constructor completed");
-
             // Initialize the date picker popup
             _datePickerPopup = new DatePickerPopup(this);
             _datePickerPopup.SingleDateSelected += DatePickerPopup_SingleDateSelected;
@@ -257,10 +253,7 @@ namespace ScreenTimeTracker
             _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
             _autoSaveTimer.Tick += AutoSaveTimer_Tick;
 
-            // NEW: configure batched chart refresh timer (5-second pulse)
-            _chartRefreshTimer = new DispatcherTimer();
-            _chartRefreshTimer.Interval = TimeSpan.FromSeconds(5); // slower, reduces CPU
-            _chartRefreshTimer.Tick += ChartRefreshTimer_Tick;
+            // Removed: _chartRefreshTimer – consolidated into 1-second UI timer
 
             // Timer to retry loading icons that are still null
             _missingIconTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -268,11 +261,11 @@ namespace ScreenTimeTracker
             _missingIconTimer.Start();
 
             // Hook ViewModel command events
-            _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
-            _viewModel.OnStopTrackingRequested     += (_, __) => StopTracking();
+            _viewModel.OnStartTrackingRequested    += (_, __) => BeginTracking();
+            _viewModel.OnEndTrackingRequested     += (_, __) => EndTracking();
             _viewModel.OnToggleTrackingRequested   += (_, __) =>
             {
-                if (_trackingService.IsTracking) StopTracking(); else StartTracking();
+                if (_trackingService.IsTracking) EndTracking(); else BeginTracking();
             };
             _viewModel.OnPickDateRequested         += (_, __) =>
             {
@@ -294,7 +287,6 @@ namespace ScreenTimeTracker
         {
             if (_hWnd == IntPtr.Zero)
             {
-                Debug.WriteLine("Cannot subclass window: HWND is zero.");
                 return;
             }
             
@@ -307,12 +299,11 @@ namespace ScreenTimeTracker
             if (_oldWndProc == IntPtr.Zero)
             {
                  int error = Marshal.GetLastWin32Error();
-                 Debug.WriteLine($"Failed to subclass window procedure. Error code: {error}");
                  _newWndProcDelegate = null; // Clear delegate if failed
             }
              else
              {
-                 Debug.WriteLine("Successfully subclassed window procedure.");
+                 // Removed verbose log
              }
         }
 
@@ -323,7 +314,7 @@ namespace ScreenTimeTracker
                  SetWindowLongPtr(_hWnd, GWLP_WNDPROC, _oldWndProc);
                  _oldWndProc = IntPtr.Zero;
                  _newWndProcDelegate = null; // Allow delegate to be garbage collected
-                 Debug.WriteLine("Restored original window procedure.");
+                 // Removed verbose log
              }
         }
 
@@ -387,17 +378,15 @@ namespace ScreenTimeTracker
                 // 0 = Off, 1 = On, 2 = Dimmed
                 if (data == 0) // Display turning off (potential sleep)
                 {
-                    Debug.WriteLine("Power Event: Console Display State - OFF");
                     _trackingService?.PauseTrackingForSuspend();
                 }
                 else if (data == 1) // Display turning on (potential resume)
                 {
-                     Debug.WriteLine("Power Event: Console Display State - ON");
                      _trackingService?.ResumeTrackingAfterSuspend();
                 }
                  else
                  {
-                      Debug.WriteLine($"Power Event: Console Display State - DIMMED ({data})");
+                      // Removed verbose log
                  }
             }
             else if (settingGuid == GuidSystemAwayMode)
@@ -405,12 +394,10 @@ namespace ScreenTimeTracker
                 // 1 = Entering Away Mode, 0 = Exiting Away Mode
                 if (data == 1) // Entering away mode (sleep)
                 {
-                     Debug.WriteLine("Power Event: System Away Mode - ENTERING");
                      _trackingService?.PauseTrackingForSuspend();
                 }
                 else if (data == 0) // Exiting away mode (resume)
                 {
-                    Debug.WriteLine("Power Event: System Away Mode - EXITING");
                     _trackingService?.ResumeTrackingAfterSuspend();
                 }
             }
@@ -435,8 +422,6 @@ namespace ScreenTimeTracker
         // New method to handle initialization after window is loaded - Made async void
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine("MainWindow_Loaded event triggered");
-            
             try
             {
                 ThrowIfDisposed(); // Check if already disposed early
@@ -446,7 +431,6 @@ namespace ScreenTimeTracker
                 {
                     SubclassWindow(); // Subclass here
                     _trayIconHelper = new TrayIconHelper(_hWnd); // Initialize here
-                    Debug.WriteLine("TrayIconHelper initialized in Loaded.");
                     // Subscribe to TrayIconHelper events
                     if (_trayIconHelper != null)
                     {
@@ -457,7 +441,7 @@ namespace ScreenTimeTracker
                 }
                 else
                 {
-                    Debug.WriteLine("WARNING: Skipping SubclassWindow/TrayIcon init in Loaded due to missing HWND.");
+                    // Removed verbose log
                 }
                 // --- End moved section ---
 
@@ -468,11 +452,11 @@ namespace ScreenTimeTracker
                 if (AppTitleBar != null) // Check if the XAML element exists
                 {
                     this.SetTitleBar(AppTitleBar); // Correct: Call SetTitleBar on the Window itself
-                    Debug.WriteLine("Set AppTitleBar as the custom title bar using Window.SetTitleBar.");
+                    // Removed verbose log
                 }
                 else
                 {
-                    Debug.WriteLine("WARNING: Could not set custom title bar (AppTitleBar XAML element is null).");
+                    // Removed verbose log
                 }
 
                 // Double-check our selected date is valid (not in the future)
@@ -484,21 +468,19 @@ namespace ScreenTimeTracker
                 }
                 
                 // Set up UI elements
-                SetUpUiElements();
-                
                 // Check if this is the first run
                 CheckFirstRun();
                 
                 // Set today's date and update button text
                 _selectedDate = DateTime.Today;
                 _currentTimePeriod = TimePeriod.Daily; // Default to daily view
-                UpdateDatePickerButtonText();
+                // UpdateDatePickerButtonText(); // Removed as per edit hint
                 
                 // Set the selected date display
-                if (DateDisplay != null)
-                {
-                    DateDisplay.Text = "Today";
-                }
+                // if (DateDisplay != null) // Removed as per edit hint
+                // {
+                //     DateDisplay.Text = "Today";
+                // }
                 
                 // Load today's records (assuming LoadRecordsForDate handles its internal errors)
                 LoadRecordsForDate(_selectedDate);
@@ -523,10 +505,10 @@ namespace ScreenTimeTracker
                     }
                     
                     // Hide the view mode panel (user can't change the view for Today)
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
+                    // if (ViewModePanel != null) // Removed as per edit hint
+                    // {
+                    //     ViewModePanel.Visibility = Visibility.Collapsed;
+                    // }
                 });
 
                 // Register for power notifications AFTER window handle is valid and before tracking starts
@@ -539,19 +521,9 @@ namespace ScreenTimeTracker
                 _trayIconHelper?.AddIcon(trayTooltip);
 
                 // Start tracking automatically (assuming StartTracking handles its internal errors)
-                StartTracking();
+                BeginTracking();
                 
-                // Log the startup status
-                if (App.StartedFromWindowsStartup)
-                {
-                    System.Diagnostics.Debug.WriteLine("MainWindow loaded - Started from Windows startup, running in background");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("MainWindow loaded - Normal startup, window visible");
-                }
-                
-                System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
+                // Removed verbose logs for window loaded status
 
                 // Schedule a one-time icon refresh so updated pipeline can replace old cached icons
                 if (!_iconsRefreshedOnce)
@@ -623,7 +595,7 @@ namespace ScreenTimeTracker
         private void CheckFirstRun()
         {
             // Welcome message has been removed as requested
-            System.Diagnostics.Debug.WriteLine("First run check - welcome message disabled");
+            // Removed verbose log
         }
 
         // TrackingService_WindowChanged implementation moved to MainWindow.UI.cs
@@ -639,86 +611,11 @@ namespace ScreenTimeTracker
                 _selectedEndDate = null;
                 _isDateRangeSelected = false;
                 
-                // Update button text
-                UpdateDatePickerButtonText();
+                // Update ViewModel properties instead of direct UI
+                _viewModel.DateDisplayText = (selectedDate == DateTime.Today) ? "Today" : selectedDate.ToString("MMM d, yyyy");
+                _viewModel.IsViewModePanelVisible = true;
                 
-                // Special handling for Today vs. other days
-                var today = DateTime.Today;
-                if (_selectedDate == today)
-                {
-                    System.Diagnostics.Debug.WriteLine("Switching to Today view");
-                    
-                    // For "Today", use the current tracking settings
-                    _currentTimePeriod = TimePeriod.Daily;
-                    _currentChartViewMode = ChartViewMode.Hourly;
-                    
-                    // --- REVISED: Load data safely on UI thread using async/await --- 
-                    DispatcherQueue.TryEnqueue(async () => { // Make lambda async
-                        try
-                        {
-                            // Update view mode UI first
-                            if (ViewModeLabel != null) ViewModeLabel.Text = "Hourly View";
-                            if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
-                            
-                            // Show loading indicator
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
-
-                            // Short delay to allow UI to update (render loading indicator)
-                            await Task.Delay(50); 
-
-                            // Load data directly on UI thread
-                            LoadRecordsForDate(_selectedDate);
-
-                            // Hide loading indicator AFTER loading is done
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-                            
-                             System.Diagnostics.Debug.WriteLine("Today view loaded successfully on UI thread.");
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for Today view: {ex.Message}");
-                            // Hide loading indicator in case of error
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-                            // Optionally show error dialog
-                        }
-                    });
-                    // --- END REVISED --- 
-                }
-                else // Handle selection of other single dates
-                {
-                   // ... (Existing logic for other single dates, keep similar async pattern if needed) ...
-                    // Ensure we switch to Daily period when selecting a single past date
-                    _currentTimePeriod = TimePeriod.Daily;
-                    
-                    // --- REVISED: Load data safely on UI thread using async/await --- 
-                    DispatcherQueue.TryEnqueue(async () => { // Make lambda async
-                        try
-                        {
-                            // Show loading indicator
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
-                            
-                            // Short delay to allow UI to update
-                            await Task.Delay(50); 
-                            
-                            // Load the data directly on UI thread
-                            LoadRecordsForDate(_selectedDate);
-                            UpdateChartViewMode(); // Update chart view after loading
-                            
-                            // Hide loading indicator AFTER loading is done
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-
-                            System.Diagnostics.Debug.WriteLine("Past date view loaded successfully on UI thread.");
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for past date view: {ex.Message}");
-                            // Hide loading indicator in case of error
-                            if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-                            // Optionally show error dialog
-                        }
-                    });
-                     // --- END REVISED --- 
-                }
+                LoadRecordsForDate(selectedDate);
             }
             catch (Exception ex)
             {
@@ -759,154 +656,11 @@ namespace ScreenTimeTracker
                 _selectedEndDate = end;
             _isDateRangeSelected = true;
             
-            // Update button text
-            UpdateDatePickerButtonText();
+            // Update ViewModel properties
+            _viewModel.DateDisplayText = $"{start:MMM d} - {end:MMM d}";
+            _viewModel.IsViewModePanelVisible = false;
             
-            // For Last 7 days, ensure we're in Weekly time period and force Daily view
-                bool isLast7Days = (_selectedDate == today.AddDays(-6) && _selectedEndDate == today);
-                
-                bool isLast30Days = (_selectedDate == today.AddDays(-29) && _selectedEndDate == today);
-                bool isThisMonth = (_selectedDate == new DateTime(today.Year, today.Month, 1) && _selectedEndDate == today);
-                
-                if (isLast7Days)
-            {
-                _currentTimePeriod = TimePeriod.Weekly;
-                _currentChartViewMode = ChartViewMode.Daily;
-                
-                // Update view mode label and hide toggle panel
-                DispatcherQueue.TryEnqueue(async () => {
-                    try
-                    {
-                        // Update UI first
-                        if (ViewModeLabel != null)
-                        {
-                            ViewModeLabel.Text = "Daily View";
-                        }
-                        
-                        // Hide the view mode panel (user can't change the view)
-                        if (ViewModePanel != null)
-                        {
-                            ViewModePanel.Visibility = Visibility.Collapsed;
-                        }
-                        
-                        // Show loading indicator
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Visible;
-                        }
-                        
-                        // Short delay to allow UI to update
-                        await Task.Delay(50);
-                        
-                            try
-                            {
-                        // Load the data directly on UI thread
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                        
-                                System.Diagnostics.Debug.WriteLine("Last 7 days view loaded successfully on UI thread");
-                            }
-                            catch (Exception loadEx)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Error loading records for Last 7 days: {loadEx.Message}");
-                                System.Diagnostics.Debug.WriteLine(loadEx.StackTrace);
-                            }
-                            finally
-                            {
-                                // Hide loading indicator AFTER loading attempt, regardless of success
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                        }
-                            }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for Last 7 days view: {ex.Message}");
-                            System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                            
-                        // Hide loading indicator in case of error
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                        }
-                    }
-                });
-            }
-            else if (isLast30Days || isThisMonth)
-            {
-                // Treat as custom range
-                _currentTimePeriod = TimePeriod.Custom;
-                _currentChartViewMode = ChartViewMode.Daily;
-                DispatcherQueue.TryEnqueue(async () => {
-                    try
-                    {
-                        if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
-                        if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
-
-                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
-                        await Task.Delay(50);
-
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-
-                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error loading records for custom preset: {ex.Message}");
-                        if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
-                    }
-                });
-            }
-            else
-            {
-                    // Similar pattern for other date ranges
-                // Load records for the date range - use DispatcherQueue to allow UI to update first
-                DispatcherQueue.TryEnqueue(async () => {
-                    try
-                    {
-                        // Show loading indicator
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Visible;
-                        }
-                        
-                        // Short delay to allow UI to update
-                        await Task.Delay(50);
-                        
-                            try
-                            {
-                        // Load the data directly on UI thread
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
-                        
-                                System.Diagnostics.Debug.WriteLine("Date range view loaded successfully on UI thread");
-                            }
-                            catch (Exception loadEx)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {loadEx.Message}");
-                                System.Diagnostics.Debug.WriteLine(loadEx.StackTrace);
-                            }
-                            finally
-                            {
-                        // Hide loading indicator
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                        }
-                            }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error loading/updating UI for date range view: {ex.Message}");
-                            System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                            
-                        // Hide loading indicator in case of error
-                        if (LoadingIndicator != null)
-                        {
-                            LoadingIndicator.Visibility = Visibility.Collapsed;
-                        }
-                    }
-                });
-                }
+            LoadRecordsForDateRange(start, end);
             }
             catch (Exception ex)
             {
@@ -918,8 +672,7 @@ namespace ScreenTimeTracker
         // Event Handlers for Tray Icon Clicks
         private void TrayIcon_ShowClicked(object? sender, EventArgs e)
         {
-            Debug.WriteLine("Tray Icon Show Clicked");
-            // Ensure we run this on the UI thread
+            // Removed tray icon verbose logs
             DispatcherQueue?.TryEnqueue(() =>
             {
                 try
@@ -932,11 +685,11 @@ namespace ScreenTimeTracker
                         // If the window was started hidden, we need to activate it to bring it to the foreground
                         this.Activate();
                         
-                        Debug.WriteLine("Window shown and activated from tray icon");
+                        // Removed verbose log
                     }
                     else
                     {
-                        Debug.WriteLine("AppWindow is null, cannot show window from tray");
+                        // Removed verbose log
                     }
                 }
                 catch (Exception ex)
@@ -948,18 +701,7 @@ namespace ScreenTimeTracker
 
         private void TrayIcon_ExitClicked(object? sender, EventArgs e)
         {
-            Debug.WriteLine("Tray Icon Exit Clicked");
-            // Persist current session before exiting.
-            try
-            {
-                PrepareForSuspend();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error preparing for suspend on exit: {ex.Message}");
-            }
-
-            // Ensure proper cleanup and exit on the UI thread
+            // Removed tray icon verbose logs
             DispatcherQueue?.TryEnqueue(() =>
             {
                 try
@@ -992,16 +734,20 @@ namespace ScreenTimeTracker
 
             try
             {
-                _trackingService.StopTracking();
+                EndTracking();
                 bool ok = _databaseService?.WipeDatabase() ?? false;
 
                 // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
                 _usageRecords.Clear();
                 _viewModel.AggregatedRecords.Clear();
-                UpdateUsageChart();
-                UpdateSummaryTab();
 
-                _trackingService.StartTracking();
+                _viewModel.UpdateSummary(TimeSpan.Zero, TimeSpan.Zero, "None", TimeSpan.Zero, null, null);
+                _viewModel.SummaryTitle = "Today's Screen Time Summary";
+                _viewModel.IsAverageVisible = false;
+
+                UpdateUsageChart();
+
+                BeginTracking();
 
                 await new ContentDialog
                 {
@@ -1042,29 +788,7 @@ namespace ScreenTimeTracker
             public POINT_WIN32 ptMaxTrackSize;
         }
 
-        private void ChartRefreshTimer_Tick(object? sender, object e)
-        {
-            if (_disposed) return;
-
-            // Skip if nothing changed since last refresh
-            if (!_isChartDirty) return;
-            _isChartDirty = false;
-
-            // Run heavy chart work at idle priority to keep UI responsive
-            DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-            {
-                if (_disposed) return;
-                try
-                {
-                    UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in deferred ChartRefresh: {ex.Message}");
-                }
-            });
-        }
+        // ChartRefreshTimer_Tick removed – chart refresh handled by unified 1-second UI timer
 
         private void MissingIconTimer_Tick(object? sender, object e)
         {

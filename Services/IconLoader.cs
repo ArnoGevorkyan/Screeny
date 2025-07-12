@@ -56,68 +56,51 @@ namespace ScreenTimeTracker.Services
 
             BitmapImage? resolved = null;
 
-            // 1) Window-handle extraction (fast, no disk I/O)
-            resolved = await TryLoadIconFromWindowHandleAsync(record, ct);
-
-            // 2) UWP/MSIX package assets (for Windows Store or packaged apps)
-            if (resolved == null)
+            // Heavy resolution work runs on a background thread to keep the caller thread responsive.
+            resolved = await Task.Run(async () =>
             {
-                resolved = await TryLoadIconFromPackageAsync(record, ct);
-            }
+                BitmapImage? r = null;
 
-            // 3) Executable-resource extraction (covers classic Win32 apps & fallbacks)
-            if (resolved == null)
-            {
-                string? exePath = ResolveExecutablePath(record);
-                if (!string.IsNullOrEmpty(exePath))
+                // 1) Window-handle extraction (fast)
+                r = await TryLoadIconFromWindowHandleAsync(record, ct);
+
+                // 2) UWP/MSIX package assets
+                if (r == null) r = await TryLoadIconFromPackageAsync(record, ct);
+
+                // 3) Executable-resource extraction
+                if (r == null)
                 {
-                    // Prefer SHGetFileInfo first (cheaper)
-                    resolved = await TryLoadIconWithSHGetFileInfoAsync(exePath, ct);
-
-                    // Fallback to full ExtractAssociatedIcon if still unresolved
-                    if (resolved == null)
+                    string? exePath = ResolveExecutablePath(record);
+                    if (!string.IsNullOrEmpty(exePath))
                     {
-                        resolved = await TryLoadIconWithExtractAssociatedIconAsync(exePath, ct);
+                        r = await TryLoadIconWithSHGetFileInfoAsync(exePath, ct);
+                        if (r == null) r = await TryLoadIconWithExtractAssociatedIconAsync(exePath, ct);
                     }
                 }
-            }
 
-            // 4) WindowsApps packaged Win32 directory (for store-installed Win32 apps)
-            if (resolved == null)
-            {
-                resolved = await TryLoadIconFromWindowsAppsAsync(record, ct);
-            }
+                // 4) WindowsApps directory
+                if (r == null) r = await TryLoadIconFromWindowsAppsAsync(record, ct);
 
-            // 4) Start-menu (.lnk) shortcut lookup – helps Store/UWP apps that register a link.
-            if (resolved == null)
-            {
-                resolved = await TryLoadIconFromStartMenuAsync(record, ct);
-            }
+                // 5) Start-menu shortcut .lnk
+                if (r == null) r = await TryLoadIconFromStartMenuAsync(record, ct);
 
-            // 5) DLL resource (some games store icons in DLLs)
-            if (resolved == null)
-            {
-                string dllPath = ResolveExecutablePath(record) ?? record.ProcessName;
-                resolved = await TryLoadIconFromDllAsync(dllPath, ct);
-            }
+                // 6) DLL resource scan
+                if (r == null)
+                {
+                    string dllPath = ResolveExecutablePath(record) ?? record.ProcessName;
+                    r = await TryLoadIconFromDllAsync(dllPath, ct);
+                }
 
-            // 6) Well-known custom fallbacks (WhatsApp etc.) – placeholder
-            if (resolved == null)
-            {
-                resolved = await TryGetWellKnownSystemIconAsync(record, ct);
-            }
+                // 7) Well-known fallback
+                if (r == null) r = await TryGetWellKnownSystemIconAsync(record, ct);
+                if (r == null) r = await TryLoadStockApplicationIconAsync(ct);
 
-            // 7) Absolute fallback – generic application stock icon so UI never shows gear
-            if (resolved == null)
-            {
-                resolved = await TryLoadStockApplicationIconAsync(ct);
-            }
+                return r;
+            }, ct);
 
-            if (resolved != null)
-            {
-                _iconCache[cacheKey]  = resolved; // store by name
-                _iconCache[handleKey] = resolved; // store by name+handle for future lookups
-            }
+            // Cache positive *and* negative result to avoid repeat probing.
+            _iconCache[cacheKey]  = resolved; // may be null
+            _iconCache[handleKey] = resolved;
             return resolved;
         }
 

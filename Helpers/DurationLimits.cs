@@ -16,5 +16,8 @@ namespace ScreenTimeTracker.Helpers
 
         /// <summary>Number of seconds of user inactivity after which live tracking pauses (generic idle guard).</summary>
         public const int IdlePauseSeconds = 300; // 5 minutes
+
+        /// <summary>Minimum duration (in seconds) a slice must reach before it is persisted to the database.</summary>
+        public const int MinSliceSeconds = 1;
     }
 } 

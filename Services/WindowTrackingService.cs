@@ -10,6 +10,7 @@ using ScreenTimeTracker.Helpers;
 using System.Threading.Tasks;
 using Windows.Media.Control;
 using Windows.Foundation;
+using ScreenTimeTracker.Infrastructure;
 
 namespace ScreenTimeTracker.Services
 {
@@ -22,6 +23,9 @@ namespace ScreenTimeTracker.Services
         private readonly object _lockObject = new object();
         private bool _isIdle = false;
         private AppUsageRecord? _idleRecord;
+        // Tracks the most recently persisted record so we can merge <1-second micro-slices when appropriate
+        private AppUsageRecord? _lastCommittedRecord;
+        private static readonly TimeSpan MicroSliceMergeGap = TimeSpan.FromSeconds(5);
 
         // ---------- WinEvent hook fields ----------
         private IntPtr _focusHook = IntPtr.Zero;
@@ -117,7 +121,6 @@ namespace ScreenTimeTracker.Services
             _timer.AutoReset = true;
             
             IsTracking = false;
-            Debug.WriteLine("WindowTrackingService initialized.");
 
             // Register foreground-window change hook
             _winEventDelegate = OnWinEvent;
@@ -132,7 +135,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
                 _timer.Start();
                 IsTracking = true;
             }
@@ -141,14 +143,13 @@ namespace ScreenTimeTracker.Services
             CheckActiveWindow();
         }
 
-        public void StopTracking()
+        public void EndTracking()
         {
             lock (_lockObject)
             {
                 ThrowIfDisposed();
                 if (!IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking (Normal) ====");
                 _timer.Stop();
                 IsTracking = false;
 
@@ -157,20 +158,7 @@ namespace ScreenTimeTracker.Services
                 {
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    try
-                    {
-                        lock (_databaseService)
-                        {
-                            if (_currentRecord.Id > 0)
-                                _databaseService.UpdateRecord(_currentRecord);
-                            else
-                                _databaseService.SaveRecord(_currentRecord);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"ERROR saving current record on StopTracking: {ex.Message}");
-                    }
+                    CommitSlice(_currentRecord);
                     _currentRecord = null;
                 }
 
@@ -181,16 +169,16 @@ namespace ScreenTimeTracker.Services
                     try
                     {
                         lock (_databaseService)
-                        {
+                {
                             if (_idleRecord.Id > 0)
                                 _databaseService.UpdateRecord(_idleRecord);
                             else
                                 _databaseService.SaveRecord(_idleRecord);
-                        }
                     }
+                }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"ERROR saving idle record on StopTracking: {ex.Message}");
+                        Debug.WriteLine($"ERROR saving idle record on EndTracking: {ex.Message}");
                     }
                     _idleRecord = null;
                 }
@@ -204,7 +192,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (!IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.PauseTrackingForSuspend() - Pausing for system suspend ====");
                 _timer.Stop();
                 IsTracking = false;
 
@@ -231,12 +218,9 @@ namespace ScreenTimeTracker.Services
                             ApplicationName = _currentRecord.ApplicationName
                         };
                         
-                        lock (_databaseService)
-                        {
-                            _databaseService.SaveRecord(recordToSave);
-                        }
+                        CommitSlice(recordToSave);
                         
-                        Debug.WriteLine($"Suspend: Successfully saved record for {_currentRecord.ProcessName}");
+                        Debug.WriteLine($"Suspend: Successfully committed record for {_currentRecord.ProcessName}");
                     }
                     catch (Exception ex)
                     {
@@ -256,7 +240,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.ResumeTrackingAfterSuspend() - Resuming tracking ====");
                 IsTracking = true;
                 _timer.Start();
             }
@@ -295,13 +278,14 @@ namespace ScreenTimeTracker.Services
                                 Date = EnsureValidDate(DateTime.Now.Date)
                             };
                             UsageRecordUpdated?.Invoke(this, _idleRecord);
+                            ScreenyEventBus.Instance.Publish(_idleRecord);
                         }
                     }
                     else if (!currentlyIdle && _isIdle)
-                    {
+                {
                         _isIdle = false;
                         _currentRecord?.SetIdleAnchor(DateTime.Now);
-
+                        
                         // Finalise idle slice
                         if (_idleRecord != null)
                         {
@@ -315,6 +299,7 @@ namespace ScreenTimeTracker.Services
                             }
                             catch { }
                             UsageRecordUpdated?.Invoke(this, _idleRecord);
+                            ScreenyEventBus.Instance.Publish(_idleRecord);
                             _idleRecord = null;
                         }
                     }
@@ -332,6 +317,7 @@ namespace ScreenTimeTracker.Services
                     {
                         _currentRecord._accumulatedDuration = DateTime.Now - _currentRecord.StartTime;
                         UsageRecordUpdated?.Invoke(this, _currentRecord);
+                        ScreenyEventBus.Instance.Publish(_currentRecord);
 
                         // Detect midnight crossover
                         if (_currentRecord.Date < DateTime.Today)
@@ -339,27 +325,13 @@ namespace ScreenTimeTracker.Services
                             var endOfPrevDay = _currentRecord.Date.AddDays(1).AddSeconds(-1);
                             _currentRecord.EndTime = endOfPrevDay;
                             _currentRecord.SetFocus(false);
-
-                            try
-                            {
-                                lock (_databaseService)
-                                {
-                                    if (_currentRecord.Id > 0)
-                                        _databaseService.UpdateRecord(_currentRecord);
-                                    else
-                                        _databaseService.SaveRecord(_currentRecord);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"ERROR saving record at day rollover: {ex.Message}");
-                            }
+                            CommitSlice(_currentRecord);
 
                             _currentRecord = null;
                         }
-                    }
-                }
-
+                            }
+                        }
+                        
                 // Update idle duration if still in idle
                 if (_idleRecord != null)
                 {
@@ -490,8 +462,6 @@ namespace ScreenTimeTracker.Services
             {
                 if (!_disposed)
                 {
-                    Debug.WriteLine("Disposing WindowTrackingService...");
-                    
                     // Stop and dispose timer first to prevent any more events
                     try
                     {
@@ -514,8 +484,6 @@ namespace ScreenTimeTracker.Services
                         _focusHook = IntPtr.Zero;
                         _winEventDelegate = null;
                     }
-
-                    Debug.WriteLine("WindowTrackingService disposed.");
                 }
             }
         }
@@ -528,6 +496,41 @@ namespace ScreenTimeTracker.Services
                 return DateTime.Today;
             }
             return date;
+        }
+
+        /// <summary>
+        /// Determines whether a finished slice should be persisted, merged, or discarded and carries out the action.
+        /// </summary>
+        /// <remarks>Caller must hold <see cref="_lockObject"/>.</remarks>
+        private void CommitSlice(AppUsageRecord record)
+        {
+            if (record == null) return;
+
+            if (!record.EndTime.HasValue)
+                record.EndTime = DateTime.Now;
+
+            var sliceDuration = record.EndTime.Value - record.StartTime;
+
+            // Handle micro-slices first
+            if (sliceDuration.TotalSeconds < DurationLimits.MinSliceSeconds)
+            {
+                if (_lastCommittedRecord != null &&
+                    _lastCommittedRecord.EndTime.HasValue &&
+                    _lastCommittedRecord.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+                    (record.StartTime - _lastCommittedRecord.EndTime.Value) <= MicroSliceMergeGap)
+                {
+                    _lastCommittedRecord.EndTime = record.EndTime;
+                    _lastCommittedRecord._accumulatedDuration += sliceDuration;
+
+                    _databaseService.EnqueueRecord(_lastCommittedRecord);
+                }
+                // Discard if it can’t be merged
+                return;
+            }
+
+            // Normal slice – save or update
+            _databaseService.EnqueueRecord(record);
+            _lastCommittedRecord = record;
         }
 
         // ---------- WinEvent hook callback ----------
@@ -582,30 +585,19 @@ namespace ScreenTimeTracker.Services
                     {
                         _currentRecord.SetFocus(true);
                         UsageRecordUpdated?.Invoke(this, _currentRecord);
+                        ScreenyEventBus.Instance.Publish(_currentRecord);
                     }
                     return;
-                }
+                    }
 
                 // Finalise previous slice
                 if (_currentRecord != null)
                 {
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    try
-                    {
-                        lock (_databaseService)
-                        {
-                            if (_currentRecord.Id > 0)
-                                _databaseService.UpdateRecord(_currentRecord);
-                            else
-                                _databaseService.SaveRecord(_currentRecord);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR saving record on focus change: {ex.Message}");
-                    }
+                    CommitSlice(_currentRecord);
                     UsageRecordUpdated?.Invoke(this, _currentRecord);
+                    ScreenyEventBus.Instance.Publish(_currentRecord);
                 }
 
                 // Start new slice
@@ -622,7 +614,8 @@ namespace ScreenTimeTracker.Services
                 ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
                 _currentRecord.SetFocus(true);
                 UsageRecordUpdated?.Invoke(this, _currentRecord);
-                WindowChanged?.Invoke(this, EventArgs.Empty);
+                    WindowChanged?.Invoke(this, EventArgs.Empty);
+                    ScreenyEventBus.Instance.Publish(new WindowChangedMessage());
             }
         }
     }

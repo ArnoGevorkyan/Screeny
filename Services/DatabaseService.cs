@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using SQLitePCL;
 using System.Diagnostics;
 using System.Linq;
+using System.Collections.Concurrent;
+using System.Threading;
 
 namespace ScreenTimeTracker.Services
 {
@@ -20,6 +22,11 @@ namespace ScreenTimeTracker.Services
         private bool _disposed = false;
         private bool _useInMemoryFallback = false;
         private List<AppUsageRecord> _memoryFallbackRecords = new List<AppUsageRecord>();
+
+        // ---------- Batched async write infrastructure (T19) ----------
+        private readonly ConcurrentQueue<AppUsageRecord> _pendingWrites = new ConcurrentQueue<AppUsageRecord>();
+        private CancellationTokenSource? _writeCts;
+        private Task? _writeLoopTask;
 
         /// <summary>
         /// Initializes a new instance of the DatabaseService class.
@@ -80,6 +87,13 @@ namespace ScreenTimeTracker.Services
                      _connection = new SqliteConnection(); // Avoid null reference, but it won't work
                     _initializedSuccessfully = false;
                     _useInMemoryFallback = true; // Still in fallback mode, just failed
+                }
+            }
+            finally
+            {
+                if (_initializedSuccessfully)
+                {
+                    StartWriteLoop();
                 }
             }
         }
@@ -976,8 +990,8 @@ namespace ScreenTimeTracker.Services
             {
                 _connection.Open();
                 const string sql = @"
-                    SELECT
-                        process_name,
+                SELECT 
+                    process_name, 
                         SUM(total_duration_ms) AS total_ms
                     FROM vw_daily_app_usage
                     WHERE date >= @StartDate AND date <= @EndDate
@@ -989,8 +1003,8 @@ namespace ScreenTimeTracker.Services
                     cmd.Parameters.AddWithValue("@EndDate",   endDateString);
 
                     using var reader = cmd.ExecuteReader();
-                    while (reader.Read())
-                    {
+                        while (reader.Read())
+                        {
                         var processName = reader.GetString(0);
                         long totalMs    = reader.GetInt64(1);
                         results.Add((processName, TimeSpan.FromMilliseconds(totalMs)));
@@ -1002,7 +1016,7 @@ namespace ScreenTimeTracker.Services
                 // Filter entries shorter than 5 minutes and sort descending.
                 return results.Where(r => r.Item2.TotalSeconds >= 300)
                                .OrderByDescending(r => r.Item2)
-                               .ToList();
+                    .ToList();
             }
             catch (Exception ex)
             {
@@ -1147,7 +1161,24 @@ namespace ScreenTimeTracker.Services
 
         public void Dispose()
         {
-            Dispose(true);
+            lock (this)
+            {
+                if (!_disposed)
+                {
+                    // Flush any pending writes before closing
+                    try { FlushPendingWrites(); } catch { }
+
+                    if (_writeCts != null)
+                    {
+                        _writeCts.Cancel();
+                        try { _writeLoopTask?.Wait(2000); } catch { }
+                        _writeCts.Dispose();
+                    }
+
+                    _connection?.Dispose();
+                    _disposed = true;
+                }
+            }
             GC.SuppressFinalize(this);
         }
 
@@ -1165,84 +1196,64 @@ namespace ScreenTimeTracker.Services
 
         public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
-            try
+            if (!_initializedSuccessfully)
             {
-                // Ensure the database is initialized
-                if (!IsDatabaseInitialized())
+                Debug.WriteLine("Database not initialized, returning empty list.");
+                return new List<AppUsageRecord>();
+            }
+
+            if (startDate > endDate)
+                (startDate, endDate) = (endDate, startDate);
+
+            var list = new List<AppUsageRecord>();
+
+            // If the range includes today, include live records
+            if (endDate.Date >= DateTime.Today)
+            {
+                var live = _memoryFallbackRecords.Where(r => r.Date >= startDate && r.Date <= endDate).ToList();
+                foreach (var l in live)
                 {
-                    System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
-                    return new List<AppUsageRecord>();
+                    list.Add(l);
                 }
+            }
 
-                if (_useInMemoryFallback)
-                {
-                    // Use the in-memory backup data if we're in fallback mode
-                    return _memoryFallbackRecords
-                        .Where(r => r.Date.Date >= startDate.Date && r.Date.Date <= endDate.Date)
-                        .ToList();
-                }
-
-                // Convert dates to the format stored in the database (YYYY-MM-DD)
-                string startDateStr = startDate.ToString("yyyy-MM-dd");
-                string endDateStr = endDate.ToString("yyyy-MM-dd");
-
-                // Create SQL to get all records for the date range
-                string sql = @"
-                    SELECT id, process_name, app_name, start_time, end_time, duration, is_focused, last_updated, date
+            using (var connection = new SqliteConnection(_connection.ConnectionString))
+            {
+                connection.Open();
+                var sql = @"
+                    SELECT id, process_name, app_name, start_time, end_time, duration, is_focused, last_updated
                     FROM app_usage
                     WHERE date >= @StartDate AND date <= @EndDate
-                    ORDER BY date ASC, start_time ASC, process_name ASC;";
-
-                List<AppUsageRecord> records = new List<AppUsageRecord>();
-
-                // Use a new connection for safety, though the class member _connection should be managed (opened/closed) per method.
-                using (var connection = new SqliteConnection(_connection.ConnectionString))
+                    ORDER BY start_time ASC
+                ";
+                using (var command = connection.CreateCommand())
                 {
-                    connection.Open();
-                    using (var command = connection.CreateCommand())
-                    {
-                        command.CommandText = sql;
-                        command.Parameters.AddWithValue("@StartDate", startDateStr);
-                        command.Parameters.AddWithValue("@EndDate", endDateStr);
+                    command.CommandText = sql;
+                    command.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
+                    command.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
 
-                        using (var reader = command.ExecuteReader())
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
                         {
-                            while (reader.Read())
+                            var record = new AppUsageRecord
                             {
-                                try
-                                {
-                                    var record = new AppUsageRecord
-                                    {
-                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
-                                        ProcessName = reader.GetString(reader.GetOrdinal("process_name")),
-                                        ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : reader.GetString(reader.GetOrdinal("process_name")),
-                                        StartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time"))),
-                                        EndTime = !reader.IsDBNull(reader.GetOrdinal("end_time")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time"))) : (DateTime?)null,
-                                        _accumulatedDuration = TimeSpan.FromMilliseconds(!reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0),
-                                        IsFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1,
-                                        LastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : (DateTime?)null,
-                                        Date = DateTime.Parse(reader.GetString(reader.GetOrdinal("date")))
-                                    };
-                                    records.Add(record);
-                                }
-                                catch (Exception ex)
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"Error parsing record in GetRawRecordsForDateRange: {ex.Message} on row ID {reader.GetInt32(reader.GetOrdinal("id"))}");
-                                    // Optionally skip this record and continue
-                                }
-                            }
+                                Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                ProcessName = reader.GetString(reader.GetOrdinal("process_name")),
+                                ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : reader.GetString(reader.GetOrdinal("process_name")),
+                                StartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time"))),
+                                EndTime = !reader.IsDBNull(reader.GetOrdinal("end_time")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time"))) : (DateTime?)null,
+                                _accumulatedDuration = TimeSpan.FromMilliseconds(!reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0),
+                                IsFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1,
+                                LastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : (DateTime?)null,
+                            };
+                            list.Add(record);
                         }
                     }
                 }
+            }
 
-                return records;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in GetRawRecordsForDateRange: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                return new List<AppUsageRecord>();
-            }
+            return list;
         }
 
         public List<AppUsageRecord> GetRecordsForDateRange(DateTime startDate, DateTime endDate)
@@ -1299,6 +1310,72 @@ namespace ScreenTimeTracker.Services
             {
                 // Swallow any exception – caller receives failure via 'false'
                 return false;
+            }
+        }
+
+        // ---------- Public batched write API ----------
+        /// <summary>
+        /// Queues a record for asynchronous persistence. If <see cref="AppUsageRecord.Id"/> is 0 the record will be inserted; otherwise an update is attempted.
+        /// </summary>
+        public void EnqueueRecord(AppUsageRecord record)
+        {
+            if (!_initializedSuccessfully || _useInMemoryFallback) return;
+            _pendingWrites.Enqueue(record);
+        }
+
+        /// <summary>
+        /// Flushes any queued writes immediately on the current thread. Use on shutdown.
+        /// </summary>
+        public void FlushPendingWrites()
+        {
+            FlushLoopBody();
+        }
+
+        // ---------- Background loop ----------
+        private void StartWriteLoop()
+        {
+            _writeCts = new CancellationTokenSource();
+            _writeLoopTask = Task.Run(async () =>
+            {
+                var token = _writeCts.Token;
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(2), token);
+                        FlushLoopBody();
+                    }
+                    catch (TaskCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error in DatabaseService write loop: {ex.Message}");
+                    }
+                }
+            });
+        }
+
+        private void FlushLoopBody()
+        {
+            const int MaxBatch = 50;
+            var batch = new List<AppUsageRecord>();
+            while (batch.Count < MaxBatch && _pendingWrites.TryDequeue(out var rec))
+            {
+                batch.Add(rec);
+            }
+
+            foreach (var rec in batch)
+            {
+                try
+                {
+                    if (rec.Id > 0)
+                        UpdateRecord(rec);
+                    else
+                        SaveRecord(rec);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error flushing queued record: {ex.Message}");
+                }
             }
         }
     }

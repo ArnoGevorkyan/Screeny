@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using ScreenTimeTracker.Models;
+using ScreenTimeTracker.Helpers;
 
 namespace ScreenTimeTracker
 {
@@ -63,8 +64,102 @@ namespace ScreenTimeTracker
             set => SetProperty(ref _isTracking, value);
         }
 
+        private string _chartTotalTimeDisplay = "0h 0m 0s";
+        public string ChartTotalTimeDisplay
+        {
+            get => _chartTotalTimeDisplay;
+            private set => SetProperty(ref _chartTotalTimeDisplay, value);
+        }
+
+        private string _totalScreenTimeDisplay = "0h 0m";
+        public string TotalScreenTimeDisplay
+        {
+            get => _totalScreenTimeDisplay;
+            private set => SetProperty(ref _totalScreenTimeDisplay, value);
+        }
+
+        private string _mostUsedAppName = "None";
+        public string MostUsedAppName
+        {
+            get => _mostUsedAppName;
+            private set => SetProperty(ref _mostUsedAppName, value);
+        }
+
+        private string _mostUsedAppDurationDisplay = "0h 0m";
+        public string MostUsedAppDurationDisplay
+        {
+            get => _mostUsedAppDurationDisplay;
+            private set => SetProperty(ref _mostUsedAppDurationDisplay, value);
+        }
+
+        private string _idleDurationDisplay = "0h 0m";
+        public string IdleDurationDisplay
+        {
+            get => _idleDurationDisplay;
+            private set => SetProperty(ref _idleDurationDisplay, value);
+        }
+
+        private string _dailyAverageDisplay = "0h 0m";
+        public string DailyAverageDisplay
+        {
+            get => _dailyAverageDisplay;
+            private set => SetProperty(ref _dailyAverageDisplay, value);
+        }
+
+        private string _summaryTitle = "Daily Screen Time Summary";
+        public string SummaryTitle
+        {
+            get => _summaryTitle;
+            set => SetProperty(ref _summaryTitle, value);
+        }
+
+        private bool _isAverageVisible;
+        public bool IsAverageVisible
+        {
+            get => _isAverageVisible;
+            set => SetProperty(ref _isAverageVisible, value);
+        }
+
+        private string _dateDisplayText = DateTime.Today.ToString("MMM d, yyyy");
+        public string DateDisplayText
+        {
+            get => _dateDisplayText;
+            set => SetProperty(ref _dateDisplayText, value);
+        }
+
+        private bool _isViewModePanelVisible = true;
+        public bool IsViewModePanelVisible
+        {
+            get => _isViewModePanelVisible;
+            set => SetProperty(ref _isViewModePanelVisible, value);
+        }
+
+        private bool _isIdleRowVisible;
+        public bool IsIdleRowVisible
+        {
+            get => _isIdleRowVisible;
+            private set => SetProperty(ref _isIdleRowVisible, value);
+        }
+
+        private Microsoft.UI.Xaml.Media.Imaging.BitmapImage? _mostUsedAppIcon;
+        public Microsoft.UI.Xaml.Media.Imaging.BitmapImage? MostUsedAppIcon
+        {
+            get => _mostUsedAppIcon;
+            private set
+            {
+                if (SetProperty(ref _mostUsedAppIcon, value))
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasMostUsedIcon)));
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasNoMostUsedIcon)));
+                }
+            }
+        }
+
+        public bool HasMostUsedIcon => MostUsedAppIcon != null;
+        public bool HasNoMostUsedIcon => MostUsedAppIcon == null;
+
         public ICommand StartTrackingCommand { get; }
-        public ICommand StopTrackingCommand { get; }
+        public ICommand EndTrackingCommand { get; }
         public ICommand ToggleTrackingCommand { get; }
         public ICommand PickDateCommand { get; }
         public ICommand ToggleViewModeCommand { get; }
@@ -72,7 +167,7 @@ namespace ScreenTimeTracker
         public MainViewModel()
         {
             StartTrackingCommand = new RelayCommand(_ => OnStartTrackingRequested?.Invoke(this, EventArgs.Empty));
-            StopTrackingCommand  = new RelayCommand(_ => OnStopTrackingRequested?.Invoke(this, EventArgs.Empty));
+            EndTrackingCommand  = new RelayCommand(_ => OnEndTrackingRequested?.Invoke(this, EventArgs.Empty));
 
             ToggleTrackingCommand = new RelayCommand(_ => OnToggleTrackingRequested?.Invoke(this, EventArgs.Empty));
             PickDateCommand      = new RelayCommand(_ => OnPickDateRequested?.Invoke(this, EventArgs.Empty));
@@ -81,20 +176,43 @@ namespace ScreenTimeTracker
 
         // Events raised when commands fire – MainWindow will subscribe for now
         public event EventHandler? OnStartTrackingRequested;
-        public event EventHandler? OnStopTrackingRequested;
+        public event EventHandler? OnEndTrackingRequested;
         public event EventHandler? OnToggleTrackingRequested;
         public event EventHandler? OnPickDateRequested;
         public event EventHandler? OnToggleViewModeRequested;
 
+        /// <summary>
+        /// Updates the summary and chart display strings. This replaces direct UI manipulation in MainWindow.
+        /// </summary>
+        public void UpdateSummary(TimeSpan total, TimeSpan idle, string mostUsedName, TimeSpan mostUsedDuration, TimeSpan? dailyAverage = null, Microsoft.UI.Xaml.Media.Imaging.BitmapImage? mostUsedAppIcon = null)
+        {
+            TotalScreenTimeDisplay       = TimeUtil.FormatTimeSpan(total);
+            ChartTotalTimeDisplay        = TimeUtil.FormatTimeSpan(total);
+            IdleDurationDisplay          = TimeUtil.FormatTimeSpan(idle);
+            IsIdleRowVisible             = idle.TotalSeconds >= 5;
+            MostUsedAppName              = mostUsedName;
+            MostUsedAppDurationDisplay   = TimeUtil.FormatTimeSpan(mostUsedDuration);
+            DailyAverageDisplay          = dailyAverage.HasValue ? TimeUtil.FormatTimeSpan(dailyAverage.Value) : "";
+            MostUsedAppIcon              = mostUsedAppIcon;
+        }
+
+        public void SetChartTotalTime(TimeSpan duration)
+        {
+            ChartTotalTimeDisplay = TimeUtil.FormatTimeSpan(duration);
+        }
+
         #region INotifyPropertyChanged
         public event PropertyChangedEventHandler? PropertyChanged;
-        private void SetProperty<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+        private bool SetProperty<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
         {
             if (!Equals(field, value))
             {
                 field = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                return true;
             }
+
+            return false;
         }
         #endregion
 

@@ -15,10 +15,28 @@ namespace ScreenTimeTracker.Services
         private readonly DatabaseService _databaseService;
         private readonly WindowTrackingService _trackingService;
 
+        // ---------- Incremental caching (T18) ----------
+        private readonly object _cacheLock = new object();
+        private sealed class CacheEntry
+        {
+            public List<AppUsageRecord> Records { get; init; } = new();
+            public DateTime CachedAt { get; init; }
+        }
+
+        // Keyed by (StartDate, EndDate, IncludeLive)
+        private readonly Dictionary<(DateTime, DateTime, bool), CacheEntry> _cache = new();
+
         public UsageAggregationService(DatabaseService databaseService, WindowTrackingService trackingService)
         {
             _databaseService = databaseService ?? throw new ArgumentNullException(nameof(databaseService));
             _trackingService = trackingService ?? throw new ArgumentNullException(nameof(trackingService));
+
+            // Subscribe for live-data invalidation – any update touching today nukes overlapping cache entries
+            _trackingService.UsageRecordUpdated += (_, rec) =>
+            {
+                if (rec == null) return;
+                InvalidateCacheForDate(rec.Date);
+            };
         }
 
         /// <summary>
@@ -32,6 +50,23 @@ namespace ScreenTimeTracker.Services
             if (startDate > endDate)
             {
                 (startDate, endDate) = (endDate, startDate);
+            }
+
+            // ---------- Cached fast-path ----------
+            var key = (startDate.Date, endDate.Date, includeLiveRecords);
+            lock (_cacheLock)
+            {
+                if (_cache.TryGetValue(key, out var entry))
+                {
+                    // Live-records change rapidly; keep cache fresh when today is in range
+                    bool rangeIncludesToday = endDate.Date >= DateTime.Today && includeLiveRecords;
+                    var maxAge = rangeIncludesToday ? TimeSpan.FromSeconds(10) : TimeSpan.FromMinutes(15);
+                    if ((DateTime.UtcNow - entry.CachedAt) < maxAge)
+                    {
+                        // Quick clone to avoid external mutation
+                        return entry.Records.Select(r => r).ToList();
+                    }
+                }
             }
 
             var unique = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
@@ -106,6 +141,12 @@ namespace ScreenTimeTracker.Services
                                  .OrderByDescending(r => r.Duration.TotalSeconds)
                                  .ToList();
 
+            // ---------- Store in cache ----------
+            lock (_cacheLock)
+            {
+                _cache[key] = new CacheEntry { Records = result, CachedAt = DateTime.UtcNow };
+            }
+
             // If everything was filtered out (all system processes), show top 5 anyway to avoid empty UI.
             if (result.Count == 0)
             {
@@ -116,6 +157,18 @@ namespace ScreenTimeTracker.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Removes any cache entry whose date range overlaps <paramref name="date"/>.
+        /// </summary>
+        private void InvalidateCacheForDate(DateTime date)
+        {
+            lock (_cacheLock)
+            {
+                var keysToRemove = _cache.Keys.Where(k => date.Date >= k.Item1 && date.Date <= k.Item2).ToList();
+                foreach (var k in keysToRemove) _cache.Remove(k);
+            }
         }
 
         // Minimal copy of the helper previously in MainWindow
@@ -152,7 +205,10 @@ namespace ScreenTimeTracker.Services
                 var live = _trackingService.GetRecords()
                                              .Where(r => r.IsFromDate(date))
                                              .ToList();
-                list.AddRange(live);
+                foreach (var l in live)
+                {
+                    list.Add(l);
+                }
             }
 
             // ----  Deduplicate and filter unwanted rows  ----
@@ -207,7 +263,10 @@ namespace ScreenTimeTracker.Services
                 var live = _trackingService.GetRecords()
                     .Where(r => r.Date >= startDate && r.Date <= endDate)
                     .ToList();
-                source.AddRange(live);
+                foreach (var l in live)
+                {
+                    source.Add(l);
+                }
             }
 
             var merged = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
