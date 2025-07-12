@@ -28,8 +28,6 @@ namespace ScreenTimeTracker
         private ObservableCollection<AppUsageRecord> _usageRecords;
         private bool _disposed;
         private bool _iconsRefreshedOnce = false;
-        // Counter used by UpdateTimer_Tick to decide when to mark the chart dirty again
-        private int _chartStaleSeconds = 0;
         
         // Static constructor to configure LiveCharts
         static MainWindow()
@@ -109,7 +107,6 @@ namespace ScreenTimeTracker
 
         private readonly UsageAggregationService _aggregationService;
 
-        private DispatcherTimer? _missingIconTimer; // retries missing app icons
 
         // --- ViewModel-backed state properties ---
         private DateTime _selectedDate
@@ -143,10 +140,9 @@ namespace ScreenTimeTracker
         }
 
         private DispatcherTimer _updateTimer;
-        private DispatcherTimer _autoSaveTimer;
-        private DispatcherTimer _chartRefreshTimer; // 5-second chart+summary refresh
-        private bool _isChartDirty = false; // set by fast events; consumed by _chartRefreshTimer
+        private bool _isChartDirty = false; // set by events; consumed by unified timer
         private bool _isReloading = false;  // true while usage records are being regenerated
+        private int _tickCount = 0; // unified tick counter for all periodic tasks
 
         public MainWindow()
         {
@@ -209,11 +205,12 @@ namespace ScreenTimeTracker
                  // Consider throwing an exception or showing an error message
                  throw new InvalidOperationException("DatabaseService could not be initialized.");
             }
-            _trackingService = new WindowTrackingService(_databaseService);
+            _trackingService = new WindowTrackingService();
 
             // Set up tracking service events
             _trackingService.WindowChanged += TrackingService_WindowChanged;
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
+            _trackingService.RecordReadyForSave += TrackingService_RecordReadyForSave;
             
             System.Diagnostics.Debug.WriteLine("MainWindow: Tracking service events registered");
 
@@ -245,27 +242,10 @@ namespace ScreenTimeTracker
 
             // ViewModel is already kept in sync via property wrappers.
 
-            // Initialize timer fields
+            // Initialize single unified timer
             _updateTimer = new DispatcherTimer();
-            _autoSaveTimer = new DispatcherTimer();
-
-            // Configure primary UI update timer (1-second pulse)
             _updateTimer.Interval = TimeSpan.FromSeconds(1);
             _updateTimer.Tick += UpdateTimer_Tick;
-
-            // Configure auto-save/maintenance timer (5-minute pulse)
-            _autoSaveTimer.Interval = TimeSpan.FromMinutes(5);
-            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-
-            // NEW: configure batched chart refresh timer (5-second pulse)
-            _chartRefreshTimer = new DispatcherTimer();
-            _chartRefreshTimer.Interval = TimeSpan.FromSeconds(5); // slower, reduces CPU
-            _chartRefreshTimer.Tick += ChartRefreshTimer_Tick;
-
-            // Timer to retry loading icons that are still null
-            _missingIconTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _missingIconTimer.Tick += MissingIconTimer_Tick;
-            _missingIconTimer.Start();
 
             // Hook ViewModel command events
             _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
@@ -1042,44 +1022,6 @@ namespace ScreenTimeTracker
             public POINT_WIN32 ptMaxTrackSize;
         }
 
-        private void ChartRefreshTimer_Tick(object? sender, object e)
-        {
-            if (_disposed) return;
-
-            // Skip if nothing changed since last refresh
-            if (!_isChartDirty) return;
-            _isChartDirty = false;
-
-            // Run heavy chart work at idle priority to keep UI responsive
-            DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-            {
-                if (_disposed) return;
-                try
-                {
-                    UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in deferred ChartRefresh: {ex.Message}");
-                }
-            });
-        }
-
-        private void MissingIconTimer_Tick(object? sender, object e)
-        {
-            try
-            {
-                foreach (var rec in _usageRecords)
-                {
-                    if (rec.AppIcon == null)
-                    {
-                        rec.LoadAppIconIfNeeded();
-                    }
-                }
-            }
-            catch { /* ignore */ }
-        }
     }
 }
 

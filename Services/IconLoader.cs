@@ -479,9 +479,10 @@ namespace ScreenTimeTracker.Services
         {
             if (string.IsNullOrEmpty(dllPath) || !System.IO.File.Exists(dllPath)) return null;
 
+            IntPtr icon = IntPtr.Zero;
             try
             {
-                var icon = Helpers.Win32Interop.ExtractAssociatedIcon(IntPtr.Zero, new System.Text.StringBuilder(dllPath), out ushort _);
+                icon = Helpers.Win32Interop.ExtractAssociatedIcon(IntPtr.Zero, new System.Text.StringBuilder(dllPath), out ushort _);
                 if (icon != IntPtr.Zero)
                 {
                     using var ic = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(icon).Clone();
@@ -490,6 +491,11 @@ namespace ScreenTimeTracker.Services
                 }
             }
             catch { /* ignore */ }
+            finally
+            {
+                if (icon != IntPtr.Zero)
+                    Helpers.Win32Interop.DestroyIcon(icon);
+            }
 
             return null;
         }

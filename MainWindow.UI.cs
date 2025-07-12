@@ -518,12 +518,11 @@ namespace ScreenTimeTracker
         // ---------------- UI refresh & tracking events migrated from XAML partial ----------------
         private void SetUpUiElements()
         {
-            // Initialize the date button text and timers
+            // Initialize the date button text
             UpdateDatePickerButtonText();
 
-            // Timers were configured in constructor; ensure delegates attached
+            // Timer configured in constructor; ensure delegate attached
             _updateTimer.Tick += UpdateTimer_Tick;
-            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
 
             // _usageRecords collection already initialised in MainWindow constructor.
         }
@@ -534,62 +533,121 @@ namespace ScreenTimeTracker
             {
                 if (_disposed || _usageRecords == null) return;
                 if (_isReloading) return; // avoid live updates during dataset rebuild
-                if (_trackingService == null || !_trackingService.IsTracking) return;
+                
+                _tickCount++;
 
-                // -------------------------------------------------------------
-                // Guard: only apply live updates if the active view includes today
-                // -------------------------------------------------------------
-                bool viewIncludesToday;
-                if (_isDateRangeSelected)
+                // Every 1 second: Live UI updates (only when tracking)
+                if (_trackingService != null && _trackingService.IsTracking)
                 {
-                    if (_selectedEndDate == null)
-                    {
-                        viewIncludesToday = false;
-                    }
-                    else
-                    {
-                        viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
-                    }
-                }
-                else
-                {
-                    viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                    DoLiveUpdates();
                 }
 
-                if (!viewIncludesToday)
-                    return; // Ignore live tracking updates for historic views
-
-                // Increment duration only for focused record to minimize UI churn
-                var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
-                activeRec?.RaiseDurationChanged();
-
-                // If the focused record still lacks icon, retry fetch (may succeed once window sets its icon)
-                if (activeRec != null && activeRec.AppIcon == null)
+                // Every 5 seconds: Chart refresh if needed
+                if (_tickCount % 5 == 0 && _isChartDirty)
                 {
-                    activeRec.LoadAppIconIfNeeded();
+                    DoChartRefresh();
                 }
 
-                // Update total time using unified helper (avoids code duplication & flicker)
-                try
+                // Every 30 seconds: Retry missing icons
+                if (_tickCount % 30 == 0)
                 {
-                    var (start,end) = GetCurrentViewDateRange();
-                    var agg = _aggregationService.GetAggregatedRecordsForDateRange(start,end);
-                    var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
-                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
+                    DoIconRetry();
                 }
-                catch { /* swallow race conditions */ }
 
-                // Throttle chart refresh scheduling: no change but we'll modify ChartRefreshTimer_Tick.
-                _chartStaleSeconds++;
-                if (_chartStaleSeconds >= 15)
+                // Every 5 minutes: Auto-save
+                if (_tickCount % 300 == 0)
                 {
-                    _isChartDirty     = true;
-                    _chartStaleSeconds = 0;
+                    DoAutoSave();
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error in UpdateTimer_Tick: {ex.Message}");
+            }
+        }
+
+        private void DoLiveUpdates()
+        {
+            // Guard: only apply live updates if the active view includes today
+            bool viewIncludesToday;
+            if (_isDateRangeSelected)
+            {
+                if (_selectedEndDate == null)
+                {
+                    viewIncludesToday = false;
+                }
+                else
+                {
+                    viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                }
+            }
+            else
+            {
+                viewIncludesToday = _selectedDate.Date == DateTime.Today;
+            }
+
+            if (!viewIncludesToday)
+                return; // Ignore live tracking updates for historic views
+
+            // Increment duration only for focused record to minimize UI churn
+            var activeRec = FocusManager.GetFocusedRecord(_usageRecords);
+            activeRec?.RaiseDurationChanged();
+
+            // Update total time using unified helper (avoids code duplication & flicker)
+            try
+            {
+                var (start,end) = GetCurrentViewDateRange();
+                var agg = _aggregationService.GetAggregatedRecordsForDateRange(start,end);
+                var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
+                if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
+            }
+            catch (Exception ex) 
+            { 
+                System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
+            }
+
+            // Mark chart as dirty every 15 seconds for less frequent but coordinated refreshes
+            if (_tickCount % 15 == 0)
+            {
+                _isChartDirty = true;
+            }
+        }
+
+        private void DoChartRefresh()
+        {
+            _isChartDirty = false;
+
+            // Run heavy chart work at idle priority to keep UI responsive
+            DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (_disposed) return;
+                try
+                {
+                    UpdateUsageChart();
+                    UpdateSummaryTab(_usageRecords.ToList());
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in chart refresh: {ex.Message}");
+                }
+            });
+        }
+
+        private void DoIconRetry()
+        {
+            try
+            {
+                foreach (var rec in _usageRecords)
+                {
+                    if (rec.AppIcon == null)
+                    {
+                        rec.LoadAppIconIfNeeded();
+                    }
+                }
+            }
+            catch (Exception ex) 
+            { 
+                System.Diagnostics.Debug.WriteLine($"Error loading missing icons: {ex.Message}");
             }
         }
 
@@ -645,14 +703,16 @@ namespace ScreenTimeTracker
                     if (!viewIncludesToday)
                         return; // Ignore live tracking updates for historic views
 
-                    // Clear focus flags then set on the current record
-                    foreach (var rec in _usageRecords) rec.SetFocus(false);
+                    // Update focus using centralized manager
                     var current = _trackingService?.CurrentRecord;
                     if (current != null)
                     {
                         ApplicationProcessingHelper.ProcessApplicationRecord(current);
-                        var uiRec = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
-                        uiRec?.SetFocus(true);
+                        FocusManager.SetFocusByProcessName(_usageRecords, current.ProcessName);
+                    }
+                    else
+                    {
+                        FocusManager.ClearAllFocus(_usageRecords);
                     }
                     _isChartDirty = true;
                 }
@@ -689,8 +749,7 @@ namespace ScreenTimeTracker
 
                     if (record.IsFocused)
                     {
-                        foreach (var r in _usageRecords) r.SetFocus(false);
-                        existing.SetFocus(true);
+                        FocusManager.SetFocusedRecord(_usageRecords, existing);
                     }
 
                     existing.RaiseDurationChanged();
@@ -725,6 +784,25 @@ namespace ScreenTimeTracker
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error in RefreshLiveRecords: {ex.Message}");
+            }
+        }
+
+        // Service boundary handler: processes database save requests from tracking service
+        private void TrackingService_RecordReadyForSave(object? sender, AppUsageRecord record)
+        {
+            try
+            {
+                if (_databaseService != null && record != null)
+                {
+                    if (record.Id > 0)
+                        _databaseService.UpdateRecord(record);
+                    else
+                        _databaseService.SaveRecord(record);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error saving record from service: {ex.Message}");
             }
         }
     }

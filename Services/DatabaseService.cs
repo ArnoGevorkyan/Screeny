@@ -517,97 +517,84 @@ namespace ScreenTimeTracker.Services
         }
 
         /// <summary>
+        /// Validates and prepares duration and date data for database operations
+        /// </summary>
+        private (DateTime validatedStartTime, DateTime? validatedEndTime, string dateString, long durationMs) 
+            ValidateRecordData(AppUsageRecord record)
+        {
+            DateTime validatedStartTime = ValidateDate(record.StartTime);
+            DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
+            string dateString = validatedStartTime.ToString("yyyy-MM-dd");
+
+            long durationMs = (long)record.Duration.TotalMilliseconds;
+            
+            // Cap duration at 8 hours for a single session
+            const long maxSessionDurationMs = 8 * 60 * 60 * 1000;
+            if (durationMs > maxSessionDurationMs) durationMs = maxSessionDurationMs;
+            if (durationMs < 0) durationMs = 0;
+            
+            // Recalculate from actual times if available
+            if (validatedEndTime.HasValue)
+            {
+                var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
+                if (calculatedDuration >= 0 && calculatedDuration < durationMs)
+                {
+                    durationMs = (long)calculatedDuration;
+                }
+            }
+
+            return (validatedStartTime, validatedEndTime, dateString, durationMs);
+        }
+
+        /// <summary>
         /// Saves an app usage record to the database
         /// </summary>
         public bool SaveRecord(AppUsageRecord record)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully || _useInMemoryFallback)
             {
                 return false;
             }
-            
-            bool success = false;
-            SqliteTransaction? transaction = null; // Declare transaction variable
+
             try
             {
-                _connection.Open();
-                transaction = _connection.BeginTransaction(); // Start transaction
+                var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
 
-                // Validate date to prevent future dates
-                DateTime validatedStartTime = ValidateDate(record.StartTime);
-                DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
-                string dateString = validatedStartTime.ToString("yyyy-MM-dd");
-
-                // Validate and cap duration
-                long durationMs = (long)record.Duration.TotalMilliseconds;
+                // Use connection-per-operation pattern
+                using var connection = new SqliteConnection(_connection.ConnectionString);
+                connection.Open();
+                using var transaction = connection.BeginTransaction();
                 
-                // Cap duration at 8 hours for a single session
-                const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
-                if (durationMs > maxSessionDurationMs)
+                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated) 
+                                   VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated); 
+                                   SELECT last_insert_rowid();";
+
+                using var command = new SqliteCommand(insertSql, connection, transaction);
+                command.Parameters.AddWithValue("@Date", dateString);
+                command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
+                command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
+                command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
+                command.Parameters.AddWithValue("@EndTime", validatedEndTime?.ToString("o") ?? (object)DBNull.Value);
+                command.Parameters.AddWithValue("@Duration", durationMs);
+                command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
+                command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
+                
+                var result = command.ExecuteScalar();
+                
+                if (result != null)
                 {
-                    durationMs = maxSessionDurationMs;
+                    record.Id = (int)Convert.ToInt64(result);
+                    transaction.Commit();
+                    return true;
                 }
                 
-                // Ensure duration is not negative
-                if (durationMs < 0)
-                {
-                    durationMs = 0;
-                }
-                
-                // If we have both start and end times, calculate actual duration
-                if (validatedEndTime.HasValue)
-                {
-                    var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
-                    if (calculatedDuration >= 0 && calculatedDuration < durationMs)
-                    {
-                        durationMs = (long)calculatedDuration;
-                    }
-                }
-
-                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated) VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated); SELECT last_insert_rowid();";
-
-                using (var command = new SqliteCommand(insertSql, _connection, transaction)) // Assign transaction
-                {
-                    command.Parameters.AddWithValue("@Date", dateString);
-                    command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                    command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                    command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
-                    command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
-                    command.Parameters.AddWithValue("@Duration", durationMs);
-                    command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
-                    command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
-                    
-                    var result = command.ExecuteScalar();
-                    
-                    if (result != null)
-                    {
-                        long id = Convert.ToInt64(result);
-                        record.Id = (int)id;
-                        success = true;
-                    }
-                }
-                
-                transaction.Commit(); // Commit transaction if successful
+                return false;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                try
-                {
-                    transaction?.Rollback(); // Rollback transaction on error
-                }
-                catch (Exception)
-                {
-                }
-                success = false; // Ensure success is false on error
+                System.Diagnostics.Debug.WriteLine($"Error saving record: {ex.Message}");
+                return false;
             }
-            finally
-            {
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
-            }
-            return success;
         }
 
         /// <summary>
@@ -615,87 +602,47 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void UpdateRecord(AppUsageRecord record)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully || _useInMemoryFallback)
             {
                 return;
             }
-            
-            SqliteTransaction? transaction = null; // Declare transaction variable
+
             try
             {
-                _connection.Open();
-                transaction = _connection.BeginTransaction(); // Start transaction
+                var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
 
-                // Validate date to prevent future dates
-                DateTime validatedStartTime = ValidateDate(record.StartTime);
-                DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
-                string dateString = validatedStartTime.ToString("yyyy-MM-dd");
+                using var connection = new SqliteConnection(_connection.ConnectionString);
+                connection.Open();
+                using var transaction = connection.BeginTransaction();
+                
+                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, 
+                                   end_time = @EndTime, duration = @Duration, is_focused = @IsFocused, last_updated = @LastUpdated 
+                                   WHERE id = @Id;";
 
-                // Validate and cap duration (same logic as SaveRecord)
-                long durationMs = (long)record.Duration.TotalMilliseconds;
+                using var command = new SqliteCommand(updateSql, connection, transaction);
+                command.Parameters.AddWithValue("@Id", record.Id);
+                command.Parameters.AddWithValue("@Date", dateString);
+                command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
+                command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
+                command.Parameters.AddWithValue("@EndTime", validatedEndTime?.ToString("o") ?? (object)DBNull.Value);
+                command.Parameters.AddWithValue("@Duration", durationMs);
+                command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
+                command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
                 
-                // Cap duration at 8 hours for a single session
-                const long maxSessionDurationMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
-                if (durationMs > maxSessionDurationMs)
-                {
-                    durationMs = maxSessionDurationMs;
-                }
+                int rowsAffected = command.ExecuteNonQuery();
                 
-                // Ensure duration is not negative
-                if (durationMs < 0)
+                if (rowsAffected > 0)
                 {
-                    durationMs = 0;
+                    transaction.Commit();
                 }
-                
-                // If we have both start and end times, calculate actual duration
-                if (validatedEndTime.HasValue)
+                else
                 {
-                    var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
-                    if (calculatedDuration >= 0 && calculatedDuration < durationMs)
-                    {
-                        durationMs = (long)calculatedDuration;
-                    }
-                }
-
-                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, end_time = @EndTime, duration = @Duration, is_focused = @IsFocused, last_updated = @LastUpdated WHERE id = @Id;";
-
-                using (var command = new SqliteCommand(updateSql, _connection, transaction)) // Assign transaction
-                {
-                    command.Parameters.AddWithValue("@Id", record.Id);
-                    command.Parameters.AddWithValue("@Date", dateString);
-                    command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                    command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                    command.Parameters.AddWithValue("@EndTime", validatedEndTime.HasValue ? validatedEndTime.Value.ToString("o") : (object?)DBNull.Value); // Use DBNull
-                    command.Parameters.AddWithValue("@Duration", durationMs);
-                    command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
-                    command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
-                    
-                    int rowsAffected = command.ExecuteNonQuery();
-                    
-                    if (rowsAffected <= 0)
-                    {
-                         throw new InvalidOperationException($"Update failed, record with ID {record.Id} not found."); // Force rollback
-                    }
-                }
-                
-                transaction.Commit(); // Commit transaction
-            }
-            catch (Exception)
-            {
-                try
-                {
-                    transaction?.Rollback(); // Rollback transaction on error
-                }
-                catch (Exception)
-                {
+                    System.Diagnostics.Debug.WriteLine($"Update failed, record with ID {record.Id} not found.");
                 }
             }
-            finally
+            catch (Exception ex)
             {
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
+                System.Diagnostics.Debug.WriteLine($"Error updating record: {ex.Message}");
             }
         }
 
@@ -704,23 +651,21 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetRecordsForDate(DateTime date)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully || _useInMemoryFallback)
             {
                 Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get records operation");
                 return new List<AppUsageRecord>();
             }
 
-            var records = new List<AppUsageRecord>();
-            
             try
             {
                 var dateString = date.ToString("yyyy-MM-dd");
                 Debug.WriteLine($"Getting records for date: {dateString}");
                 
-                // Open connection
-                _connection.Open();
+                using var connection = new SqliteConnection(_connection.ConnectionString);
+                connection.Open();
                 
-                using (var command = _connection.CreateCommand())
+                using var command = connection.CreateCommand();
                 {
                     command.CommandText = @"
                         SELECT id, process_name, app_name, start_time, end_time, duration, is_focused, last_updated
@@ -803,25 +748,15 @@ namespace ScreenTimeTracker.Services
                         }
                         
                         // Convert dictionary values to our final list
-                        records = processGroups.Values.ToList();
+                        return processGroups.Values.ToList();
                     }
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error getting records for date: {ex.Message}");
+                return new List<AppUsageRecord>();
             }
-            finally
-            {
-                // Make sure connection is closed
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
-            }
-            
-            Debug.WriteLine($"Loaded {records.Count} aggregated records for date {date:yyyy-MM-dd}");
-            return records;
         }
 
         /// <summary>
@@ -856,17 +791,19 @@ namespace ScreenTimeTracker.Services
                         app_name,
                         start_time, 
                         end_time, 
-                        duration_ms,
+                        duration,
                         is_focused,
                         last_updated
-                    FROM usage_records 
-                    WHERE DATE(start_time) = DATE(?) 
+                    FROM app_usage 
+                    WHERE date = ? 
                     ORDER BY process_name, start_time";
 
                 System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Executing query: {query}");
                 System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Query parameter: {date:yyyy-MM-dd}");
 
-                using var command = new SqliteCommand(query, _connection);
+                using var connection = new SqliteConnection(_connection.ConnectionString);
+                connection.Open();
+                using var command = new SqliteCommand(query, connection);
                 command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
 
                 using var reader = command.ExecuteReader();
@@ -880,7 +817,7 @@ namespace ScreenTimeTracker.Services
                         var processName = reader.GetString(reader.GetOrdinal("process_name"));
                         var startTimeStr = reader.GetString(reader.GetOrdinal("start_time"));
                         var dbStartTime = DateTime.Parse(startTimeStr);
-                        var durationMs = reader.GetInt64(reader.GetOrdinal("duration_ms"));
+                        var durationMs = reader.GetInt64(reader.GetOrdinal("duration"));
                         var isFocused = reader.GetBoolean(reader.GetOrdinal("is_focused"));
                         var lastUpdatedStr = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? reader.GetString(reader.GetOrdinal("last_updated")) : null;
                         var lastUpdated = lastUpdatedStr != null ? DateTime.Parse(lastUpdatedStr) : (DateTime?)null;

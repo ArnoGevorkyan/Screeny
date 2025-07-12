@@ -110,8 +110,6 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services...");
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
-                _autoSaveTimer?.Stop();
-                _chartRefreshTimer?.Stop();
                 System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
 
                 // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
@@ -133,8 +131,8 @@ namespace ScreenTimeTracker
                 {
                     _trackingService.WindowChanged -= TrackingService_WindowChanged;
                     _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
+                    _trackingService.RecordReadyForSave -= TrackingService_RecordReadyForSave;
                 }
-                if (_autoSaveTimer != null) _autoSaveTimer.Tick -= AutoSaveTimer_Tick;
                 if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded;
                 if (_trayIconHelper != null)
                 {
@@ -186,11 +184,11 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine("[LOG] EXITING PrepareForSuspend");
         }
 
-        private void AutoSaveTimer_Tick(object? sender, object e)
+        private void DoAutoSave()
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine("Auto-save timer tick - saving records");
+                System.Diagnostics.Debug.WriteLine("Auto-save - saving records");
 
                 SaveRecordsToDatabase();
                 CleanupSystemProcesses();
@@ -226,7 +224,7 @@ namespace ScreenTimeTracker
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in auto-save timer tick: {ex}");
+                System.Diagnostics.Debug.WriteLine($"Error in auto-save: {ex}");
             }
         }
 
@@ -252,10 +250,8 @@ namespace ScreenTimeTracker
 
                 // Start/Stop buttons are collapsed; tracking indicator handles state.
 
-                // Start timers
+                // Start unified timer
                 _updateTimer.Start();
-                _autoSaveTimer.Start();
-                _chartRefreshTimer.Start();
                 _isChartDirty = true; // force initial chart render
 
                 UpdateUsageChart();
@@ -291,18 +287,10 @@ namespace ScreenTimeTracker
             _viewModel.IsTracking = false;
 
             // Unfocus all UI records
-            foreach (var uiRec in _usageRecords.ToList())
-            {
-                if (uiRec.IsFocused)
-                {
-                    uiRec.SetFocus(false);
-                }
-            }
+            FocusManager.ClearAllFocus(_usageRecords);
 
-            // Stop timers
+            // Stop timer
             _updateTimer.Stop();
-            _autoSaveTimer.Stop();
-            _chartRefreshTimer.Stop();
 
             // Persist session data
             SaveRecordsToDatabase();

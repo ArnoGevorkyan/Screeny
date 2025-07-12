@@ -18,7 +18,6 @@ namespace ScreenTimeTracker.Services
         private readonly System.Timers.Timer _timer;
         private AppUsageRecord? _currentRecord;
         private bool _disposed;
-        private readonly DatabaseService _databaseService;
         private readonly object _lockObject = new object();
         private bool _isIdle = false;
         private AppUsageRecord? _idleRecord;
@@ -100,17 +99,13 @@ namespace ScreenTimeTracker.Services
 
         public event EventHandler<AppUsageRecord>? UsageRecordUpdated;
         public event EventHandler? WindowChanged;
+        public event EventHandler<AppUsageRecord>? RecordReadyForSave;
         
         public bool IsTracking { get; private set; }
         public AppUsageRecord? CurrentRecord => _currentRecord;
 
-        public WindowTrackingService(DatabaseService databaseService)
+        public WindowTrackingService()
         {
-            if (databaseService == null)
-            {
-                throw new ArgumentNullException(nameof(databaseService));
-            }
-            _databaseService = databaseService;
 
             _timer = new System.Timers.Timer(500);
             _timer.Elapsed += Timer_Elapsed;
@@ -157,20 +152,7 @@ namespace ScreenTimeTracker.Services
                 {
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    try
-                    {
-                        lock (_databaseService)
-                        {
-                            if (_currentRecord.Id > 0)
-                                _databaseService.UpdateRecord(_currentRecord);
-                            else
-                                _databaseService.SaveRecord(_currentRecord);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"ERROR saving current record on StopTracking: {ex.Message}");
-                    }
+                    RecordReadyForSave?.Invoke(this, _currentRecord);
                     _currentRecord = null;
                 }
 
@@ -178,20 +160,7 @@ namespace ScreenTimeTracker.Services
                 if (_idleRecord != null)
                 {
                     _idleRecord.EndTime = DateTime.Now;
-                    try
-                    {
-                        lock (_databaseService)
-                        {
-                            if (_idleRecord.Id > 0)
-                                _databaseService.UpdateRecord(_idleRecord);
-                            else
-                                _databaseService.SaveRecord(_idleRecord);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"ERROR saving idle record on StopTracking: {ex.Message}");
-                    }
+                    RecordReadyForSave?.Invoke(this, _idleRecord);
                     _idleRecord = null;
                 }
             }
@@ -213,37 +182,9 @@ namespace ScreenTimeTracker.Services
                     Debug.WriteLine($"Suspend: Finalizing record for {_currentRecord.ProcessName}");
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-
-                    try
-                    {
-                        Debug.WriteLine($"Suspend: Attempting immediate save for {_currentRecord.ProcessName} (Calculated Duration: {_currentRecord.Duration.TotalSeconds}s)");
-                        
-                        // Clone to avoid threading issues
-                        var recordToSave = new AppUsageRecord
-                        {
-                            ProcessName = _currentRecord.ProcessName,
-                            WindowTitle = _currentRecord.WindowTitle,
-                            StartTime = _currentRecord.StartTime,
-                            EndTime = _currentRecord.EndTime,
-                            ProcessId = _currentRecord.ProcessId,
-                            WindowHandle = _currentRecord.WindowHandle,
-                            Date = _currentRecord.Date,
-                            ApplicationName = _currentRecord.ApplicationName
-                        };
-                        
-                        lock (_databaseService)
-                        {
-                            _databaseService.SaveRecord(recordToSave);
-                        }
-                        
-                        Debug.WriteLine($"Suspend: Successfully saved record for {_currentRecord.ProcessName}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"CRITICAL ERROR: Failed to save record during suspend: {ex.Message}");
-                        Debug.WriteLine($"Stack trace: {ex.StackTrace}");
-                    }
-
+                    
+                    Debug.WriteLine($"Suspend: Sending record for {_currentRecord.ProcessName} (Duration: {_currentRecord.Duration.TotalSeconds}s)");
+                    RecordReadyForSave?.Invoke(this, _currentRecord);
                     _currentRecord = null;
                 }
             }
@@ -306,14 +247,7 @@ namespace ScreenTimeTracker.Services
                         if (_idleRecord != null)
                         {
                             _idleRecord.EndTime = DateTime.Now;
-                            try
-                            {
-                                lock (_databaseService)
-                                {
-                                    _databaseService.SaveRecord(_idleRecord);
-                                }
-                            }
-                            catch { }
+                            RecordReadyForSave?.Invoke(this, _idleRecord);
                             UsageRecordUpdated?.Invoke(this, _idleRecord);
                             _idleRecord = null;
                         }
@@ -339,22 +273,7 @@ namespace ScreenTimeTracker.Services
                             var endOfPrevDay = _currentRecord.Date.AddDays(1).AddSeconds(-1);
                             _currentRecord.EndTime = endOfPrevDay;
                             _currentRecord.SetFocus(false);
-
-                            try
-                            {
-                                lock (_databaseService)
-                                {
-                                    if (_currentRecord.Id > 0)
-                                        _databaseService.UpdateRecord(_currentRecord);
-                                    else
-                                        _databaseService.SaveRecord(_currentRecord);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"ERROR saving record at day rollover: {ex.Message}");
-                            }
-
+                            RecordReadyForSave?.Invoke(this, _currentRecord);
                             _currentRecord = null;
                         }
                     }
@@ -564,7 +483,10 @@ namespace ScreenTimeTracker.Services
                 // Rest of logic identical to existing method -> call helper to reduce duplication
                 ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle);
             }
-            catch { /* ignore */ }
+            catch (Exception ex) 
+            { 
+                System.Diagnostics.Debug.WriteLine($"Error in window tracking callback: {ex.Message}");
+            }
         }
 
         // Extracted shared logic from original CheckActiveWindow body starting after obtaining names
@@ -591,20 +513,7 @@ namespace ScreenTimeTracker.Services
                 {
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    try
-                    {
-                        lock (_databaseService)
-                        {
-                            if (_currentRecord.Id > 0)
-                                _databaseService.UpdateRecord(_currentRecord);
-                            else
-                                _databaseService.SaveRecord(_currentRecord);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR saving record on focus change: {ex.Message}");
-                    }
+                    RecordReadyForSave?.Invoke(this, _currentRecord);
                     UsageRecordUpdated?.Invoke(this, _currentRecord);
                 }
 
