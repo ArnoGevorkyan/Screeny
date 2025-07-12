@@ -34,9 +34,8 @@ dotnet publish -c Release
 
 **Services Layer:**
 - `WindowTrackingService` - Tracks active windows using Win32 APIs and WinEvent hooks
-- `DatabaseService` - SQLite database operations for storing usage records
-- `UsageAggregationService` - Aggregates and processes usage data for charts
-- `IconRefreshService` - Handles loading and caching of application icons
+- `DatabaseService` - SQLite database operations and data aggregation for storing usage records
+- `IconLoader` - Handles loading and caching of application icons
 
 **Models:**
 - `AppUsageRecord` - Core data model representing time spent in applications
@@ -54,7 +53,7 @@ dotnet publish -c Release
 
 1. `WindowTrackingService` monitors active windows via Win32 hooks
 2. Usage data is stored in SQLite via `DatabaseService`
-3. `UsageAggregationService` processes raw data for chart display
+3. `DatabaseService` processes and aggregates raw data for chart display
 4. UI updates through data binding to ObservableCollections
 5. Charts refresh on a timer to balance performance and accuracy
 

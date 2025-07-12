@@ -84,29 +84,15 @@ namespace ScreenTimeTracker.Models
                 if (IsFocused)
                 {
                     var currentTime = DateTime.Now;
+                    var focusedDuration = currentTime - _lastFocusTime;
                     
-                    // Check if this is a stale session from a previous day
-                    if (_lastFocusTime.Date < currentTime.Date)
+                    // Cap single session duration at 8 hours (reasonable maximum for continuous use)
+                    if (focusedDuration.TotalHours > 8)
                     {
-                        // If the session started on a previous day, cap it at end of that day
-                        var endOfDay = _lastFocusTime.Date.AddDays(1).AddTicks(-1);
-                        var focusedDuration = endOfDay - _lastFocusTime;
-                        baseDuration += focusedDuration;
-                    }
-                    else
-                    {
-                        // Normal calculation for same-day sessions
-                        var focusedDuration = currentTime - _lastFocusTime;
-                        
-                        // Cap single session duration at 8 hours (reasonable maximum for continuous use)
-                        if (focusedDuration.TotalHours > 8)
-                        {
-                            focusedDuration = TimeSpan.FromHours(8);
-                        }
-                        
-                        baseDuration += focusedDuration;
+                        focusedDuration = TimeSpan.FromHours(8);
                     }
                     
+                    baseDuration += focusedDuration;
                 }
                 
                 // Final safety check - cap total duration at 16 hours (allowing for multiple sessions)
@@ -239,49 +225,7 @@ namespace ScreenTimeTracker.Models
             }
         }
 
-        public void UpdateDuration()
-        {
-            if (IsFocused)
-            {
-                NotifyPropertyChanged(nameof(Duration));
-                NotifyPropertyChanged(nameof(FormattedDuration));
-            }
-        }
 
-        /// <summary>
-        /// Explicitly increments the duration of this record by a given interval.
-        /// Used for real-time updates in historical views.
-        /// </summary>
-        /// <param name="interval">The time interval to add.</param>
-        public void IncrementDuration(TimeSpan interval)
-        {
-            var oldAccumulated = _accumulatedDuration;
-            var oldLastFocusTime = _lastFocusTime;
-            var currentTime = DateTime.Now;
-            
-            if (IsFocused)
-            {
-                var timeSinceLastFocus = currentTime - oldLastFocusTime;
-            }
-            
-            // For unfocused records we add directly to accumulated.
-            // For the currently focused record we do **not** move _lastFocusTime; that timestamp
-            // is the anchor the Duration getter uses to measure the live-elapsed span.
-            if (!IsFocused)
-            {
-                _accumulatedDuration += interval;
-            }
-            
-            // Update the anchor timestamp ONLY when the record is not focused.
-            // This prevents the live Duration from stalling at ~0 seconds.
-            if (!IsFocused)
-            {
-                _lastFocusTime = DateTime.Now;
-            }
-            
-            NotifyPropertyChanged(nameof(Duration));
-            NotifyPropertyChanged(nameof(FormattedDuration));
-        }
 
         public static AppUsageRecord CreateAggregated(string processName, DateTime date)
         {

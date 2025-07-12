@@ -159,10 +159,10 @@ namespace ScreenTimeTracker
             try
             {
                 System.Diagnostics.Debug.WriteLine($"[LOG] Current system time: {DateTime.Now}");
-                if (_selectedDate > DateTime.Today)
+                if (_viewModel.SelectedDate > DateTime.Today)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future _selectedDate detected ({_selectedDate:yyyy-MM-dd}), resetting to today.");
-                    _selectedDate = DateTime.Today;
+                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future _selectedDate detected ({_viewModel.SelectedDate:yyyy-MM-dd}), resetting to today.");
+                    _viewModel.SelectedDate = DateTime.Today;
                 }
 
                 if (_trackingService != null && _trackingService.IsTracking)
@@ -211,10 +211,10 @@ namespace ScreenTimeTracker
                     });
                 }
 
-                if (_selectedDate.Date == DateTime.Now.Date && _currentTimePeriod == TimePeriod.Daily)
+                if (_viewModel.SelectedDate.Date == DateTime.Now.Date && _viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
                     System.Diagnostics.Debug.WriteLine("Refreshing today's data after auto-save");
-                    LoadRecordsForDate(_selectedDate);
+                    LoadRecordsForDate(_viewModel.SelectedDate);
                 }
                 else
                 {
@@ -287,7 +287,7 @@ namespace ScreenTimeTracker
             _viewModel.IsTracking = false;
 
             // Unfocus all UI records
-            FocusManager.ClearAllFocus(_usageRecords);
+            foreach (var record in _usageRecords) record.SetFocus(false);
 
             // Stop timer
             _updateTimer.Stop();
@@ -360,9 +360,9 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine($"Loading records for date: {date:yyyy-MM-dd}, System.Today: {DateTime.Today:yyyy-MM-dd}");
             if (date > DateTime.Today) date = DateTime.Today;
 
-            _selectedDate       = date;
-            _selectedEndDate    = null;
-            _isDateRangeSelected = false;
+            _viewModel.SelectedDate = date;
+            _viewModel.SelectedEndDate = null;
+            _viewModel.IsDateRangeSelected = false;
 
             _usageRecords.Clear();
 
@@ -379,14 +379,14 @@ namespace ScreenTimeTracker
             List<AppUsageRecord> records = new();
             try
             {
-                switch (_currentTimePeriod)
+                switch (_viewModel.CurrentTimePeriod)
                 {
                     case TimePeriod.Weekly:
                         var startOfWeek = date.AddDays(-(int)date.DayOfWeek);
                         var endOfWeek   = startOfWeek.AddDays(6);
                         records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startOfWeek, endOfWeek));
 
-                        var aggregatedWeekly = _aggregationService.GetAggregatedRecordsForDateRange(startOfWeek, endOfWeek, includeLiveRecords: false);
+                        var aggregatedWeekly = _databaseService.GetAggregatedRecordsWithLive(startOfWeek, endOfWeek, _trackingService, includeLiveRecords: false);
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in aggregatedWeekly) _viewModel.AggregatedRecords.Add(r);
                         if (DateDisplay != null) DateDisplay.Text = $"{startOfWeek:MMM d} - {endOfWeek:MMM d}";
@@ -429,9 +429,9 @@ namespace ScreenTimeTracker
                             // Snap immediately to today *before* showing the dialog so live data is displayed under the correct day even if the user never presses OK.
                             if (date.Date != DateTime.Today)
                             {
-                                _selectedDate        = DateTime.Today;
-                                _selectedEndDate     = null;
-                                _isDateRangeSelected = false;
+                                _viewModel.SelectedDate = DateTime.Today;
+                                _viewModel.SelectedEndDate = null;
+                                _viewModel.IsDateRangeSelected = false;
 
                                 UpdateDatePickerButtonText(); // defined in UI partial
                                 LoadRecordsForDate(DateTime.Today);
@@ -489,9 +489,9 @@ namespace ScreenTimeTracker
                 endDate   = temp;
             }
 
-            _selectedDate        = startDate;
-            _selectedEndDate     = endDate;
-            _isDateRangeSelected = true;
+            _viewModel.SelectedDate = startDate;
+            _viewModel.SelectedEndDate = endDate;
+            _viewModel.IsDateRangeSelected = true;
             _usageRecords.Clear();
 
             try
@@ -507,7 +507,7 @@ namespace ScreenTimeTracker
                 }
 
                 // Build aggregated list for summary tab and average
-                var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(startDate, endDate, includeLiveRecords: false);
+                var aggregated = _databaseService.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false);
 
                 // Update UI helpers
                 CleanupSystemProcesses();
@@ -584,14 +584,14 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
 
-                var records = BuildRecords(() => _aggregationService.GetDetailRecordsForDate(date));
+                var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService));
 
                 if (!updateUI)
                     return records;
 
-                _selectedDate        = date;
-                _selectedEndDate     = null;
-                _isDateRangeSelected = false;
+                _viewModel.SelectedDate = date;
+                _viewModel.SelectedEndDate = null;
+                _viewModel.IsDateRangeSelected = false;
 
                 _usageRecords.Clear();
 

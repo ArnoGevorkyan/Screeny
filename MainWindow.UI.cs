@@ -24,10 +24,10 @@ namespace ScreenTimeTracker
             var totalTime = Helpers.ChartHelper.UpdateUsageChart(
                 UsageChartLive,
                 _usageRecords,
-                _currentChartViewMode,
-                _currentTimePeriod,
-                _selectedDate,
-                _selectedEndDate,
+                _viewModel.CurrentChartViewMode,
+                _viewModel.CurrentTimePeriod,
+                _viewModel.SelectedDate,
+                _viewModel.SelectedEndDate,
                 liveFocusedRecord);
 
             // Update UI text block with formatted total time if available
@@ -77,8 +77,8 @@ namespace ScreenTimeTracker
         private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
         {
             // Minimal version: force weekly period & daily chart view then refresh
-            _currentTimePeriod    = TimePeriod.Weekly;
-            _currentChartViewMode = ChartViewMode.Daily;
+            _viewModel.CurrentTimePeriod = TimePeriod.Weekly;
+            _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
             UpdateUsageChart();
             UpdateSummaryTab(aggregatedRecords);
         }
@@ -136,12 +136,12 @@ namespace ScreenTimeTracker
             var today = DateTime.Today;
             var yesterday = today.AddDays(-1);
 
-            bool isLast7Days = _isDateRangeSelected && _selectedDate == today.AddDays(-6) && _selectedEndDate == today;
-            bool isCustomRange = _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom;
+            bool isLast7Days = _viewModel.IsDateRangeSelected && _viewModel.SelectedDate == today.AddDays(-6) && _viewModel.SelectedEndDate == today;
+            bool isCustomRange = _viewModel.IsDateRangeSelected && _viewModel.CurrentTimePeriod == TimePeriod.Custom;
 
-            if ((_selectedDate == today || _selectedDate == yesterday) && !_isDateRangeSelected)
+            if ((_viewModel.SelectedDate == today || _viewModel.SelectedDate == yesterday) && !_viewModel.IsDateRangeSelected)
             {
-                _currentChartViewMode = ChartViewMode.Hourly;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
@@ -154,7 +154,7 @@ namespace ScreenTimeTracker
             }
             else if (isLast7Days)
             {
-                _currentChartViewMode = ChartViewMode.Daily;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
@@ -167,7 +167,7 @@ namespace ScreenTimeTracker
             }
             else if (isCustomRange)
             {
-                _currentChartViewMode = ChartViewMode.Daily;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
@@ -180,9 +180,9 @@ namespace ScreenTimeTracker
             }
             else
             {
-                if (_currentTimePeriod == TimePeriod.Daily)
+                if (_viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
-                    _currentChartViewMode = ChartViewMode.Hourly;
+                    _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
 
                     DispatcherQueue.TryEnqueue(() =>
                     {
@@ -195,7 +195,7 @@ namespace ScreenTimeTracker
                 }
                 else
                 {
-                    _currentChartViewMode = ChartViewMode.Daily;
+                    _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
 
                     DispatcherQueue.TryEnqueue(() =>
                     {
@@ -222,10 +222,10 @@ namespace ScreenTimeTracker
             var totalTime = ChartHelper.ForceChartRefresh(
                 UsageChartLive,
                 _usageRecords,
-                _currentChartViewMode,
-                _currentTimePeriod,
-                _selectedDate,
-                _selectedEndDate);
+                _viewModel.CurrentChartViewMode,
+                _viewModel.CurrentTimePeriod,
+                _viewModel.SelectedDate,
+                _viewModel.SelectedEndDate);
 
             if (ChartTimeValue != null)
                 ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
@@ -239,50 +239,50 @@ namespace ScreenTimeTracker
 
                 var today = DateTime.Today;
 
-                if (_selectedDate == today && !_isDateRangeSelected)
+                if (_viewModel.SelectedDate == today && !_viewModel.IsDateRangeSelected)
                 {
                     DatePickerButton.Content = "Today";
                     return;
                 }
 
-                if (_selectedDate == today.AddDays(-1) && !_isDateRangeSelected)
+                if (_viewModel.SelectedDate == today.AddDays(-1) && !_viewModel.IsDateRangeSelected)
                 {
                     DatePickerButton.Content = "Yesterday";
                     return;
                 }
 
-                if (_selectedDate == today && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Weekly)
+                if (_viewModel.SelectedDate == today && _viewModel.IsDateRangeSelected && _viewModel.CurrentTimePeriod == TimePeriod.Weekly)
                 {
                     DatePickerButton.Content = "Last 7 days";
                     return;
                 }
 
-                if (_selectedDate == today.AddDays(-29) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
+                if (_viewModel.SelectedDate == today.AddDays(-29) && _viewModel.IsDateRangeSelected && _viewModel.CurrentTimePeriod == TimePeriod.Custom)
                 {
                     DatePickerButton.Content = "Last 30 days";
                     return;
                 }
 
-                if (_selectedDate == new DateTime(today.Year, today.Month, 1) && _isDateRangeSelected && _currentTimePeriod == TimePeriod.Custom)
+                if (_viewModel.SelectedDate == new DateTime(today.Year, today.Month, 1) && _viewModel.IsDateRangeSelected && _viewModel.CurrentTimePeriod == TimePeriod.Custom)
                 {
                     DatePickerButton.Content = "This month";
                     return;
                 }
 
-                if (!_isDateRangeSelected)
+                if (!_viewModel.IsDateRangeSelected)
                 {
-                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
+                    DatePickerButton.Content = _viewModel.SelectedDate.ToString("MMM dd");
                 }
-                else if (_selectedEndDate.HasValue)
+                else if (_viewModel.SelectedEndDate.HasValue)
                 {
-                    DatePickerButton.Content = $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}";
+                    DatePickerButton.Content = $"{_viewModel.SelectedDate:MMM dd} - {_viewModel.SelectedEndDate:MMM dd}";
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error in UpdateDatePickerButtonText: {ex.Message}");
                 if (DatePickerButton != null)
-                    DatePickerButton.Content = _selectedDate.ToString("MMM dd");
+                    DatePickerButton.Content = _viewModel.SelectedDate.ToString("MMM dd");
             }
         }
 
@@ -293,7 +293,7 @@ namespace ScreenTimeTracker
                 DateTime today = DateTime.Today;
                 DateTime startDate = today.AddDays(-6);
 
-                var weekRecords = _aggregationService.GetAggregatedRecordsForDateRange(startDate, today);
+                var weekRecords = _databaseService.GetAggregatedRecordsWithLive(startDate, today, _trackingService);
 
                 UpdateRecordListView(weekRecords);
                 SetTimeFrameHeader($"Last 7 Days ({startDate:MMM d} - {today:MMM d}, {today.Year})");
@@ -345,8 +345,8 @@ namespace ScreenTimeTracker
         {
             try
             {
-                _currentTimePeriod = TimePeriod.Weekly;
-                _currentChartViewMode = ChartViewMode.Daily;
+                _viewModel.CurrentTimePeriod = TimePeriod.Weekly;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
 
                 DispatcherQueue?.TryEnqueue(() =>
                 {
@@ -393,19 +393,19 @@ namespace ScreenTimeTracker
         {
             // Always recalc from authoritative source: the aggregation service + live slice
             var (start, end) = GetCurrentViewDateRange();
-            var aggregated = _aggregationService.GetAggregatedRecordsForDateRange(start, end);
+            var aggregated = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
             UpdateSummaryTab(aggregated);
         }
 
         // Helper returns the date-span currently shown in the UI
         private (DateTime Start, DateTime End) GetCurrentViewDateRange()
         {
-            if (_isDateRangeSelected && _selectedEndDate != null)
+            if (_viewModel.IsDateRangeSelected && _viewModel.SelectedEndDate != null)
             {
-                return (_selectedDate.Date, _selectedEndDate.Value.Date);
+                return (_viewModel.SelectedDate.Date, _viewModel.SelectedEndDate.Value.Date);
             }
 
-            return (_selectedDate.Date, _selectedDate.Date);
+            return (_viewModel.SelectedDate.Date, _viewModel.SelectedDate.Date);
         }
 
         private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
@@ -419,7 +419,7 @@ namespace ScreenTimeTracker
                 TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
 
                 // Cap to a realistic maximum: 24 h per day * days in period
-                int totalMaxDays = GetDayCountForTimePeriod(_currentTimePeriod, _selectedDate);
+                int totalMaxDays = GetDayCountForTimePeriod(_viewModel.CurrentTimePeriod, _viewModel.SelectedDate);
                 TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
                 if (totalTime > absoluteMaxDuration)
                 {
@@ -512,7 +512,7 @@ namespace ScreenTimeTracker
 
         private void DatePickerButton_Click(object sender, RoutedEventArgs e)
         {
-            _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
+            _datePickerPopup?.ShowDatePicker(DatePickerButton, _viewModel.SelectedDate, _viewModel.SelectedEndDate, _viewModel.IsDateRangeSelected);
         }
 
         // ---------------- UI refresh & tracking events migrated from XAML partial ----------------
@@ -570,34 +570,34 @@ namespace ScreenTimeTracker
         {
             // Guard: only apply live updates if the active view includes today
             bool viewIncludesToday;
-            if (_isDateRangeSelected)
+            if (_viewModel.IsDateRangeSelected)
             {
-                if (_selectedEndDate == null)
+                if (_viewModel.SelectedEndDate == null)
                 {
                     viewIncludesToday = false;
                 }
                 else
                 {
-                    viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                    viewIncludesToday = _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today;
                 }
             }
             else
             {
-                viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                viewIncludesToday = _viewModel.SelectedDate.Date == DateTime.Today;
             }
 
             if (!viewIncludesToday)
                 return; // Ignore live tracking updates for historic views
 
             // Increment duration only for focused record to minimize UI churn
-            var activeRec = FocusManager.GetFocusedRecord(_usageRecords);
+            var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
             activeRec?.RaiseDurationChanged();
 
             // Update total time using unified helper (avoids code duplication & flicker)
             try
             {
                 var (start,end) = GetCurrentViewDateRange();
-                var agg = _aggregationService.GetAggregatedRecordsForDateRange(start,end);
+                var agg = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
                 var liveTotal = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
                 if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(liveTotal);
             }
@@ -659,7 +659,7 @@ namespace ScreenTimeTracker
                 try
                 {
                     // --- keep check whether current view includes today ---
-                    bool viewIncludesToday = !_isDateRangeSelected ? _selectedDate.Date == DateTime.Today : (_selectedEndDate != null && _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today);
+                    bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
                     if (!viewIncludesToday) return;
                     if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
 
@@ -684,20 +684,20 @@ namespace ScreenTimeTracker
                     // Guard: only apply live updates if the active view includes today
                     // -------------------------------------------------------------
                     bool viewIncludesToday;
-                    if (_isDateRangeSelected)
+                    if (_viewModel.IsDateRangeSelected)
                     {
-                        if (_selectedEndDate == null)
+                        if (_viewModel.SelectedEndDate == null)
                         {
                             viewIncludesToday = false;
                         }
                         else
                         {
-                            viewIncludesToday = _selectedDate.Date <= DateTime.Today && _selectedEndDate.Value.Date >= DateTime.Today;
+                            viewIncludesToday = _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today;
                         }
                     }
                     else
                     {
-                        viewIncludesToday = _selectedDate.Date == DateTime.Today;
+                        viewIncludesToday = _viewModel.SelectedDate.Date == DateTime.Today;
                     }
 
                     if (!viewIncludesToday)
@@ -708,11 +708,13 @@ namespace ScreenTimeTracker
                     if (current != null)
                     {
                         ApplicationProcessingHelper.ProcessApplicationRecord(current);
-                        FocusManager.SetFocusByProcessName(_usageRecords, current.ProcessName);
+                        foreach (var record in _usageRecords) record.SetFocus(false);
+                        var targetRecord = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
+                        targetRecord?.SetFocus(true);
                     }
                     else
                     {
-                        FocusManager.ClearAllFocus(_usageRecords);
+                        foreach (var record in _usageRecords) record.SetFocus(false);
                     }
                     _isChartDirty = true;
                 }
@@ -749,7 +751,8 @@ namespace ScreenTimeTracker
 
                     if (record.IsFocused)
                     {
-                        FocusManager.SetFocusedRecord(_usageRecords, existing);
+                        foreach (var r in _usageRecords) r.SetFocus(false);
+                        existing.SetFocus(true);
                     }
 
                     existing.RaiseDurationChanged();
@@ -769,7 +772,7 @@ namespace ScreenTimeTracker
         {
             try
             {
-                var live = _aggregationService.GetDetailRecordsForDate(DateTime.Today);
+                var live = _databaseService.GetDetailRecordsWithLive(DateTime.Today, _trackingService);
                 _usageRecords.Clear();
                 foreach (var r in live.OrderByDescending(r => r.Duration))
                 {

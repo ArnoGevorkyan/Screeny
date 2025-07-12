@@ -759,140 +759,6 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        /// <summary>
-        /// Gets aggregated usage data for a specific date, grouped by application
-        /// </summary>
-        public List<AppUsageRecord> GetAggregatedRecordsForDate(DateTime date)
-        {
-            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ===== GetAggregatedRecordsForDate called for {date:yyyy-MM-dd} =====");
-            
-            var processGroups = new Dictionary<string, AppUsageRecord>();
-
-            if (_useInMemoryFallback)
-            {
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Using in-memory fallback");
-                var records = _memoryFallbackRecords.Where(r => r.Date.Date == date.Date).ToList();
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Found {records.Count} records in memory fallback");
-                return records;
-            }
-
-            if (!_initializedSuccessfully)
-            {
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Database not initialized successfully");
-                return new List<AppUsageRecord>();
-            }
-
-            try
-            {
-                var query = @"
-                    SELECT 
-                        id,
-                        process_name, 
-                        app_name,
-                        start_time, 
-                        end_time, 
-                        duration,
-                        is_focused,
-                        last_updated
-                    FROM app_usage 
-                    WHERE date = ? 
-                    ORDER BY process_name, start_time";
-
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Executing query: {query}");
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Query parameter: {date:yyyy-MM-dd}");
-
-                using var connection = new SqliteConnection(_connection.ConnectionString);
-                connection.Open();
-                using var command = new SqliteCommand(query, connection);
-                command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
-
-                using var reader = command.ExecuteReader();
-                int recordCount = 0;
-                
-                while (reader.Read())
-                {
-                    recordCount++;
-                    try
-                    {
-                        var processName = reader.GetString(reader.GetOrdinal("process_name"));
-                        var startTimeStr = reader.GetString(reader.GetOrdinal("start_time"));
-                        var dbStartTime = DateTime.Parse(startTimeStr);
-                        var durationMs = reader.GetInt64(reader.GetOrdinal("duration"));
-                        var isFocused = reader.GetBoolean(reader.GetOrdinal("is_focused"));
-                        var lastUpdatedStr = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? reader.GetString(reader.GetOrdinal("last_updated")) : null;
-                        var lastUpdated = lastUpdatedStr != null ? DateTime.Parse(lastUpdatedStr) : (DateTime?)null;
-
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Processing DB record #{recordCount}:");
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - ProcessName: {processName}");
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - StartTime: {dbStartTime:yyyy-MM-dd HH:mm:ss}");
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Duration (ms): {durationMs}");
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - IsFocused: {isFocused}");
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - LastUpdated: {lastUpdated}");
-
-                        if (processGroups.ContainsKey(processName))
-                        {
-                            // Aggregate with existing record
-                            var existingRecord = processGroups[processName];
-                            var additionalDuration = TimeSpan.FromMilliseconds(durationMs);
-                            existingRecord._accumulatedDuration += additionalDuration;
-                            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Added to existing record, new total: {existingRecord._accumulatedDuration.TotalSeconds:F1}s");
-                        }
-                        else
-                        {
-                            // Create a new record
-                            var record = new AppUsageRecord
-                            {
-                                Id = reader.GetInt32(reader.GetOrdinal("id")),
-                                ProcessName = processName,
-                                ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
-                                Date = date, // Use date for the Date field
-                                StartTime = dbStartTime, // Use actual start time from database
-                                IsFocused = isFocused,
-                                LastUpdated = lastUpdated
-                            };
-                            
-                            if (!reader.IsDBNull(reader.GetOrdinal("end_time")))
-                            {
-                                record.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
-                            }
-                            
-                            record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
-                            
-                            // CRITICAL: Historical records should NEVER be marked as focused
-                            if (date.Date < DateTime.Today && record.IsFocused)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] WARNING: Historical record {processName} was marked as focused, correcting to unfocused");
-                                record.IsFocused = false;
-                            }
-                            
-                            // Add to our dictionary
-                            processGroups[processName] = record;
-                            System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG]   - Created new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}");
-                        }
-                    }
-                    catch (Exception parseEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ERROR parsing record #{recordCount}: {parseEx.Message}");
-                    }
-                }
-
-                var result = processGroups.Values.ToList();
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ===== Query complete: processed {recordCount} DB records, returning {result.Count} aggregated records =====");
-                
-                foreach (var record in result)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Final record: {record.ProcessName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}, Date: {record.Date:yyyy-MM-dd}");
-                }
-                
-                return result;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] ERROR in GetAggregatedRecordsForDate: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"[DATABASE_LOG] Stack trace: {ex.StackTrace}");
-                return new List<AppUsageRecord>();
-            }
-        }
 
         /// <summary>
         /// Gets usage data for a date range, for generating reports
@@ -1237,6 +1103,151 @@ namespace ScreenTimeTracker.Services
                 // Swallow any exception – caller receives failure via 'false'
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Gets aggregated records for date range, optionally including live tracking data
+        /// (Replaces UsageAggregationService.GetAggregatedRecordsForDateRange)
+        /// </summary>
+        public List<AppUsageRecord> GetAggregatedRecordsWithLive(DateTime startDate, DateTime endDate, WindowTrackingService? trackingService, bool includeLiveRecords = true)
+        {
+            if (startDate > endDate) (startDate, endDate) = (endDate, startDate);
+
+            var unique = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+            // Get database records
+            var dbReport = GetUsageReportForDateRange(startDate, endDate);
+            foreach (var (processNameRaw, totalDuration) in dbReport)
+            {
+                var temp = new AppUsageRecord { ProcessName = processNameRaw };
+                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(temp);
+                var processName = temp.ProcessName;
+
+                unique[processName] = new AppUsageRecord
+                {
+                    ProcessName = processName,
+                    ApplicationName = processName,
+                    _accumulatedDuration = totalDuration,
+                    Date = startDate,
+                    StartTime = startDate
+                };
+            }
+
+            // Merge live records if requested
+            if (includeLiveRecords && endDate.Date >= DateTime.Today && trackingService != null)
+            {
+                var live = trackingService.GetRecords()
+                    .Where(r => r.Date >= startDate && r.Date <= endDate)
+                    .ToList();
+
+                foreach (var liveRec in live)
+                {
+                    if (liveRec.Duration.TotalSeconds <= 0) continue;
+
+                    var tmpLive = new AppUsageRecord { ProcessName = liveRec.ProcessName, WindowTitle = liveRec.WindowTitle };
+                    Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmpLive);
+                    var canonicalLive = tmpLive.ProcessName;
+
+                    if (unique.TryGetValue(canonicalLive, out var existing))
+                    {
+                        var longer = existing.Duration > liveRec.Duration ? existing.Duration : liveRec.Duration;
+                        existing._accumulatedDuration = longer;
+                        existing.WindowHandle = liveRec.WindowHandle;
+                        if (!string.IsNullOrEmpty(liveRec.WindowTitle)) existing.WindowTitle = liveRec.WindowTitle;
+                        if (liveRec.StartTime < existing.StartTime) existing.StartTime = liveRec.StartTime;
+                    }
+                    else
+                    {
+                        var clone = new AppUsageRecord
+                        {
+                            ProcessName = canonicalLive,
+                            ApplicationName = liveRec.ApplicationName,
+                            WindowTitle = liveRec.WindowTitle,
+                            WindowHandle = liveRec.WindowHandle,
+                            _accumulatedDuration = liveRec.Duration,
+                            Date = liveRec.Date,
+                            StartTime = liveRec.StartTime,
+                            IsFocused = liveRec.IsFocused
+                        };
+                        unique[clone.ProcessName] = clone;
+                    }
+                }
+            }
+
+            return unique.Values
+                .Where(r => !IsWindowsSystemProcess(r.ProcessName))
+                .OrderByDescending(r => r.Duration.TotalSeconds)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets detailed records for a date, optionally including live data
+        /// (Replaces UsageAggregationService.GetDetailRecordsForDate)
+        /// </summary>
+        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        {
+            var list = GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+
+            if (date.Date == DateTime.Today && trackingService != null)
+            {
+                var live = trackingService.GetRecords()
+                    .Where(r => r.IsFromDate(date))
+                    .ToList();
+                list.AddRange(live);
+            }
+
+            var byProcess = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rec in list)
+            {
+                if (rec.Duration.TotalSeconds < 5) continue;
+                
+                var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
+                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
+                var canonical = tmp.ProcessName;
+
+                if (IsWindowsSystemProcess(canonical) || canonical.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (byProcess.TryGetValue(canonical, out var existing))
+                {
+                    var longer = existing.Duration > rec.Duration ? existing.Duration : rec.Duration;
+                    existing._accumulatedDuration = longer;
+                    if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
+                    if (rec.EndTime.HasValue)
+                    {
+                        if (!existing.EndTime.HasValue || rec.EndTime > existing.EndTime) existing.EndTime = rec.EndTime;
+                    }
+                }
+                else
+                {
+                    rec.ProcessName = canonical;
+                    byProcess[canonical] = rec;
+                }
+            }
+
+            return byProcess.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
+        }
+
+        private static bool IsWindowsSystemProcess(string processName)
+        {
+            if (string.IsNullOrWhiteSpace(processName)) return false;
+            var n = processName.Trim().ToLowerInvariant();
+
+            string[] highPriority = {
+                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
+                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
+            };
+            if (highPriority.Any(p => n.Contains(p))) return true;
+
+            string[] others = {
+                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
+                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
+                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
+                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
+                "settingssynchost","wudfhost"
+            };
+            return others.Contains(n);
         }
     }
 } 

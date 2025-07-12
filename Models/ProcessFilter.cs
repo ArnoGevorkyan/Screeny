@@ -135,6 +135,10 @@ namespace ScreenTimeTracker.Models
             "SentinelAgent",
             "CarbonBlack",
             
+            // Self-exclusion
+            "Screeny",
+            "ScreenTimeTracker",
+            
             // Windows tools and dialogs
             "SnippingTool",
             "EaseOfAccessDialog",

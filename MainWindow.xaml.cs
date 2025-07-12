@@ -103,41 +103,10 @@ namespace ScreenTimeTracker
         // Initialised inline so property wrappers above can work immediately
         private readonly MainViewModel _viewModel = new MainViewModel();
 
-        private readonly IconRefreshService _iconService;
-
-        private readonly UsageAggregationService _aggregationService;
 
 
-        // --- ViewModel-backed state properties ---
-        private DateTime _selectedDate
-        {
-            get => _viewModel.SelectedDate;
-            set => _viewModel.SelectedDate = value;
-        }
 
-        private DateTime? _selectedEndDate
-        {
-            get => _viewModel.SelectedEndDate;
-            set => _viewModel.SelectedEndDate = value;
-        }
-
-        private bool _isDateRangeSelected
-        {
-            get => _viewModel.IsDateRangeSelected;
-            set => _viewModel.IsDateRangeSelected = value;
-        }
-
-        private TimePeriod _currentTimePeriod
-        {
-            get => _viewModel.CurrentTimePeriod;
-            set => _viewModel.CurrentTimePeriod = value;
-        }
-
-        private ChartViewMode _currentChartViewMode
-        {
-            get => _viewModel.CurrentChartViewMode;
-            set => _viewModel.CurrentChartViewMode = value;
-        }
+        // Direct ViewModel access - no property wrappers needed
 
         private DispatcherTimer _updateTimer;
         private bool _isChartDirty = false; // set by events; consumed by unified timer
@@ -153,7 +122,7 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine($"[LOG] System time check - Today: {todayDate:yyyy-MM-dd}, Now: {DateTime.Now}");
             
             // Use today's date
-            _selectedDate = todayDate;
+            _viewModel.SelectedDate = todayDate;
             
             InitializeComponent();
 
@@ -238,7 +207,6 @@ namespace ScreenTimeTracker
             // Indicator visuals are data-bound; no imperative call needed
 
             // Instantiate icon service
-            _iconService = new IconRefreshService();
 
             // ViewModel is already kept in sync via property wrappers.
 
@@ -256,18 +224,17 @@ namespace ScreenTimeTracker
             };
             _viewModel.OnPickDateRequested         += (_, __) =>
             {
-                _datePickerPopup?.ShowDatePicker(DatePickerButton, _selectedDate, _selectedEndDate, _isDateRangeSelected);
+                _datePickerPopup?.ShowDatePicker(DatePickerButton, _viewModel.SelectedDate, _viewModel.SelectedEndDate, _viewModel.IsDateRangeSelected);
             };
             _viewModel.OnToggleViewModeRequested   += (_, __) =>
             {
-                if (_currentChartViewMode == ChartViewMode.Hourly)
-                    _currentChartViewMode = ChartViewMode.Daily;
+                if (_viewModel.CurrentChartViewMode == ChartViewMode.Hourly)
+                    _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
                 else
-                    _currentChartViewMode = ChartViewMode.Hourly;
+                    _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
                 UpdateUsageChart();
             };
 
-            _aggregationService = new UsageAggregationService(_databaseService, _trackingService);
         }
 
         private void SubclassWindow()
@@ -456,11 +423,11 @@ namespace ScreenTimeTracker
                 }
 
                 // Double-check our selected date is valid (not in the future)
-                if (_selectedDate > DateTime.Today)
+                if (_viewModel.SelectedDate > DateTime.Today)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future date detected at load time: {_selectedDate:yyyy-MM-dd}");
-                    _selectedDate = DateTime.Today;
-                    System.Diagnostics.Debug.WriteLine($"[LOG] Corrected to: {_selectedDate:yyyy-MM-dd}");
+                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future date detected at load time: {_viewModel.SelectedDate:yyyy-MM-dd}");
+                    _viewModel.SelectedDate = DateTime.Today;
+                    System.Diagnostics.Debug.WriteLine($"[LOG] Corrected to: {_viewModel.SelectedDate:yyyy-MM-dd}");
                 }
                 
                 // Set up UI elements
@@ -470,8 +437,8 @@ namespace ScreenTimeTracker
                 CheckFirstRun();
                 
                 // Set today's date and update button text
-                _selectedDate = DateTime.Today;
-                _currentTimePeriod = TimePeriod.Daily; // Default to daily view
+                _viewModel.SelectedDate = DateTime.Today;
+                _viewModel.CurrentTimePeriod = TimePeriod.Daily; // Default to daily view
                 UpdateDatePickerButtonText();
                 
                 // Set the selected date display
@@ -481,7 +448,7 @@ namespace ScreenTimeTracker
                 }
                 
                 // Load today's records (assuming LoadRecordsForDate handles its internal errors)
-                LoadRecordsForDate(_selectedDate);
+                LoadRecordsForDate(_viewModel.SelectedDate);
 
                 // Set up the UsageListView
                 if (UsageListView != null && UsageListView.ItemsSource == null)
@@ -493,7 +460,7 @@ namespace ScreenTimeTracker
                 CleanupSystemProcesses();
                 
                 // Set the initial chart view mode
-                _currentChartViewMode = ChartViewMode.Hourly;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
                 
                 // Update view mode label and hide toggle panel (since we start with Today view)
                 DispatcherQueue?.TryEnqueue(() => {
@@ -613,24 +580,24 @@ namespace ScreenTimeTracker
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"DatePickerPopup_SingleDateSelected: Selected date: {selectedDate:yyyy-MM-dd}, CurrentTimePeriod: {_currentTimePeriod}");
+                System.Diagnostics.Debug.WriteLine($"DatePickerPopup_SingleDateSelected: Selected date: {selectedDate:yyyy-MM-dd}, CurrentTimePeriod: {_viewModel.CurrentTimePeriod}");
                 
-                _selectedDate = selectedDate;
-                _selectedEndDate = null;
-                _isDateRangeSelected = false;
+                _viewModel.SelectedDate = selectedDate;
+                _viewModel.SelectedEndDate = null;
+                _viewModel.IsDateRangeSelected = false;
                 
                 // Update button text
                 UpdateDatePickerButtonText();
                 
                 // Special handling for Today vs. other days
                 var today = DateTime.Today;
-                if (_selectedDate == today)
+                if (_viewModel.SelectedDate == today)
                 {
                     System.Diagnostics.Debug.WriteLine("Switching to Today view");
                     
                     // For "Today", use the current tracking settings
-                    _currentTimePeriod = TimePeriod.Daily;
-                    _currentChartViewMode = ChartViewMode.Hourly;
+                    _viewModel.CurrentTimePeriod = TimePeriod.Daily;
+                    _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
                     
                     // --- REVISED: Load data safely on UI thread using async/await --- 
                     DispatcherQueue.TryEnqueue(async () => { // Make lambda async
@@ -647,7 +614,7 @@ namespace ScreenTimeTracker
                             await Task.Delay(50); 
 
                             // Load data directly on UI thread
-                            LoadRecordsForDate(_selectedDate);
+                            LoadRecordsForDate(_viewModel.SelectedDate);
 
                             // Hide loading indicator AFTER loading is done
                             if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
@@ -668,7 +635,7 @@ namespace ScreenTimeTracker
                 {
                    // ... (Existing logic for other single dates, keep similar async pattern if needed) ...
                     // Ensure we switch to Daily period when selecting a single past date
-                    _currentTimePeriod = TimePeriod.Daily;
+                    _viewModel.CurrentTimePeriod = TimePeriod.Daily;
                     
                     // --- REVISED: Load data safely on UI thread using async/await --- 
                     DispatcherQueue.TryEnqueue(async () => { // Make lambda async
@@ -681,7 +648,7 @@ namespace ScreenTimeTracker
                             await Task.Delay(50); 
                             
                             // Load the data directly on UI thread
-                            LoadRecordsForDate(_selectedDate);
+                            LoadRecordsForDate(_viewModel.SelectedDate);
                             UpdateChartViewMode(); // Update chart view after loading
                             
                             // Hide loading indicator AFTER loading is done
@@ -735,23 +702,23 @@ namespace ScreenTimeTracker
                     start = end.AddDays(-1); // Make start date 1 day before end date
                 }
                 
-                _selectedDate = start;
-                _selectedEndDate = end;
-            _isDateRangeSelected = true;
+                _viewModel.SelectedDate = start;
+                _viewModel.SelectedEndDate = end;
+            _viewModel.IsDateRangeSelected = true;
             
             // Update button text
             UpdateDatePickerButtonText();
             
             // For Last 7 days, ensure we're in Weekly time period and force Daily view
-                bool isLast7Days = (_selectedDate == today.AddDays(-6) && _selectedEndDate == today);
+                bool isLast7Days = (_viewModel.SelectedDate == today.AddDays(-6) && _viewModel.SelectedEndDate == today);
                 
-                bool isLast30Days = (_selectedDate == today.AddDays(-29) && _selectedEndDate == today);
-                bool isThisMonth = (_selectedDate == new DateTime(today.Year, today.Month, 1) && _selectedEndDate == today);
+                bool isLast30Days = (_viewModel.SelectedDate == today.AddDays(-29) && _viewModel.SelectedEndDate == today);
+                bool isThisMonth = (_viewModel.SelectedDate == new DateTime(today.Year, today.Month, 1) && _viewModel.SelectedEndDate == today);
                 
                 if (isLast7Days)
             {
-                _currentTimePeriod = TimePeriod.Weekly;
-                _currentChartViewMode = ChartViewMode.Daily;
+                _viewModel.CurrentTimePeriod = TimePeriod.Weekly;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
                 
                 // Update view mode label and hide toggle panel
                 DispatcherQueue.TryEnqueue(async () => {
@@ -781,7 +748,7 @@ namespace ScreenTimeTracker
                             try
                             {
                         // Load the data directly on UI thread
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                        LoadRecordsForDateRange(_viewModel.SelectedDate, _viewModel.SelectedEndDate.Value);
                         
                                 System.Diagnostics.Debug.WriteLine("Last 7 days view loaded successfully on UI thread");
                             }
@@ -815,8 +782,8 @@ namespace ScreenTimeTracker
             else if (isLast30Days || isThisMonth)
             {
                 // Treat as custom range
-                _currentTimePeriod = TimePeriod.Custom;
-                _currentChartViewMode = ChartViewMode.Daily;
+                _viewModel.CurrentTimePeriod = TimePeriod.Custom;
+                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
                 DispatcherQueue.TryEnqueue(async () => {
                     try
                     {
@@ -826,7 +793,7 @@ namespace ScreenTimeTracker
                         if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Visible;
                         await Task.Delay(50);
 
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                        LoadRecordsForDateRange(_viewModel.SelectedDate, _viewModel.SelectedEndDate.Value);
 
                         if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
                     }
@@ -856,7 +823,7 @@ namespace ScreenTimeTracker
                             try
                             {
                         // Load the data directly on UI thread
-                        LoadRecordsForDateRange(_selectedDate, _selectedEndDate.Value);
+                        LoadRecordsForDateRange(_viewModel.SelectedDate, _viewModel.SelectedEndDate.Value);
                         
                                 System.Diagnostics.Debug.WriteLine("Date range view loaded successfully on UI thread");
                             }

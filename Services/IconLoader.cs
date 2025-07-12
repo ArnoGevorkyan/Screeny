@@ -574,9 +574,16 @@ namespace ScreenTimeTracker.Services
                                                                  ref sii);
                 if (hr == 0 && sii.hIcon != IntPtr.Zero)
                 {
-                    using var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(sii.hIcon).Clone();
-                    var bmp = icon.ToBitmap();
-                    return await ConvertBitmapToBitmapImageAsync(bmp, ct);
+                    try
+                    {
+                        using var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(sii.hIcon).Clone();
+                        var bmp = icon.ToBitmap();
+                        return await ConvertBitmapToBitmapImageAsync(bmp, ct);
+                    }
+                    finally
+                    {
+                        Helpers.Win32Interop.DestroyIcon(sii.hIcon);
+                    }
                 }
             }
             catch { /* ignore */ }
