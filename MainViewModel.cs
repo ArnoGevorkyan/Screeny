@@ -25,7 +25,11 @@ namespace ScreenTimeTracker
         public DateTime SelectedDate
         {
             get => _selectedDate;
-            set => SetProperty(ref _selectedDate, value);
+            set 
+            { 
+                SetProperty(ref _selectedDate, value);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FormattedSelectedDate)));
+            }
         }
 
         private DateTime? _selectedEndDate;
@@ -75,6 +79,7 @@ namespace ScreenTimeTracker
         // Properties to replace converters
         public string TrackingStatusText => IsTracking ? "Active" : "Paused";
         public string ChartViewModeLabel => CurrentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
+        public string FormattedSelectedDate => SelectedDate.ToString("MMM dd, yyyy");
 
         public ICommand StartTrackingCommand { get; }
         public ICommand StopTrackingCommand { get; }

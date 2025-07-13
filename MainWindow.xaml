@@ -17,9 +17,6 @@
 
     <!-- Main container with fixed header and scrollable content -->
     <Grid Margin="20">
-        <Grid.Resources>
-            <local:DateDisplayConverter x:Key="DateDisplayConverter"/>
-        </Grid.Resources>
         <Grid.RowDefinitions>
             <!-- Fixed header area -->
             <RowDefinition Height="Auto"/>
@@ -68,7 +65,7 @@
                         VerticalAlignment="Center">
                 <TextBlock Text="Select Date:" VerticalAlignment="Center"/>
                 <Button x:Name="DatePickerButton"
-                       Content="{Binding SelectedDate, Converter={StaticResource DateDisplayConverter}}"
+                       Content="{Binding FormattedSelectedDate}"
                        Command="{Binding PickDateCommand}"/>
             </StackPanel>
 
@@ -260,7 +257,7 @@
                         <!-- Date Display (moved from header) -->
                         <TextBlock Grid.Row="0"
                                    x:Name="DateDisplay"
-                                   Text="{Binding SelectedDate, Converter={StaticResource DateDisplayConverter}}"
+                                   Text="{Binding FormattedSelectedDate}"
                                    Style="{ThemeResource CaptionTextBlockStyle}"
                                    VerticalAlignment="Center"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
