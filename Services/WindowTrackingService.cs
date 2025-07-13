@@ -250,7 +250,7 @@ namespace ScreenTimeTracker.Services
                 if (currentlyIdle) return; // Skip heavy work while idle
 
                 // ----- Active-window tracking -----
-                CheckActiveWindow();
+                // Real-time events handle window changes, timer only does duration updates
 
                 // ----- Live-duration update & day rollover -----
                 lock (_lockObject)

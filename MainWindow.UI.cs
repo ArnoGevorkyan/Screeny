@@ -605,20 +605,28 @@ namespace ScreenTimeTracker
             
             if (shouldDoFullRefresh)
             {
-                // Full database aggregation refresh (expensive, but only every 10 seconds)
-                try
+                // Move database call off UI thread to prevent freezing
+                Task.Run(() =>
                 {
-                    var (start,end) = GetCurrentViewDateRange();
-                    var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
-                    _cachedTotalTime = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
-                    _lastFullRefresh = DateTime.Now;
-                    
-                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
-                }
-                catch (Exception ex) 
-                { 
-                    System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
-                }
+                    try
+                    {
+                        var (start,end) = GetCurrentViewDateRange();
+                        var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
+                        var totalTime = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
+                        
+                        // Update UI on UI thread
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            _cachedTotalTime = totalTime;
+                            _lastFullRefresh = DateTime.Now;
+                            if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
+                        });
+                    }
+                    catch (Exception ex) 
+                    { 
+                        System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
+                    }
+                });
             }
             else if (activeRec != null && _trackingService?.IsTracking == true)
             {

@@ -15,8 +15,10 @@ namespace ScreenTimeTracker.Helpers
         {
             if (record == null) return;
             
-            // Use window title first if available, otherwise keep existing logic
-            if (!string.IsNullOrEmpty(record.WindowTitle))
+            // Use window title first if available and reasonable quality
+            if (!string.IsNullOrEmpty(record.WindowTitle) && 
+                record.WindowTitle.Length <= 50 && 
+                !record.WindowTitle.Contains("?"))
             {
                 record.ProcessName = record.WindowTitle;
                 return;
