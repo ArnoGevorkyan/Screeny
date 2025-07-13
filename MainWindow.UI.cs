@@ -403,12 +403,12 @@ namespace ScreenTimeTracker
         // Helper returns the date-span currently shown in the UI
         private (DateTime Start, DateTime End) GetCurrentViewDateRange()
         {
-            if (_viewModel.IsDateRangeSelected && _viewModel.SelectedEndDate != null)
+            if (_viewModel?.IsDateRangeSelected == true && _viewModel.SelectedEndDate != null)
             {
                 return (_viewModel.SelectedDate.Date, _viewModel.SelectedEndDate.Value.Date);
             }
 
-            return (_viewModel.SelectedDate.Date, _viewModel.SelectedDate.Date);
+            return (_viewModel?.SelectedDate.Date ?? DateTime.Today, _viewModel?.SelectedDate.Date ?? DateTime.Today);
         }
 
         private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
@@ -422,7 +422,7 @@ namespace ScreenTimeTracker
                 TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
 
                 // Cap to a realistic maximum: 24 h per day * days in period
-                int totalMaxDays = GetDayCountForTimePeriod(_viewModel.CurrentTimePeriod, _viewModel.SelectedDate);
+                int totalMaxDays = GetDayCountForTimePeriod(_viewModel?.CurrentTimePeriod ?? TimePeriod.Daily, _viewModel?.SelectedDate ?? DateTime.Today);
                 TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
                 if (totalTime > absoluteMaxDuration)
                 {

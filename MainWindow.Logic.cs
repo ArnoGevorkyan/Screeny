@@ -152,7 +152,7 @@ namespace ScreenTimeTracker
 
                 if (_trackingService != null && _trackingService.IsTracking)
                 {
-                    _trackingService.StopTracking();
+                    _trackingService?.StopTracking();
                 }
 
                 SaveRecordsToDatabase();
@@ -209,7 +209,7 @@ namespace ScreenTimeTracker
             ThrowIfDisposed();
             try
             {
-                _trackingService.StartTracking();
+                _trackingService?.StartTracking();
 
                 // Start/Stop buttons are collapsed; tracking indicator handles state.
 
@@ -244,7 +244,7 @@ namespace ScreenTimeTracker
         private void StopTracking()
         {
             ThrowIfDisposed();
-            _trackingService.StopTracking();
+            _trackingService?.StopTracking();
 
             _viewModel.IsTracking = false;
 

@@ -932,16 +932,16 @@ namespace ScreenTimeTracker
 
             try
             {
-                _trackingService.StopTracking();
+                _trackingService?.StopTracking();
                 bool ok = _databaseService?.WipeDatabase() ?? false;
 
                 // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
-                _usageRecords.Clear();
-                _viewModel.AggregatedRecords.Clear();
+                _usageRecords?.Clear();
+                _viewModel?.AggregatedRecords?.Clear();
                 UpdateUsageChart();
                 UpdateSummaryTab();
 
-                _trackingService.StartTracking();
+                _trackingService?.StartTracking();
 
                 await new ContentDialog
                 {
