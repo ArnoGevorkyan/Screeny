@@ -42,7 +42,7 @@ namespace ScreenTimeTracker
         {
             // Simplified cleanup: keep only non-system processes or duration >=10s
             if (_usageRecords == null) return;
-            var toRemove = _usageRecords.Where(r => IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds < 10).ToList();
+            var toRemove = _usageRecords.Where(r => Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName) && r.Duration.TotalSeconds < 10).ToList();
             foreach (var rec in toRemove) _usageRecords.Remove(rec);
         }
 
@@ -437,6 +437,7 @@ namespace ScreenTimeTracker
                 }
 
                 // Compute idle time and update IdleRow visibility
+                // Calculate idle time from any processes that start with "Idle" 
                 var idleTotal = recordsToSummarize
                                     .Where(r => r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase))
                                     .Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
@@ -458,7 +459,7 @@ namespace ScreenTimeTracker
                 AppUsageRecord? mostUsedApp = null;
                 foreach (var record in recordsToSummarize)
                 {
-                    if (record.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) continue;
                     var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
                     if (mostUsedApp == null || capped > mostUsedApp.Duration)
                         mostUsedApp = record;
@@ -682,11 +683,7 @@ namespace ScreenTimeTracker
                     bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
                     if (!viewIncludesToday) return;
                     
-                    // Only filter out true system processes and the app itself during live updates
-                    // Allow most user apps to show live tracking
-                    if (record.ProcessName.Equals("Screeny", StringComparison.OrdinalIgnoreCase) ||
-                        record.ProcessName.Equals("ScreenTimeTracker", StringComparison.OrdinalIgnoreCase))
-                        return;
+                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
 
                     // Mark chart for deferred refresh
                     UpdateOrAddLiveRecord(record);

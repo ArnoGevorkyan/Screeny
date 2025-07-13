@@ -508,21 +508,7 @@ namespace ScreenTimeTracker.Services
 
         private static async Task<BitmapImage?> TryGetWellKnownSystemIconAsync(AppUsageRecord record, CancellationToken ct)
         {
-            // Special-case WhatsApp (many users) – look in common install paths
-            if (!record.ProcessName.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase)) return null;
-
-            string[] paths = {
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WhatsApp", "WhatsApp.exe"),
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhatsApp", "WhatsApp.exe"),
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "WhatsApp", "WhatsApp.exe")
-            };
-
-            foreach (var p in paths)
-            {
-                var bmp = await TryLoadIconWithSHGetFileInfoAsync(p, ct);
-                if (bmp != null) return bmp;
-            }
-
+            // Generic fallback - no hardcoded app paths
             return null;
         }
 

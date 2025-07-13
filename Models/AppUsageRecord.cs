@@ -136,34 +136,6 @@ namespace ScreenTimeTracker.Models
             return StartTime.Date == date.Date;
         }
 
-        public bool ShouldTrack => !ProcessFilter.IgnoredProcesses.Contains(ProcessName.ToLower()) && !IsTemporaryProcess(ProcessName);
-
-        /// <summary>
-        /// Checks if a process name appears to be a temporary file or installer
-        /// </summary>
-        private static bool IsTemporaryProcess(string processName)
-        {
-            if (string.IsNullOrEmpty(processName))
-                return false;
-
-            // Convert to lowercase for comparison
-            string lowerName = processName.ToLower();
-
-            // Check for patterns that indicate temporary processes
-            return
-                // Random hex/numeric names (like "1747797458F8MB2zabRaze...")
-                (lowerName.Length > 15 && System.Text.RegularExpressions.Regex.IsMatch(lowerName, @"^[0-9a-f]{8,}")) ||
-                
-                // Files ending with .tmp
-                lowerName.EndsWith(".tmp") ||
-                
-                // Process names starting with numbers and containing random characters
-                (lowerName.Length > 20 && System.Text.RegularExpressions.Regex.IsMatch(lowerName, @"^[0-9]{5,}.*[a-z0-9]{5,}")) ||
-                
-                // Setup/installer temporary files
-                (lowerName.Contains("setup") && lowerName.Contains(".tmp")) ||
-                (lowerName.Contains("install") && lowerName.Length > 25);
-        }
 
         public void SetFocus(bool isFocused)
         {

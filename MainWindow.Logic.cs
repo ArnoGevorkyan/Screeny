@@ -277,7 +277,7 @@ namespace ScreenTimeTracker
                     .ToList();
 
                 var recordsByProcess = recordsToSave
-                    .Where(r => !IsWindowsSystemProcess(r.ProcessName) && r.Duration.TotalSeconds > 0)
+                    .Where(r => !Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName) && r.Duration.TotalSeconds > 0)
                     .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase);
 
                 foreach (var processGroup in recordsByProcess)
@@ -587,27 +587,6 @@ namespace ScreenTimeTracker
         }
 
         // ---------------- Utility helpers (non-UI) ----------------
-        private bool IsWindowsSystemProcess(string processName)
-        {
-            if (string.IsNullOrEmpty(processName)) return false;
-
-            string normalizedName = processName.Trim().ToLowerInvariant();
-
-            string[] highPriority = {
-                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
-                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
-            };
-            if (highPriority.Any(p => normalizedName.Contains(p))) return true;
-
-            string[] others = {
-                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
-                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
-                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
-                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
-                "settingssynchost","wudfhost"
-            };
-            return others.Contains(normalizedName);
-        }
 
         // -------------------------------------------------------------
         // Helper: build and canonicalise record list on a background thread

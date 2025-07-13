@@ -1175,7 +1175,7 @@ namespace ScreenTimeTracker.Services
             }
 
             return unique.Values
-                .Where(r => !IsWindowsSystemProcess(r.ProcessName))
+                .Where(r => !Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName))
                 .OrderByDescending(r => r.Duration.TotalSeconds)
                 .ToList();
         }
@@ -1206,7 +1206,7 @@ namespace ScreenTimeTracker.Services
                 Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
                 var canonical = tmp.ProcessName;
 
-                if (IsWindowsSystemProcess(canonical) || canonical.Equals("Screeny", StringComparison.OrdinalIgnoreCase))
+                if (Models.ProcessFilter.IgnoredProcesses.Contains(canonical))
                     continue;
 
                 if (byProcess.TryGetValue(canonical, out var existing))
@@ -1229,25 +1229,5 @@ namespace ScreenTimeTracker.Services
             return byProcess.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
         }
 
-        private static bool IsWindowsSystemProcess(string processName)
-        {
-            if (string.IsNullOrWhiteSpace(processName)) return false;
-            var n = processName.Trim().ToLowerInvariant();
-
-            string[] highPriority = {
-                "explorer","shellexperiencehost","searchhost","startmenuexperiencehost","applicationframehost",
-                "systemsettings","dwm","winlogon","csrss","services","svchost","runtimebroker"
-            };
-            if (highPriority.Any(p => n.Contains(p))) return true;
-
-            string[] others = {
-                "textinputhost","windowsterminal","cmd","powershell","pwsh","conhost","winstore.app",
-                "lockapp","logonui","fontdrvhost","taskhostw","ctfmon","rundll32","dllhost","sihost",
-                "taskmgr","backgroundtaskhost","smartscreen","securityhealthservice","registry",
-                "microsoftedgeupdate","wmiprvse","spoolsv","tabtip","tabtip32","searchui","searchapp",
-                "settingssynchost","wudfhost"
-            };
-            return others.Contains(n);
-        }
     }
 } 

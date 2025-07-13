@@ -9,7 +9,7 @@ namespace ScreenTimeTracker.Helpers
     public static class ApplicationProcessingHelper
     {
         /// <summary>
-        /// Process an application record to improve naming and categorization
+        /// Process an application record to improve naming
         /// </summary>
         public static void ProcessApplicationRecord(AppUsageRecord record)
         {
@@ -34,47 +34,24 @@ namespace ScreenTimeTracker.Helpers
             }
             catch { /* best-effort – ignore failures (permissions, 32/64-bit, etc.) */ }
             
-            // Generic normalisation: use base name (lower-case stripped of suffixes) and title-case it for display.
-            var baseName = GetBaseAppName(record.ProcessName);
-            if (!string.IsNullOrWhiteSpace(baseName))
-            {
-                // Title-case for nicer display (simple approach – capitalise first letter)
-                record.ProcessName = char.ToUpper(baseName[0]) + baseName.Substring(1);
-            }
+            // Simple cleanup: remove common suffixes but preserve original names
+            record.ProcessName = CleanProcessName(record.ProcessName);
         }
         
         /// <summary>
-        /// Gets the base name of an application by removing common suffixes and normalizing
+        /// Simple cleanup of process names - removes obvious suffixes but preserves original names
         /// </summary>
-        public static string GetBaseAppName(string processName)
+        private static string CleanProcessName(string processName)
         {
-            // Extract the base application name (removing numbers, suffixes, etc.)
             if (string.IsNullOrEmpty(processName)) return processName;
 
-            // Remove common process suffixes
-            string cleanName = processName.ToLower()
-                .Replace("64", "")
-                .Replace("32", "")
-                .Replace("x86", "")
-                .Replace("x64", "")
+            // Remove common architecture suffixes only
+            string cleaned = processName
                 .Replace(" (x86)", "")
-                .Replace(" (x64)", "");
+                .Replace(" (x64)", "")
+                .Trim();
 
-            // Match common app variations
-            if (cleanName.StartsWith("telegram"))
-                return "telegram";
-            if (cleanName.StartsWith("discord"))
-                return "discord";
-            if (cleanName.Contains("chrome") || cleanName.Contains("chromium"))
-                return "chrome";
-            if (cleanName.Contains("firefox"))
-                return "firefox";
-            if (cleanName.Contains("devenv") || cleanName.Contains("visualstudio"))
-                return "visualstudio";
-            if (cleanName.Contains("code") || cleanName.Contains("vscode"))
-                return "vscode";
-
-            return cleanName;
+            return cleaned;
         }
     }
 }
