@@ -15,7 +15,14 @@ namespace ScreenTimeTracker.Helpers
         {
             if (record == null) return;
             
-            // Try to use the executable's ProductName as a friendly label (generic solution)
+            // Use window title first if available, otherwise keep existing logic
+            if (!string.IsNullOrEmpty(record.WindowTitle))
+            {
+                record.ProcessName = record.WindowTitle;
+                return;
+            }
+            
+            // Try to use the executable's ProductName as a friendly label (existing logic)
             try
             {
                 if (record.ProcessId > 0)
@@ -34,7 +41,7 @@ namespace ScreenTimeTracker.Helpers
             }
             catch { /* best-effort – ignore failures (permissions, 32/64-bit, etc.) */ }
             
-            // Simple cleanup: remove common suffixes but preserve original names
+            // Simple cleanup of process name
             record.ProcessName = CleanProcessName(record.ProcessName);
         }
         

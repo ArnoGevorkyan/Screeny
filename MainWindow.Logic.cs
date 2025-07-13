@@ -355,16 +355,7 @@ namespace ScreenTimeTracker
                         break;
                     case TimePeriod.Daily:
                     default:
-                        records = BuildRecords(() =>
-                        {
-                            var raw = _databaseService!.GetRecordsForDate(date) ?? new List<AppUsageRecord>();
-                            if (date.Date == DateTime.Today)
-                            {
-                                var live = _trackingService?.GetRecords()?.Where(r => r.IsFromDate(date)).ToList() ?? new List<AppUsageRecord>();
-                                raw.AddRange(live);
-                            }
-                            return raw;
-                        });
+                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService));
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";

@@ -374,16 +374,10 @@
                                     <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             
-                            <!-- Icon with loading state -->
+                            <!-- Icon -->
                             <Grid Grid.Column="0" Width="24" Height="24">
-                                    <FontIcon Glyph="&#xECAA;"
-                                              FontSize="16"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Visibility="{Binding AppIcon, Converter={StaticResource NullToVisibleConverter}}"/>
                                     <Image Source="{x:Bind AppIcon, Mode=OneWay}"
-                                           Width="24" Height="24"
-                                           Visibility="{Binding AppIcon, Converter={StaticResource NotNullToVisibleConverter}}"/>
+                                           Width="24" Height="24"/>
                             </Grid>
                             
                                 <TextBlock Text="{x:Bind ProcessName}" Grid.Column="2" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"/>

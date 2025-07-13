@@ -506,10 +506,10 @@ namespace ScreenTimeTracker.Services
             return null;
         }
 
-        private static async Task<BitmapImage?> TryGetWellKnownSystemIconAsync(AppUsageRecord record, CancellationToken ct)
+        private static Task<BitmapImage?> TryGetWellKnownSystemIconAsync(AppUsageRecord record, CancellationToken ct)
         {
             // Generic fallback - no hardcoded app paths
-            return null;
+            return Task.FromResult<BitmapImage?>(null);
         }
 
         private static async Task<BitmapImage?> LoadImageFromFileAsync(string imagePath, CancellationToken ct)
@@ -609,8 +609,18 @@ namespace ScreenTimeTracker.Services
             }
             catch
             {
-                // If even this fails, return null and let the gear icon show
-                return null;
+                // Create absolute minimum fallback - single pixel transparent image
+                try
+                {
+                    using var fallbackBitmap = new System.Drawing.Bitmap(1, 1);
+                    fallbackBitmap.SetPixel(0, 0, System.Drawing.Color.Transparent);
+                    return await ConvertBitmapToBitmapImageAsync(fallbackBitmap, ct);
+                }
+                catch
+                {
+                    // Still return null if absolutely everything fails
+                    return null;
+                }
             }
         }
     }
