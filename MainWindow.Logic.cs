@@ -277,7 +277,9 @@ namespace ScreenTimeTracker
                     .ToList();
 
                 var recordsByProcess = recordsToSave
-                    .Where(r => !Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName) && r.Duration.TotalSeconds > 0)
+                    .Where(r => !Models.ProcessFilter.ShouldIgnoreProcess(r.ProcessName) && 
+                           !r.ProcessName.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase) && 
+                           r.Duration.TotalSeconds > 0)
                     .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase);
 
                 foreach (var processGroup in recordsByProcess)

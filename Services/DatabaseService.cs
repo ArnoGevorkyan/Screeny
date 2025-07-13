@@ -1123,14 +1123,22 @@ namespace ScreenTimeTracker.Services
                 Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(temp);
                 var processName = temp.ProcessName;
 
-                unique[processName] = new AppUsageRecord
+                if (unique.TryGetValue(processName, out var existing))
                 {
-                    ProcessName = processName,
-                    ApplicationName = processName,
-                    _accumulatedDuration = totalDuration,
-                    Date = startDate,
-                    StartTime = startDate
-                };
+                    // Merge with existing database entry
+                    existing._accumulatedDuration += totalDuration;
+                }
+                else
+                {
+                    unique[processName] = new AppUsageRecord
+                    {
+                        ProcessName = processName,
+                        ApplicationName = processName,
+                        _accumulatedDuration = totalDuration,
+                        Date = startDate,
+                        StartTime = startDate
+                    };
+                }
             }
 
             // Merge live records if requested
@@ -1175,7 +1183,8 @@ namespace ScreenTimeTracker.Services
             }
 
             return unique.Values
-                .Where(r => !Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName))
+                .Where(r => !Models.ProcessFilter.ShouldIgnoreProcess(r.ProcessName) && 
+                       !r.ProcessName.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(r => r.Duration.TotalSeconds)
                 .ToList();
         }
@@ -1206,7 +1215,8 @@ namespace ScreenTimeTracker.Services
                 Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
                 var canonical = tmp.ProcessName;
 
-                if (Models.ProcessFilter.IgnoredProcesses.Contains(canonical))
+                if (Models.ProcessFilter.ShouldIgnoreProcess(canonical) ||
+                    canonical.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 if (byProcess.TryGetValue(canonical, out var existing))

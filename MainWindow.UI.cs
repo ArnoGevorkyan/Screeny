@@ -42,7 +42,7 @@ namespace ScreenTimeTracker
         {
             // Simplified cleanup: keep only non-system processes or duration >=10s
             if (_usageRecords == null) return;
-            var toRemove = _usageRecords.Where(r => Models.ProcessFilter.IgnoredProcesses.Contains(r.ProcessName) && r.Duration.TotalSeconds < 10).ToList();
+            var toRemove = _usageRecords.Where(r => Models.ProcessFilter.ShouldIgnoreProcess(r.ProcessName) && r.Duration.TotalSeconds < 10).ToList();
             foreach (var rec in toRemove) _usageRecords.Remove(rec);
         }
 
@@ -459,7 +459,7 @@ namespace ScreenTimeTracker
                 AppUsageRecord? mostUsedApp = null;
                 foreach (var record in recordsToSummarize)
                 {
-                    if (Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) continue;
+                    if (Models.ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) continue;
                     var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
                     if (mostUsedApp == null || capped > mostUsedApp.Duration)
                         mostUsedApp = record;
@@ -683,7 +683,11 @@ namespace ScreenTimeTracker
                     bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
                     if (!viewIncludesToday) return;
                     
-                    if (ScreenTimeTracker.Models.ProcessFilter.IgnoredProcesses.Contains(record.ProcessName)) return;
+                    // Always filter out the current process regardless of ProcessFilter
+                    var currentProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+                    if (record.ProcessName.Equals(currentProcessName, StringComparison.OrdinalIgnoreCase)) return;
+                    
+                    if (ScreenTimeTracker.Models.ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) return;
 
                     // Mark chart for deferred refresh
                     UpdateOrAddLiveRecord(record);
