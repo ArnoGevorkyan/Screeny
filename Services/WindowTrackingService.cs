@@ -207,7 +207,7 @@ namespace ScreenTimeTracker.Services
                 // ----- Idle detection -----
                 int idleSec = GetIdleSeconds();
                 bool mediaPlaying = IsAnyMediaPlaying();
-                bool currentlyIdle = idleSec > DurationLimits.IdlePauseSeconds && !mediaPlaying;
+                bool currentlyIdle = idleSec > 300 && !mediaPlaying; // 5 minutes idle pause
 
                 lock (_lockObject)
                 {
