@@ -18,12 +18,7 @@
     <!-- Main container with fixed header and scrollable content -->
     <Grid Margin="20">
         <Grid.Resources>
-            <local:NullToVisibleConverter x:Key="NullToVisibleConverter"/>
-            <local:NotNullToVisibleConverter x:Key="NotNullToVisibleConverter"/>
             <local:DateDisplayConverter x:Key="DateDisplayConverter"/>
-            <local:ChartViewModeToLabelConverter x:Key="ChartViewModeToLabelConverter"/>
-            <local:BoolToTrackingTextConverter x:Key="BoolToTrackingTextConverter"/>
-            <local:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
         </Grid.Resources>
         <Grid.RowDefinitions>
             <!-- Fixed header area -->
@@ -114,14 +109,14 @@
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Ellipse x:Name="PulseDot"
                                  Width="6" Height="6"
-                                 Fill="{Binding IsTracking, Converter={StaticResource BoolToBrushConverter}}"
+                                 Fill="{ThemeResource AccentFillColorDefaultBrush}"
                                  RenderTransformOrigin="0.5,0.5">
                             <Ellipse.RenderTransform>
                                 <ScaleTransform x:Name="DotTransform" ScaleX="1" ScaleY="1" />
                             </Ellipse.RenderTransform>
                         </Ellipse>
                         <TextBlock x:Name="TrackingStatusText"
-                                   Text="{Binding IsTracking, Converter={StaticResource BoolToTrackingTextConverter}}"
+                                   Text="{Binding TrackingStatusText}"
                                    VerticalAlignment="Center"
                                    Style="{ThemeResource CaptionTextBlockStyle}"/>
                     </StackPanel>
@@ -198,7 +193,7 @@
                                     Padding="4"
                                     Visibility="Collapsed">
                             <TextBlock x:Name="ViewModeLabel"
-                                      Text="{Binding CurrentChartViewMode, Converter={StaticResource ChartViewModeToLabelConverter}}" 
+                                      Text="{Binding ChartViewModeLabel}" 
                                       Padding="12,4"
                                       VerticalAlignment="Center"/>
                         </StackPanel>

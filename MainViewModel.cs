@@ -53,15 +53,28 @@ namespace ScreenTimeTracker
         public ChartViewMode CurrentChartViewMode
         {
             get => _currentChartViewMode;
-            set => SetProperty(ref _currentChartViewMode, value);
+            set 
+            { 
+                SetProperty(ref _currentChartViewMode, value);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChartViewModeLabel)));
+            }
         }
 
         private bool _isTracking;
         public bool IsTracking
         {
             get => _isTracking;
-            set => SetProperty(ref _isTracking, value);
+            set 
+            { 
+                SetProperty(ref _isTracking, value);
+                // Notify dependent properties
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TrackingStatusText)));
+            }
         }
+
+        // Properties to replace converters
+        public string TrackingStatusText => IsTracking ? "Active" : "Paused";
+        public string ChartViewModeLabel => CurrentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
 
         public ICommand StartTrackingCommand { get; }
         public ICommand StopTrackingCommand { get; }
