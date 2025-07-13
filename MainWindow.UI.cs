@@ -608,7 +608,7 @@ namespace ScreenTimeTracker
                 try
                 {
                     var (start,end) = GetCurrentViewDateRange();
-                    var agg = _databaseService.GetAggregatedRecordsWithLive(start, end, _trackingService);
+                    var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
                     _cachedTotalTime = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
                     _lastFullRefresh = DateTime.Now;
                     
@@ -800,7 +800,7 @@ namespace ScreenTimeTracker
         {
             try
             {
-                var live = _databaseService.GetDetailRecordsWithLive(DateTime.Today, _trackingService);
+                var live = _databaseService?.GetDetailRecordsWithLive(DateTime.Today, _trackingService) ?? new List<AppUsageRecord>();
                 _usageRecords.Clear();
                 foreach (var r in live.OrderByDescending(r => r.Duration))
                 {
