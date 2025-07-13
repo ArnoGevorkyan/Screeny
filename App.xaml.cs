@@ -187,27 +187,7 @@ public partial class App : Application
     {
         try
         {
-            // --- Automatic Microsoft Store update check ---
-            try
-            {
-                // Skip update logic when running a side-loaded/dev build
-                if (!Windows.ApplicationModel.Package.Current.IsDevelopmentMode)
-                {
-                    bool updateInstalled = await Services.StoreUpdateService.CheckAndApplyUpdatesAsync();
-
-                    if (updateInstalled)
-                    {
-                        WriteToLog("A newer version was installed. Restarting application …");
-                        Microsoft.Windows.AppLifecycle.AppInstance.Restart("");
-                        return; // Terminate further launch actions; the process will exit shortly
-                    }
-                }
-            }
-            catch (Exception updEx)
-            {
-                WriteToLog($"Store update check failed: {updEx.Message}");
-                // Continue normal launch so the app is still usable
-            }
+            // --- Store update check removed for simplicity ---
 
             WriteToLog("OnLaunched method called - attempting to create the main window");
             
