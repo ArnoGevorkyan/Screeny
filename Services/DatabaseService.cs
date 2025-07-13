@@ -1113,76 +1113,32 @@ namespace ScreenTimeTracker.Services
         {
             if (startDate > endDate) (startDate, endDate) = (endDate, startDate);
 
-            var unique = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+            var aggregated = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
 
-            // Get database records
+            // Get database records and convert to AppUsageRecord format
             var dbReport = GetUsageReportForDateRange(startDate, endDate);
-            foreach (var (processNameRaw, totalDuration) in dbReport)
+            var dbRecords = dbReport.Select(pair => new AppUsageRecord
             {
-                var temp = new AppUsageRecord { ProcessName = processNameRaw };
-                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(temp);
-                var processName = temp.ProcessName;
+                ProcessName = pair.processName,
+                _accumulatedDuration = pair.totalDuration,
+                Date = startDate,
+                StartTime = startDate
+            });
 
-                if (unique.TryGetValue(processName, out var existing))
-                {
-                    // Merge with existing database entry
-                    existing._accumulatedDuration += totalDuration;
-                }
-                else
-                {
-                    unique[processName] = new AppUsageRecord
-                    {
-                        ProcessName = processName,
-                        ApplicationName = processName,
-                        _accumulatedDuration = totalDuration,
-                        Date = startDate,
-                        StartTime = startDate
-                    };
-                }
+            // Aggregate database records
+            var dbAggregated = AggregateRecords(dbRecords, startDate);
+            foreach (var (processName, record) in dbAggregated)
+            {
+                aggregated[processName] = record;
             }
 
             // Merge live records if requested
-            if (includeLiveRecords && endDate.Date >= DateTime.Today && trackingService != null)
+            if (includeLiveRecords && trackingService != null)
             {
-                var live = trackingService.GetRecords()
-                    .Where(r => r.Date >= startDate && r.Date <= endDate)
-                    .ToList();
-
-                foreach (var liveRec in live)
-                {
-                    if (liveRec.Duration.TotalSeconds <= 0) continue;
-
-                    var tmpLive = new AppUsageRecord { ProcessName = liveRec.ProcessName, WindowTitle = liveRec.WindowTitle };
-                    Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmpLive);
-                    var canonicalLive = tmpLive.ProcessName;
-
-                    if (unique.TryGetValue(canonicalLive, out var existing))
-                    {
-                        // Add live duration to existing database duration instead of replacing
-                        existing._accumulatedDuration += liveRec.Duration;
-                        existing.WindowHandle = liveRec.WindowHandle;
-                        if (!string.IsNullOrEmpty(liveRec.WindowTitle)) existing.WindowTitle = liveRec.WindowTitle;
-                        if (liveRec.StartTime < existing.StartTime) existing.StartTime = liveRec.StartTime;
-                    }
-                    else
-                    {
-                        var clone = new AppUsageRecord
-                        {
-                            ProcessName = canonicalLive,
-                            ApplicationName = liveRec.ApplicationName,
-                            WindowTitle = liveRec.WindowTitle,
-                            WindowHandle = liveRec.WindowHandle,
-                            _accumulatedDuration = liveRec.Duration,
-                            Date = liveRec.Date,
-                            StartTime = liveRec.StartTime,
-                            IsFocused = liveRec.IsFocused
-                        };
-                        unique[clone.ProcessName] = clone;
-                    }
-                }
+                MergeLiveRecords(aggregated, trackingService, startDate, endDate);
             }
 
-            return unique.Values
+            return aggregated.Values
                 .Where(r => !Models.ProcessFilter.ShouldIgnoreProcess(r.ProcessName) && 
                        !r.ProcessName.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(r => r.Duration.TotalSeconds)
@@ -1195,33 +1151,97 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
         {
-            var list = GetRecordsForDate(date) ?? new List<AppUsageRecord>();
-
+            var dbRecords = GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+            var aggregated = AggregateRecords(dbRecords, date);
+            
             if (date.Date == DateTime.Today && trackingService != null)
             {
-                var live = trackingService.GetRecords()
-                    .Where(r => r.IsFromDate(date))
-                    .ToList();
-                list.AddRange(live);
+                var liveRecords = trackingService.GetRecords().Where(r => r.IsFromDate(date));
+                var liveAggregated = AggregateRecords(liveRecords, date);
+                
+                foreach (var (processName, liveRecord) in liveAggregated)
+                {
+                    if (aggregated.TryGetValue(processName, out var existing))
+                    {
+                        existing._accumulatedDuration += liveRecord.Duration;
+                        existing.WindowHandle = liveRecord.WindowHandle;
+                        if (!string.IsNullOrEmpty(liveRecord.WindowTitle)) existing.WindowTitle = liveRecord.WindowTitle;
+                    }
+                    else
+                    {
+                        aggregated[processName] = liveRecord;
+                    }
+                }
             }
 
-            var byProcess = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+            return aggregated.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
+        }
 
-            foreach (var rec in list)
+        #region Helper Methods
+
+        /// <summary>
+        /// Merges live tracking records into existing aggregated records dictionary
+        /// </summary>
+        private static void MergeLiveRecords(Dictionary<string, AppUsageRecord> aggregated, WindowTrackingService trackingService, DateTime startDate, DateTime endDate)
+        {
+            if (trackingService == null || endDate.Date < DateTime.Today) return;
+
+            var liveRecords = trackingService.GetRecords()
+                .Where(r => r.Date >= startDate && r.Date <= endDate && r.Duration.TotalSeconds > 0)
+                .ToList();
+
+            foreach (var liveRec in liveRecords)
+            {
+                var temp = new AppUsageRecord { ProcessName = liveRec.ProcessName, WindowTitle = liveRec.WindowTitle };
+                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(temp);
+                var processName = temp.ProcessName;
+
+                if (aggregated.TryGetValue(processName, out var existing))
+                {
+                    existing._accumulatedDuration += liveRec.Duration;
+                    existing.WindowHandle = liveRec.WindowHandle;
+                    if (!string.IsNullOrEmpty(liveRec.WindowTitle)) existing.WindowTitle = liveRec.WindowTitle;
+                    if (liveRec.StartTime < existing.StartTime) existing.StartTime = liveRec.StartTime;
+                }
+                else
+                {
+                    var newRecord = new AppUsageRecord
+                    {
+                        ProcessName = processName,
+                        ApplicationName = processName,
+                        _accumulatedDuration = liveRec.Duration,
+                        Date = liveRec.Date,
+                        StartTime = liveRec.StartTime,
+                        EndTime = liveRec.EndTime,
+                        WindowHandle = liveRec.WindowHandle,
+                        WindowTitle = liveRec.WindowTitle
+                    };
+                    aggregated[processName] = newRecord;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Aggregates records by process name, merging durations and handling duplicates
+        /// </summary>
+        private static Dictionary<string, AppUsageRecord> AggregateRecords(IEnumerable<AppUsageRecord> records, DateTime? fallbackDate = null)
+        {
+            var aggregated = new Dictionary<string, AppUsageRecord>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rec in records)
             {
                 if (rec.Duration.TotalSeconds < 5) continue;
                 
-                var tmp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
-                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(tmp);
-                var canonical = tmp.ProcessName;
+                var temp = new AppUsageRecord { ProcessName = rec.ProcessName, WindowTitle = rec.WindowTitle };
+                Helpers.ApplicationProcessingHelper.ProcessApplicationRecord(temp);
+                var processName = temp.ProcessName;
 
-                if (Models.ProcessFilter.ShouldIgnoreProcess(canonical) ||
-                    canonical.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase))
+                if (Models.ProcessFilter.ShouldIgnoreProcess(processName) ||
+                    processName.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (byProcess.TryGetValue(canonical, out var existing))
+                if (aggregated.TryGetValue(processName, out var existing))
                 {
-                    // Add durations instead of taking the longer one to avoid losing data
                     existing._accumulatedDuration += rec.Duration;
                     if (rec.StartTime < existing.StartTime) existing.StartTime = rec.StartTime;
                     if (rec.EndTime.HasValue)
@@ -1231,13 +1251,24 @@ namespace ScreenTimeTracker.Services
                 }
                 else
                 {
-                    rec.ProcessName = canonical;
-                    byProcess[canonical] = rec;
+                    var newRecord = new AppUsageRecord
+                    {
+                        ProcessName = processName,
+                        ApplicationName = processName,
+                        _accumulatedDuration = rec.Duration,
+                        Date = rec.Date != default ? rec.Date : (fallbackDate ?? DateTime.Today),
+                        StartTime = rec.StartTime,
+                        EndTime = rec.EndTime,
+                        WindowTitle = rec.WindowTitle
+                    };
+                    aggregated[processName] = newRecord;
                 }
             }
 
-            return byProcess.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
+            return aggregated;
         }
+
+        #endregion
 
     }
 } 
