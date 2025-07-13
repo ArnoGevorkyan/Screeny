@@ -127,7 +127,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.StartTracking() - Starting tracking ====");
                 _timer.Start();
                 IsTracking = true;
             }
@@ -143,7 +142,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (!IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.StopTracking() - Stopping tracking (Normal) ====");
                 _timer.Stop();
                 IsTracking = false;
 
@@ -173,17 +171,13 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (!IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.PauseTrackingForSuspend() - Pausing for system suspend ====");
                 _timer.Stop();
                 IsTracking = false;
 
                 if (_currentRecord != null)
                 {
-                    Debug.WriteLine($"Suspend: Finalizing record for {_currentRecord.ProcessName}");
                     _currentRecord.SetFocus(false);
                     _currentRecord.EndTime = DateTime.Now;
-                    
-                    Debug.WriteLine($"Suspend: Sending record for {_currentRecord.ProcessName} (Duration: {_currentRecord.Duration.TotalSeconds}s)");
                     RecordReadyForSave?.Invoke(this, _currentRecord);
                     _currentRecord = null;
                 }
@@ -197,7 +191,6 @@ namespace ScreenTimeTracker.Services
                 ThrowIfDisposed();
                 if (IsTracking) return;
 
-                Debug.WriteLine("==== WindowTrackingService.ResumeTrackingAfterSuspend() - Resuming tracking ====");
                 IsTracking = true;
                 _timer.Start();
             }
@@ -409,8 +402,6 @@ namespace ScreenTimeTracker.Services
             {
                 if (!_disposed)
                 {
-                    Debug.WriteLine("Disposing WindowTrackingService...");
-                    
                     // Stop and dispose timer first to prevent any more events
                     try
                     {
@@ -434,7 +425,6 @@ namespace ScreenTimeTracker.Services
                         _winEventDelegate = null;
                     }
 
-                    Debug.WriteLine("WindowTrackingService disposed.");
                 }
             }
         }

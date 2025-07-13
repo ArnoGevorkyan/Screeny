@@ -302,7 +302,6 @@ namespace ScreenTimeTracker
                 {
                     double totalHours = weekRecords.Sum(r => r.Duration.TotalHours);
                     double dailyAverage = totalHours / 7.0;
-                    System.Diagnostics.Debug.WriteLine($"Daily average: {dailyAverage:F1} h");
                 }
 
                 UpdateChartWithRecords(weekRecords);
@@ -379,7 +378,6 @@ namespace ScreenTimeTracker
                     if (DateDisplay != null)
                     {
                         DateDisplay.Text = headerText;
-                        System.Diagnostics.Debug.WriteLine($"DateDisplay updated to: {headerText}");
                     }
                 });
             }

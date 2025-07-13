@@ -127,11 +127,9 @@ namespace ScreenTimeTracker.Helpers
             {
                 // Construct the absolute path to the icon file
                  string iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "screeny icon.ico");
-                 Debug.WriteLine($"Attempting to load tray icon from: {iconPath}");
 
                  if (!System.IO.File.Exists(iconPath))
                  {
-                     Debug.WriteLine($"ERROR: Tray icon file not found at {iconPath}");
                      _hIcon = IntPtr.Zero;
                      return;
                  }
@@ -142,12 +140,8 @@ namespace ScreenTimeTracker.Helpers
                 if (_hIcon == IntPtr.Zero)
                 {
                     int error = Marshal.GetLastWin32Error();
-                    Debug.WriteLine($"ERROR: Failed to load icon from file '{iconPath}'. Error code: {error}");
+                    Debug.WriteLine($"ERROR: Failed to load tray icon. Error code: {error}");
                     // Optionally, try loading a default system icon as fallback
-                }
-                else
-                {
-                    Debug.WriteLine($"Successfully loaded icon from file. Handle: {_hIcon}");
                 }
             }
             catch (Exception ex)

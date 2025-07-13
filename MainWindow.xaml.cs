@@ -119,7 +119,6 @@ namespace ScreenTimeTracker
             
             // Ensure today's date is valid
             DateTime todayDate = DateTime.Today;
-            System.Diagnostics.Debug.WriteLine($"[LOG] System time check - Today: {todayDate:yyyy-MM-dd}, Now: {DateTime.Now}");
             
             // Use today's date
             _viewModel.SelectedDate = todayDate;
@@ -163,15 +162,10 @@ namespace ScreenTimeTracker
 
             // Initialize services
             _databaseService = new DatabaseService();
-            // Log database initialization status
-            System.Diagnostics.Debug.WriteLine($"[Database Check] DatabaseService initialized. IsDatabaseInitialized: {_databaseService.IsDatabaseInitialized()}");
-            
             // Pass DatabaseService to WindowTrackingService
             if (_databaseService == null) 
             {
                 // Handle the case where database service failed to initialize (optional)
-                 System.Diagnostics.Debug.WriteLine("CRITICAL: DatabaseService is null, cannot initialize WindowTrackingService properly.");
-                 // Consider throwing an exception or showing an error message
                  throw new InvalidOperationException("DatabaseService could not be initialized.");
             }
             _trackingService = new WindowTrackingService();
@@ -181,7 +175,6 @@ namespace ScreenTimeTracker
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
             _trackingService.RecordReadyForSave += TrackingService_RecordReadyForSave;
             
-            System.Diagnostics.Debug.WriteLine("MainWindow: Tracking service events registered");
 
             // Handle window closing
             this.Closed += (sender, args) =>

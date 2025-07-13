@@ -88,7 +88,6 @@ namespace ScreenTimeTracker
         // ---------------- Lifecycle & disposal ----------------
         public void Dispose()
         {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING Dispose");
             if (!_disposed)
             {
                 // Dispose Tray Icon Helper FIRST to remove icon
@@ -107,25 +106,19 @@ namespace ScreenTimeTracker
                 }
 
                 // Stop services
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Stopping services...");
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Services stopped.");
 
                 // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Save skipped.");
 
                 // Clear collections
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Clearing collections...");
                 _usageRecords?.Clear();
 
                 // Dispose services
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Disposing services...");
                 _trackingService?.Dispose();
                 _databaseService?.Dispose();
 
                 // Remove event handlers
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Removing event handlers...");
                 if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
                 if (_trackingService != null)
                 {
@@ -141,13 +134,7 @@ namespace ScreenTimeTracker
                 }
 
                 _disposed = true;
-                System.Diagnostics.Debug.WriteLine("[LOG] MainWindow disposed.");
             }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine("[LOG] Dispose: Already disposed.");
-            }
-            System.Diagnostics.Debug.WriteLine("[LOG] EXITING Dispose");
         }
 
         /// <summary>
@@ -155,41 +142,31 @@ namespace ScreenTimeTracker
         /// </summary>
         public void PrepareForSuspend()
         {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING PrepareForSuspend");
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] Current system time: {DateTime.Now}");
                 if (_viewModel.SelectedDate > DateTime.Today)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future _selectedDate detected ({_viewModel.SelectedDate:yyyy-MM-dd}), resetting to today.");
+                    System.Diagnostics.Debug.WriteLine($"WARNING: Future date detected ({_viewModel.SelectedDate:yyyy-MM-dd}), resetting to today.");
                     _viewModel.SelectedDate = DateTime.Today;
                 }
 
                 if (_trackingService != null && _trackingService.IsTracking)
                 {
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE StopTracking()");
                     _trackingService.StopTracking();
-                    System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER StopTracking()");
                 }
 
-                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: BEFORE SaveRecordsToDatabase()");
                 SaveRecordsToDatabase();
-                System.Diagnostics.Debug.WriteLine("[LOG] PrepareForSuspend: AFTER SaveRecordsToDatabase()");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] PrepareForSuspend: **** ERROR **** during save: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
+                System.Diagnostics.Debug.WriteLine($"ERROR in PrepareForSuspend: {ex.Message}");
             }
-            System.Diagnostics.Debug.WriteLine("[LOG] EXITING PrepareForSuspend");
         }
 
         private void DoAutoSave()
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine("Auto-save - saving records");
-
                 SaveRecordsToDatabase();
                 CleanupSystemProcesses();
 
@@ -197,7 +174,6 @@ namespace ScreenTimeTracker
                 if (_autoSaveCycleCount >= 12 && _databaseService != null)
                 {
                     _autoSaveCycleCount = 0;
-                    System.Diagnostics.Debug.WriteLine("Running periodic database maintenance");
                     Task.Run(() =>
                     {
                         try
@@ -206,14 +182,13 @@ namespace ScreenTimeTracker
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Error during periodic database maintenance: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"Error during database maintenance: {ex.Message}");
                         }
                     });
                 }
 
                 if (_viewModel.SelectedDate.Date == DateTime.Now.Date && _viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
-                    System.Diagnostics.Debug.WriteLine("Refreshing today's data after auto-save");
                     LoadRecordsForDate(_viewModel.SelectedDate);
                 }
                 else
@@ -234,19 +209,7 @@ namespace ScreenTimeTracker
             ThrowIfDisposed();
             try
             {
-                System.Diagnostics.Debug.WriteLine("Starting tracking");
                 _trackingService.StartTracking();
-                System.Diagnostics.Debug.WriteLine($"Tracking started: IsTracking={_trackingService.IsTracking}");
-
-                // Log current foreground window
-                if (_trackingService.CurrentRecord != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Current window: {_trackingService.CurrentRecord.ProcessName} - {_trackingService.CurrentRecord.WindowTitle}");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("No current window detected yet");
-                }
 
                 // Start/Stop buttons are collapsed; tracking indicator handles state.
 
@@ -281,7 +244,6 @@ namespace ScreenTimeTracker
         private void StopTracking()
         {
             ThrowIfDisposed();
-            System.Diagnostics.Debug.WriteLine("Stopping tracking");
             _trackingService.StopTracking();
 
             _viewModel.IsTracking = false;
@@ -304,10 +266,8 @@ namespace ScreenTimeTracker
 
         private void SaveRecordsToDatabase()
         {
-            System.Diagnostics.Debug.WriteLine("[LOG] ENTERING SaveRecordsToDatabase");
             if (_databaseService == null || _trackingService == null)
             {
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase: prerequisites missing, skipping.");
                 return;
             }
             try
@@ -338,11 +298,10 @@ namespace ScreenTimeTracker
                         System.Diagnostics.Debug.WriteLine($"Save error for {processGroup.Key}: {pe.Message}");
                     }
                 }
-                System.Diagnostics.Debug.WriteLine("[LOG] SaveRecordsToDatabase complete");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[LOG] SaveRecordsToDatabase exception: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"ERROR in SaveRecordsToDatabase: {ex.Message}");
             }
         }
 
@@ -357,7 +316,6 @@ namespace ScreenTimeTracker
         // ---------------- Data loading logic ----------------
         private void LoadRecordsForDate(DateTime date)
         {
-            System.Diagnostics.Debug.WriteLine($"Loading records for date: {date:yyyy-MM-dd}, System.Today: {DateTime.Today:yyyy-MM-dd}");
             if (date > DateTime.Today) date = DateTime.Today;
 
             _viewModel.SelectedDate = date;
