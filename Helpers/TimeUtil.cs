@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ScreenTimeTracker.Models;
+using LiveChartsCore;
+using LiveChartsCore.SkiaSharpView;
 
 namespace ScreenTimeTracker.Helpers
 {
     /// <summary>
-    /// Miscellaneous time/interval utilities used across the app. Extracted from ChartHelper to
-    /// keep that class focused on chart rendering only.
+    /// Time/interval utilities and chart configuration settings
     /// </summary>
     public static class TimeUtil
     {
@@ -83,6 +84,18 @@ namespace ScreenTimeTracker.Helpers
         public static TimeSpan CalculateUniqueTotalTime(IEnumerable<AppUsageRecord> records)
         {
             return records?.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration) ?? TimeSpan.Zero;
+        }
+
+        /// <summary>
+        /// Configures the default theme and settings for LiveCharts
+        /// </summary>
+        public static void ConfigureCharts()
+        {
+            LiveCharts.Configure(config =>
+                config
+                    .AddSkiaSharp()
+                    .AddDefaultMappers()
+            );
         }
     }
 } 

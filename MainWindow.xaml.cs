@@ -33,7 +33,7 @@ namespace ScreenTimeTracker
         static MainWindow()
         {
             // Configure global LiveCharts settings
-            LiveChartsSettings.ConfigureTheme();
+            Helpers.TimeUtil.ConfigureCharts();
         }
 
         // Replace the old popup fields with a DatePickerPopup instance
