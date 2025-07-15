@@ -141,21 +141,6 @@ namespace ScreenTimeTracker
                  Debug.WriteLine("CRITICAL ERROR: Could not get window handle in constructor.");
                  // Cannot proceed with power notifications or subclassing without HWND
             }
-            // MOVED SubclassWindow() and TrayIconHelper initialization to MainWindow_Loaded
-            // else
-            // {
-            //     // Subclass the window procedure
-            //     SubclassWindow();
-            //     // Initialize TrayIconHelper AFTER getting handle
-            //     _trayIconHelper = new TrayIconHelper(_hWnd);
-            //      Debug.WriteLine("TrayIconHelper initialized.");
-            //      // Subscribe to TrayIconHelper events
-            //      if (_trayIconHelper != null)
-            //      {
-            //          _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
-            //          _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
-            //      }
-            // }
 
             // Initialize the WindowControlHelper
             _windowHelper = new WindowControlHelper(this);
@@ -198,8 +183,6 @@ namespace ScreenTimeTracker
             _appWindow.Closing += AppWindow_Closing;
 
             // Indicator visuals are data-bound; no imperative call needed
-
-            // Instantiate icon service
 
             // ViewModel is already kept in sync via property wrappers.
 

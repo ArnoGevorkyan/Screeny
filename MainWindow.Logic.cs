@@ -109,7 +109,6 @@ namespace ScreenTimeTracker
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
 
-                // REMOVED SaveRecordsToDatabase() - handled by PrepareForSuspend or ExitClicked.
 
                 // Clear collections
                 _usageRecords?.Clear();

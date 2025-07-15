@@ -79,3 +79,32 @@ dotnet publish -c Release
 - Requires x64 architecture
 - Icons are loaded asynchronously to prevent UI blocking
 - Power management integration to pause tracking during sleep
+
+## Code Cleanup Guidelines
+
+**COMPLEXITY WARNING SYSTEM** - Always check these before making ANY change:
+
+### 🚨 STOP IMMEDIATELY IF:
+- Creating new files for a cleanup task
+- Adding more code than removing (patches over bugs)
+- Modifying working code that isn't causing actual problems
+- Need to change >3 files for one logical fix
+- Spending >10 minutes on a "simple" cleanup
+- Creating abstractions where none existed before
+
+### ⚠️ WARNING SIGNS:
+- Thinking "this would be better if I also..."
+- Solving problems that don't actually exist  
+- Making changes "for consistency" without real benefit
+- Adding helper methods to "organize" working code
+
+### ✅ GOOD CHANGES:
+- Deleting dead/commented code
+- Fixing actual performance problems
+- Removing code that serves no purpose
+- Simple, obvious fixes with clear user benefit
+
+### 🎯 GOLDEN RULE:
+**If you have to think hard about whether the change is worth it, it's not.**
+
+The goal is to SUBTRACT problems, not add solutions to non-problems.
