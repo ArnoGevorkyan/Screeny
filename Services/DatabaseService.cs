@@ -1119,8 +1119,8 @@ namespace ScreenTimeTracker.Services
             var dbReport = GetUsageReportForDateRange(startDate, endDate);
             var dbRecords = dbReport.Select(pair => new AppUsageRecord
             {
-                ProcessName = pair.processName,
-                _accumulatedDuration = pair.totalDuration,
+                ProcessName = pair.ProcessName,
+                _accumulatedDuration = pair.TotalDuration,
                 Date = startDate,
                 StartTime = startDate
             });
