@@ -51,6 +51,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="ScreenTimeTracker.Tests\**\*.cs" />
+    <None Remove="ScreenTimeTracker.Tests\**\*" />
+    <Content Remove="ScreenTimeTracker.Tests\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

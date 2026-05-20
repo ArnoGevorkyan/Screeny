@@ -827,22 +827,19 @@ namespace ScreenTimeTracker
             }
         }
 
-        // Service boundary handler: processes database save requests from tracking service
-        private void TrackingService_RecordReadyForSave(object? sender, AppUsageRecord record)
+        // Service boundary handler: persists finalized immutable slices from tracking service.
+        private void TrackingService_UsageSliceFinalized(object? sender, UsageSlice slice)
         {
             try
             {
-                if (_databaseService != null && record != null)
+                if (_databaseService != null && slice != null)
                 {
-                    if (record.Id > 0)
-                        _databaseService.UpdateRecord(record);
-                    else
-                        _databaseService.SaveRecord(record);
+                    _databaseService.SaveSlice(slice);
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error saving record from service: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error saving usage slice from service: {ex.Message}");
             }
         }
     }

@@ -158,7 +158,7 @@ namespace ScreenTimeTracker
             // Set up tracking service events
             _trackingService.WindowChanged += TrackingService_WindowChanged;
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
-            _trackingService.RecordReadyForSave += TrackingService_RecordReadyForSave;
+            _trackingService.UsageSliceFinalized += TrackingService_UsageSliceFinalized;
             
 
             // Handle window closing

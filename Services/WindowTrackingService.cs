@@ -99,7 +99,7 @@ namespace ScreenTimeTracker.Services
 
         public event EventHandler<AppUsageRecord>? UsageRecordUpdated;
         public event EventHandler? WindowChanged;
-        public event EventHandler<AppUsageRecord>? RecordReadyForSave;
+        public event EventHandler<UsageSlice>? UsageSliceFinalized;
         
         public bool IsTracking { get; private set; }
         public AppUsageRecord? CurrentRecord => _currentRecord;
@@ -148,17 +148,14 @@ namespace ScreenTimeTracker.Services
                 // Finalise focused slice
                 if (_currentRecord != null)
                 {
-                    _currentRecord.SetFocus(false);
-                    _currentRecord.EndTime = DateTime.Now;
-                    RecordReadyForSave?.Invoke(this, _currentRecord);
+                    FinalizeRecord(_currentRecord, DateTime.Now);
                     _currentRecord = null;
                 }
 
                 // Finalise idle slice if present
                 if (_idleRecord != null)
                 {
-                    _idleRecord.EndTime = DateTime.Now;
-                    RecordReadyForSave?.Invoke(this, _idleRecord);
+                    FinalizeRecord(_idleRecord, DateTime.Now);
                     _idleRecord = null;
                 }
             }
@@ -176,9 +173,7 @@ namespace ScreenTimeTracker.Services
 
                 if (_currentRecord != null)
                 {
-                    _currentRecord.SetFocus(false);
-                    _currentRecord.EndTime = DateTime.Now;
-                    RecordReadyForSave?.Invoke(this, _currentRecord);
+                    FinalizeRecord(_currentRecord, DateTime.Now);
                     _currentRecord = null;
                 }
             }
@@ -239,8 +234,7 @@ namespace ScreenTimeTracker.Services
                         // Finalise idle slice
                         if (_idleRecord != null)
                         {
-                            _idleRecord.EndTime = DateTime.Now;
-                            RecordReadyForSave?.Invoke(this, _idleRecord);
+                            FinalizeRecord(_idleRecord, DateTime.Now);
                             UsageRecordUpdated?.Invoke(this, _idleRecord);
                             _idleRecord = null;
                         }
@@ -264,9 +258,7 @@ namespace ScreenTimeTracker.Services
                         if (_currentRecord.Date < DateTime.Today)
                         {
                             var endOfPrevDay = _currentRecord.Date.AddDays(1).AddSeconds(-1);
-                            _currentRecord.EndTime = endOfPrevDay;
-                            _currentRecord.SetFocus(false);
-                            RecordReadyForSave?.Invoke(this, _currentRecord);
+                            FinalizeRecord(_currentRecord, endOfPrevDay);
                             _currentRecord = null;
                         }
                     }
@@ -388,6 +380,23 @@ namespace ScreenTimeTracker.Services
             return live;
         }
 
+        private void FinalizeRecord(AppUsageRecord record, DateTime endTime)
+        {
+            record.SetFocus(false);
+            record.EndTime = endTime;
+
+            if (UsageSlice.TryCreate(
+                record.ProcessName,
+                record.ApplicationName,
+                record.WindowTitle,
+                record.StartTime,
+                endTime,
+                out var slice) && slice != null)
+            {
+                UsageSliceFinalized?.Invoke(this, slice);
+            }
+        }
+
         private void ThrowIfDisposed()
         {
             if (_disposed)
@@ -501,9 +510,7 @@ namespace ScreenTimeTracker.Services
                 // Finalise previous slice
                 if (_currentRecord != null)
                 {
-                    _currentRecord.SetFocus(false);
-                    _currentRecord.EndTime = DateTime.Now;
-                    RecordReadyForSave?.Invoke(this, _currentRecord);
+                    FinalizeRecord(_currentRecord, DateTime.Now);
                     UsageRecordUpdated?.Invoke(this, _currentRecord);
                 }
 

@@ -27,6 +27,14 @@ project.lock.json
 project.fragment.lock.json
 artifacts/
 
+# Test output
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage.cobertura.xml
+
 # Files built by Visual Studio
 *_i.c
 *_p.c
@@ -86,6 +94,14 @@ logs/
 .windsurfrules
 *.DotSettings
 *.DotSettings.user
+
+# AI / agent local files
+.agents/
+.claude/
+.codex/
+CLAUDE.md
+skills-lock.json
+.github/copilot-instructions.md
 
 # macOS
 .DS_Store

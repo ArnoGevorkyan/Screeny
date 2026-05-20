@@ -15,16 +15,9 @@ namespace ScreenTimeTracker.Helpers
         {
             if (record == null) return;
             
-            // Use window title first if available and reasonable quality
-            if (!string.IsNullOrEmpty(record.WindowTitle) && 
-                record.WindowTitle.Length <= 50 && 
-                !record.WindowTitle.Contains("?"))
-            {
-                record.ProcessName = record.WindowTitle;
-                return;
-            }
-            
-            // Try to use the executable's ProductName as a friendly label (existing logic)
+            var stableProcessName = ApplicationNameNormalizer.NormalizeProcessName(record.ProcessName);
+
+            // Try to use the executable's ProductName as a friendly display label.
             try
             {
                 if (record.ProcessId > 0)
@@ -36,31 +29,19 @@ namespace ScreenTimeTracker.Helpers
                         var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(modulePath);
                         if (!string.IsNullOrWhiteSpace(info.ProductName))
                         {
-                            record.ProcessName = info.ProductName;
+                            record.ApplicationName = info.ProductName;
                         }
                     }
                 }
             }
             catch { /* best-effort – ignore failures (permissions, 32/64-bit, etc.) */ }
-            
-            // Simple cleanup of process name
-            record.ProcessName = CleanProcessName(record.ProcessName);
+
+            record.ProcessName = stableProcessName;
+            if (string.IsNullOrWhiteSpace(record.ApplicationName))
+            {
+                record.ApplicationName = stableProcessName;
+            }
         }
         
-        /// <summary>
-        /// Simple cleanup of process names - removes obvious suffixes but preserves original names
-        /// </summary>
-        private static string CleanProcessName(string processName)
-        {
-            if (string.IsNullOrEmpty(processName)) return processName;
-
-            // Remove common architecture suffixes only
-            string cleaned = processName
-                .Replace(" (x86)", "")
-                .Replace(" (x64)", "")
-                .Trim();
-
-            return cleaned;
-        }
     }
 }

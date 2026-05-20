@@ -12,6 +12,8 @@ namespace ScreenTimeTracker.Services
 {
     public class DatabaseService : IDisposable
     {
+        private const int LatestSchemaVersion = 2;
+        private const int BusyTimeoutMilliseconds = 5000;
         private readonly string _dbPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ScreenTimeTracker", "screentime.db");
@@ -96,6 +98,19 @@ namespace ScreenTimeTracker.Services
              }.ToString();
         }
 
+        private SqliteConnection CreateConnection()
+        {
+            return new SqliteConnection(_connection.ConnectionString);
+        }
+
+        private static void OpenConnection(SqliteConnection connection)
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMilliseconds};";
+            command.ExecuteNonQuery();
+        }
+
         // New method to check DB integrity using PRAGMA
         private bool CheckDatabaseIntegrity(string dbPath)
         {
@@ -108,7 +123,7 @@ namespace ScreenTimeTracker.Services
             {
                 try
                 {
-                    checkConnection.Open();
+                    OpenConnection(checkConnection);
                     using (var command = checkConnection.CreateCommand())
                     {
                         command.CommandText = "PRAGMA integrity_check;";
@@ -163,7 +178,7 @@ namespace ScreenTimeTracker.Services
         private void InitializeInMemoryDatabase()
         {
             // Create basic schema for in-memory database
-            _connection.Open();
+            OpenConnection(_connection);
             using var command = _connection.CreateCommand();
             command.CommandText = @"
                 CREATE TABLE IF NOT EXISTS app_usage (
@@ -198,7 +213,7 @@ namespace ScreenTimeTracker.Services
                     _connection.Close();
                 }
                 
-                _connection.Open();
+                OpenConnection(_connection);
                 Debug.WriteLine("IsFirstRun: Opened database connection");
                 
                 using var command = _connection.CreateCommand();
@@ -230,7 +245,7 @@ namespace ScreenTimeTracker.Services
             try
             {
                 // Open connection
-                _connection.Open();
+                OpenConnection(_connection);
 
                 // Create schema
                 using (var command = _connection.CreateCommand())
@@ -279,6 +294,11 @@ namespace ScreenTimeTracker.Services
 
                 // Check if we need to perform any migrations
                 CheckAndPerformMigrations();
+
+                if (HasLatestSchema())
+                {
+                    SetDatabaseVersion(LatestSchemaVersion);
+                }
 
                 Debug.WriteLine("Database initialized successfully");
             }
@@ -353,6 +373,37 @@ namespace ScreenTimeTracker.Services
             }
         }
 
+        private void SetDatabaseVersion(int version)
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = $"PRAGMA user_version = {version};";
+            command.ExecuteNonQuery();
+        }
+
+        private bool ColumnExists(string tableName, string columnName)
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info({tableName});";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var currentColumnName = reader.GetString(1);
+                if (currentColumnName.Equals(columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool HasLatestSchema()
+        {
+            return ColumnExists("app_usage", "date")
+                && ColumnExists("app_usage", "is_focused")
+                && ColumnExists("app_usage", "last_updated");
+        }
+
         /// <summary>
         /// Migrates database to version 1 
         /// Ensures date column exists and is populated
@@ -363,24 +414,7 @@ namespace ScreenTimeTracker.Services
             
             try
             {
-                // Check if we need to add date column by getting column info
-                bool hasDateColumn = false;
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "PRAGMA table_info(app_usage);";
-                    using (var reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            string columnName = reader.GetString(1);
-                            if (columnName.Equals("date", StringComparison.OrdinalIgnoreCase))
-                            {
-                                hasDateColumn = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+                bool hasDateColumn = ColumnExists("app_usage", "date");
 
                 // If no date column, add it and populate from start_time
                 if (!hasDateColumn)
@@ -395,6 +429,7 @@ namespace ScreenTimeTracker.Services
                             // Add date column
                             using (var command = _connection.CreateCommand())
                             {
+                                command.Transaction = transaction;
                                 command.CommandText = "ALTER TABLE app_usage ADD COLUMN date TEXT;";
                                 command.ExecuteNonQuery();
                             }
@@ -402,6 +437,7 @@ namespace ScreenTimeTracker.Services
                             // Update existing records to extract date from start_time
                             using (var command = _connection.CreateCommand())
                             {
+                                command.Transaction = transaction;
                                 command.CommandText = @"
                                     UPDATE app_usage 
                                     SET date = substr(start_time, 1, 10) 
@@ -431,11 +467,7 @@ namespace ScreenTimeTracker.Services
                 }
                 
                 // Update version in database
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "PRAGMA user_version = 1;";
-                    command.ExecuteNonQuery();
-                }
+                SetDatabaseVersion(1);
             }
             catch (Exception ex)
             {
@@ -453,22 +485,27 @@ namespace ScreenTimeTracker.Services
             Debug.WriteLine("Performing migration to version 2");
             try
             {
+                bool hasIsFocusedColumn = ColumnExists("app_usage", "is_focused");
+                bool hasLastUpdatedColumn = ColumnExists("app_usage", "last_updated");
+
                 // Begin transaction
                 using (var transaction = _connection.BeginTransaction())
                 {
                     try
                     {
-                        // Add is_focused column
-                        using (var command = _connection.CreateCommand())
+                        if (!hasIsFocusedColumn)
                         {
+                            using var command = _connection.CreateCommand();
+                            command.Transaction = transaction;
                             command.CommandText = "ALTER TABLE app_usage ADD COLUMN is_focused INTEGER DEFAULT 0;";
                             command.ExecuteNonQuery();
                             Debug.WriteLine("Added is_focused column to app_usage table.");
                         }
 
-                        // Add last_updated column
-                        using (var command = _connection.CreateCommand())
+                        if (!hasLastUpdatedColumn)
                         {
+                            using var command = _connection.CreateCommand();
+                            command.Transaction = transaction;
                             command.CommandText = "ALTER TABLE app_usage ADD COLUMN last_updated TEXT;";
                             command.ExecuteNonQuery();
                             Debug.WriteLine("Added last_updated column to app_usage table.");
@@ -490,12 +527,8 @@ namespace ScreenTimeTracker.Services
                 }
 
                 // Update version in database
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "PRAGMA user_version = 2;";
-                    command.ExecuteNonQuery();
-                    Debug.WriteLine("Database user_version set to 2.");
-                }
+                SetDatabaseVersion(2);
+                Debug.WriteLine("Database user_version set to 2.");
             }
             catch (Exception ex)
             {
@@ -561,8 +594,8 @@ namespace ScreenTimeTracker.Services
                 var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
 
                 // Use connection-per-operation pattern
-                using var connection = new SqliteConnection(_connection.ConnectionString);
-                connection.Open();
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 using var transaction = connection.BeginTransaction();
                 
                 string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated) 
@@ -597,6 +630,43 @@ namespace ScreenTimeTracker.Services
             }
         }
 
+        public bool SaveSlice(UsageSlice slice)
+        {
+            if (!_initializedSuccessfully || _useInMemoryFallback)
+            {
+                return false;
+            }
+
+            try
+            {
+                using var connection = CreateConnection();
+                OpenConnection(connection);
+                using var transaction = connection.BeginTransaction();
+
+                const string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated)
+                                   VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated);";
+
+                using var command = new SqliteCommand(insertSql, connection, transaction);
+                command.Parameters.AddWithValue("@Date", slice.Date.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@ProcessName", slice.ProcessName);
+                command.Parameters.AddWithValue("@ApplicationName", slice.ApplicationName);
+                command.Parameters.AddWithValue("@StartTime", slice.StartTime.ToString("o"));
+                command.Parameters.AddWithValue("@EndTime", slice.EndTime.ToString("o"));
+                command.Parameters.AddWithValue("@Duration", (long)slice.Duration.TotalMilliseconds);
+                command.Parameters.AddWithValue("@IsFocused", 0);
+                command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
+
+                command.ExecuteNonQuery();
+                transaction.Commit();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error saving usage slice: {ex.Message}");
+                return false;
+            }
+        }
+
         /// <summary>
         /// Updates an existing app usage record in the database
         /// </summary>
@@ -611,8 +681,8 @@ namespace ScreenTimeTracker.Services
             {
                 var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
 
-                using var connection = new SqliteConnection(_connection.ConnectionString);
-                connection.Open();
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 using var transaction = connection.BeginTransaction();
                 
                 string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, 
@@ -662,8 +732,8 @@ namespace ScreenTimeTracker.Services
                 var dateString = date.ToString("yyyy-MM-dd");
                 Debug.WriteLine($"Getting records for date: {dateString}");
                 
-                using var connection = new SqliteConnection(_connection.ConnectionString);
-                connection.Open();
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 
                 using var command = connection.CreateCommand();
                 {
@@ -777,7 +847,7 @@ namespace ScreenTimeTracker.Services
 
             try
             {
-                _connection.Open();
+                OpenConnection(_connection);
                 const string sql = @"
                     SELECT
                         process_name,
@@ -835,7 +905,7 @@ namespace ScreenTimeTracker.Services
                 DateTime cutoffDate = DateTime.Now.AddDays(-daysToKeep).Date;
                 string cutoffDateString = cutoffDate.ToString("yyyy-MM-dd");
 
-                _connection.Open();
+                OpenConnection(_connection);
                 transaction = _connection.BeginTransaction();
 
                 string deleteSql = @"DELETE FROM app_usage WHERE date < @CutoffDate;";
@@ -847,18 +917,14 @@ namespace ScreenTimeTracker.Services
                     rowsDeleted = command.ExecuteNonQuery();
                 }
 
-                // Only run VACUUM if records were actually deleted
+                transaction.Commit(); // Commit transaction
+
                 if (rowsDeleted > 0)
                 {
-                    using (var command = _connection.CreateCommand())
-                    {
-                        command.Transaction = transaction; // Assign transaction to VACUUM command
-                        command.CommandText = "VACUUM;";
-                        command.ExecuteNonQuery();
-                    }
+                    using var vacuumCommand = _connection.CreateCommand();
+                    vacuumCommand.CommandText = "VACUUM;";
+                    vacuumCommand.ExecuteNonQuery();
                 }
-
-                transaction.Commit(); // Commit transaction
             }
             catch (Exception)
             {
@@ -893,7 +959,7 @@ namespace ScreenTimeTracker.Services
             
             try
             {
-                _connection.Open();
+                OpenConnection(_connection);
                 bool integrityPassed = true;
                 
                 // Run integrity check
@@ -999,9 +1065,9 @@ namespace ScreenTimeTracker.Services
                 List<AppUsageRecord> records = new List<AppUsageRecord>();
 
                 // Use a new connection for safety, though the class member _connection should be managed (opened/closed) per method.
-                using (var connection = new SqliteConnection(_connection.ConnectionString))
+                using (var connection = CreateConnection())
                 {
-                    connection.Open();
+                    OpenConnection(connection);
                     using (var command = connection.CreateCommand())
                     {
                         command.CommandText = sql;
@@ -1072,7 +1138,7 @@ namespace ScreenTimeTracker.Services
                 var needClose = false;
                 if (_connection.State != System.Data.ConnectionState.Open)
                 {
-                    _connection.Open();
+                    OpenConnection(_connection);
                     needClose = true;
                 }
 

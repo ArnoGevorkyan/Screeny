@@ -123,7 +123,7 @@ namespace ScreenTimeTracker
                 {
                     _trackingService.WindowChanged -= TrackingService_WindowChanged;
                     _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
-                    _trackingService.RecordReadyForSave -= TrackingService_RecordReadyForSave;
+                    _trackingService.UsageSliceFinalized -= TrackingService_UsageSliceFinalized;
                 }
                 if (Content is FrameworkElement root) root.Loaded -= MainWindow_Loaded;
                 if (_trayIconHelper != null)
@@ -153,8 +153,6 @@ namespace ScreenTimeTracker
                 {
                     _trackingService?.StopTracking();
                 }
-
-                SaveRecordsToDatabase();
             }
             catch (Exception ex)
             {
@@ -166,7 +164,6 @@ namespace ScreenTimeTracker
         {
             try
             {
-                SaveRecordsToDatabase();
                 CleanupSystemProcesses();
 
                 _autoSaveCycleCount++;
@@ -253,57 +250,12 @@ namespace ScreenTimeTracker
             // Stop timer
             _updateTimer.Stop();
 
-            // Persist session data
-            SaveRecordsToDatabase();
             CleanupSystemProcesses();
 
             // Update summary and chart
             UpdateSummaryTab(_usageRecords.ToList());
             UpdateUsageChart();
             // Tracking indicator handled via binding; no imperative call.
-        }
-
-        private void SaveRecordsToDatabase()
-        {
-            if (_databaseService == null || _trackingService == null)
-            {
-                return;
-            }
-            try
-            {
-                var recordsToSave = _trackingService.GetRecords()
-                    .Where(r => r.IsFromDate(DateTime.Now.Date))
-                    .ToList();
-
-                var recordsByProcess = recordsToSave
-                    .Where(r => !Models.ProcessFilter.ShouldIgnoreProcess(r.ProcessName) && 
-                           !r.ProcessName.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase) && 
-                           r.Duration.TotalSeconds > 0)
-                    .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase);
-
-                foreach (var processGroup in recordsByProcess)
-                {
-                    try
-                    {
-                        var totalDuration = TimeSpan.FromSeconds(processGroup.Sum(r => r.Duration.TotalSeconds));
-                        var record        = processGroup.OrderByDescending(r => r.Duration).First();
-                        if (record.IsFocused) record.SetFocus(false);
-                        record._accumulatedDuration = totalDuration;
-                        if (record.Id > 0)
-                            _databaseService!.UpdateRecord(record);
-                        else
-                            _databaseService.SaveRecord(record);
-                    }
-                    catch (Exception pe)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Save error for {processGroup.Key}: {pe.Message}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"ERROR in SaveRecordsToDatabase: {ex.Message}");
-            }
         }
 
         // Helper to retrieve current live records for today
