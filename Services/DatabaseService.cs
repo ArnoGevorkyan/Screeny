@@ -14,20 +14,27 @@ namespace ScreenTimeTracker.Services
     {
         private const int LatestSchemaVersion = 2;
         private const int BusyTimeoutMilliseconds = 5000;
-        private readonly string _dbPath = Path.Combine(
+        private const string JournalMode = "WAL";
+        private readonly string _dbPath;
+        private static string DefaultDatabasePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ScreenTimeTracker", "screentime.db");
         private readonly SqliteConnection _connection;
         private bool _initializedSuccessfully = false;
         private bool _disposed = false;
-        private bool _useInMemoryFallback = false;
-        private List<AppUsageRecord> _memoryFallbackRecords = new List<AppUsageRecord>();
 
         /// <summary>
         /// Initializes a new instance of the DatabaseService class.
         /// </summary>
         public DatabaseService()
+            : this(DefaultDatabasePath)
         {
+        }
+
+        internal DatabaseService(string dbPath)
+        {
+            _dbPath = dbPath;
+
             try
             {
                 var dataDirectory = Path.GetDirectoryName(_dbPath);
@@ -55,34 +62,12 @@ namespace ScreenTimeTracker.Services
                 
                 Debug.WriteLine($"Database file exists after initialization: {File.Exists(_dbPath)}");
                 _initializedSuccessfully = true;
-                _useInMemoryFallback = false; // Ensure we know we are using the file
-
-                // Test record logic moved inside InitializeDatabase if needed or removed if not required
-                // ... (Removed IsFirstRun check and test record creation from here)
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"CRITICAL Database initialization error: {ex.Message}");
-                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
-                
-                // Fallback to in-memory database
-                Debug.WriteLine("Attempting to initialize in-memory database as fallback.");
-                _connection = new SqliteConnection("Data Source=:memory:;Mode=Memory;Cache=Shared");
-                try
-                {
-                    InitializeInMemoryDatabase();
-                    _initializedSuccessfully = true; // Considered initialized for in-memory operation
-                    _useInMemoryFallback = true;
-                    Debug.WriteLine("Successfully initialized in-memory database.");
-                }
-                catch (Exception memEx)
-                {
-                    Debug.WriteLine($"FATAL: In-memory database initialization failed: {memEx.Message}");
-                    // If even in-memory fails, create a null connection or handle appropriately
-                     _connection = new SqliteConnection(); // Avoid null reference, but it won't work
-                    _initializedSuccessfully = false;
-                    _useInMemoryFallback = true; // Still in fallback mode, just failed
-                }
+                _connection = new SqliteConnection();
+                _initializedSuccessfully = false;
+                Debug.WriteLine($"Database initialization failed; entering degraded state: {ex.Message}");
             }
         }
 
@@ -118,7 +103,10 @@ namespace ScreenTimeTracker.Services
             if (!File.Exists(dbPath)) return true; // No file, considered intact
 
             // Use a temporary connection for the check
-            var checkConnectionString = CreateConnectionString(dbPath);
+            var checkConnectionString = new SqliteConnectionStringBuilder(CreateConnectionString(dbPath))
+            {
+                Pooling = false
+            }.ToString();
             using (var checkConnection = new SqliteConnection(checkConnectionString))
             {
                 try
@@ -136,6 +124,7 @@ namespace ScreenTimeTracker.Services
                 catch (Exception ex)
                 {
                     Debug.WriteLine($"Error during integrity check: {ex.Message}");
+                    SqliteConnection.ClearPool(checkConnection);
                     return false; // Assume corruption if check fails
                 }
                 // No need for finally block, 'using' handles disposal/closing
@@ -149,6 +138,7 @@ namespace ScreenTimeTracker.Services
             Debug.WriteLine($"Database integrity check failed! Moving corrupted file to: {backupPath}");
             try
             {
+                SqliteConnection.ClearAllPools();
                 File.Move(dbPath, backupPath);
                 Debug.WriteLine("Successfully moved corrupted database file.");
                 // Optionally: Notify user about the corruption and reset
@@ -165,40 +155,53 @@ namespace ScreenTimeTracker.Services
                  catch (Exception delEx)
                  {
                      Debug.WriteLine($"CRITICAL ERROR: Failed to move AND delete corrupted database file: {delEx.Message}");
-                     // At this point, initialization will likely fail, leading to in-memory fallback
+                     // At this point, initialization will fail into degraded mode.
                  }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"CRITICAL ERROR: Failed to move corrupted database file: {ex.Message}");
-                // Initialization might fail, leading to in-memory fallback
+                // Initialization might fail into degraded mode.
             }
-        }
-
-        private void InitializeInMemoryDatabase()
-        {
-            // Create basic schema for in-memory database
-            OpenConnection(_connection);
-            using var command = _connection.CreateCommand();
-            command.CommandText = @"
-                CREATE TABLE IF NOT EXISTS app_usage (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    process_name TEXT NOT NULL,
-                    app_name TEXT,
-                    start_time TEXT NOT NULL,
-                    end_time TEXT,
-                    duration INTEGER,
-                    is_focused INTEGER DEFAULT 0,
-                    last_updated TEXT
-                );";
-            command.ExecuteNonQuery();
-            _connection.Close();
-            Debug.WriteLine("In-memory database initialized with basic schema");
         }
 
         // Check if database was initialized correctly
         public bool IsDatabaseInitialized() => _initializedSuccessfully;
+
+        internal int SchemaVersion
+        {
+            get
+            {
+                if (!_initializedSuccessfully)
+                {
+                    return 0;
+                }
+
+                using var connection = CreateConnection();
+                OpenConnection(connection);
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA user_version;";
+                var result = command.ExecuteScalar();
+                return result != null ? Convert.ToInt32(result) : 0;
+            }
+        }
+
+        internal string CurrentJournalMode
+        {
+            get
+            {
+                if (!_initializedSuccessfully)
+                {
+                    return string.Empty;
+                }
+
+                using var connection = CreateConnection();
+                OpenConnection(connection);
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA journal_mode;";
+                return command.ExecuteScalar()?.ToString() ?? string.Empty;
+            }
+        }
 
         public bool IsFirstRun()
         {
@@ -207,22 +210,16 @@ namespace ScreenTimeTracker.Services
 
             try
             {
-                // Make sure we're using a fresh connection state
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
-                
-                OpenConnection(_connection);
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 Debug.WriteLine("IsFirstRun: Opened database connection");
                 
-                using var command = _connection.CreateCommand();
+                using var command = connection.CreateCommand();
                 command.CommandText = "SELECT COUNT(*) FROM app_usage";
                 var result = Convert.ToInt32(command.ExecuteScalar());
                 
                 Debug.WriteLine($"IsFirstRun: Found {result} records in database");
                 
-                _connection.Close();
                 return result == 0;
             }
             catch (Exception ex)
@@ -230,13 +227,6 @@ namespace ScreenTimeTracker.Services
                 // If we can't query, assume it's first run
                 Debug.WriteLine($"IsFirstRun failed: {ex.Message}");
                 return true;
-            }
-            finally
-            {
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
             }
         }
 
@@ -246,6 +236,7 @@ namespace ScreenTimeTracker.Services
             {
                 // Open connection
                 OpenConnection(_connection);
+                ConfigureDatabasePragmas();
 
                 // Create schema
                 using (var command = _connection.CreateCommand())
@@ -265,7 +256,15 @@ namespace ScreenTimeTracker.Services
                     command.ExecuteNonQuery();
                 }
 
-                // Create indices for better performance
+                // Check if we need to perform any migrations
+                CheckAndPerformMigrations();
+
+                if (HasLatestSchema())
+                {
+                    SetDatabaseVersion(LatestSchemaVersion);
+                }
+
+                // Create indices for better performance after migrations have ensured date exists.
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage(date);";
@@ -278,7 +277,9 @@ namespace ScreenTimeTracker.Services
                     command.ExecuteNonQuery();
                 }
 
-                // Create aggregated VIEW for per-day per-process totals
+                CreateFinalizedSliceUniqueIndex();
+
+                // Create aggregated VIEW for per-day per-process totals after migrations have ensured date exists.
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = @"
@@ -290,14 +291,6 @@ namespace ScreenTimeTracker.Services
                         FROM app_usage
                         GROUP BY date, process_name;";
                     command.ExecuteNonQuery();
-                }
-
-                // Check if we need to perform any migrations
-                CheckAndPerformMigrations();
-
-                if (HasLatestSchema())
-                {
-                    SetDatabaseVersion(LatestSchemaVersion);
                 }
 
                 Debug.WriteLine("Database initialized successfully");
@@ -377,6 +370,40 @@ namespace ScreenTimeTracker.Services
         {
             using var command = _connection.CreateCommand();
             command.CommandText = $"PRAGMA user_version = {version};";
+            command.ExecuteNonQuery();
+        }
+
+        private void ConfigureDatabasePragmas()
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = $"PRAGMA journal_mode = {JournalMode};";
+            command.ExecuteScalar();
+        }
+
+        private void CreateFinalizedSliceUniqueIndex()
+        {
+            RemoveExactDuplicateFinalizedSlices();
+
+            using var command = _connection.CreateCommand();
+            command.CommandText = @"
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_app_usage_finalized_slice_unique
+                ON app_usage(date, process_name, start_time, end_time)
+                WHERE end_time IS NOT NULL;";
+            command.ExecuteNonQuery();
+        }
+
+        private void RemoveExactDuplicateFinalizedSlices()
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = @"
+                DELETE FROM app_usage
+                WHERE end_time IS NOT NULL
+                  AND id NOT IN (
+                      SELECT MIN(id)
+                      FROM app_usage
+                      WHERE end_time IS NOT NULL
+                      GROUP BY date, process_name, start_time, end_time
+                  );";
             command.ExecuteNonQuery();
         }
 
@@ -584,7 +611,7 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public bool SaveRecord(AppUsageRecord record)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback)
+            if (!_initializedSuccessfully)
             {
                 return false;
             }
@@ -632,9 +659,15 @@ namespace ScreenTimeTracker.Services
 
         public bool SaveSlice(UsageSlice slice)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback)
+            var result = SaveSliceWithResult(slice);
+            return result == PersistenceResult.Saved || result == PersistenceResult.DuplicateIgnored;
+        }
+
+        public PersistenceResult SaveSliceWithResult(UsageSlice slice)
+        {
+            if (!_initializedSuccessfully)
             {
-                return false;
+                return PersistenceResult.FatalFailure;
             }
 
             try
@@ -642,6 +675,28 @@ namespace ScreenTimeTracker.Services
                 using var connection = CreateConnection();
                 OpenConnection(connection);
                 using var transaction = connection.BeginTransaction();
+
+                const string duplicateSql = @"SELECT 1
+                                   FROM app_usage
+                                   WHERE date = @Date
+                                     AND process_name = @ProcessName
+                                     AND start_time = @StartTime
+                                     AND end_time = @EndTime
+                                   LIMIT 1;";
+
+                using (var duplicateCommand = new SqliteCommand(duplicateSql, connection, transaction))
+                {
+                    duplicateCommand.Parameters.AddWithValue("@Date", slice.Date.ToString("yyyy-MM-dd"));
+                    duplicateCommand.Parameters.AddWithValue("@ProcessName", slice.ProcessName);
+                    duplicateCommand.Parameters.AddWithValue("@StartTime", slice.StartTime.ToString("o"));
+                    duplicateCommand.Parameters.AddWithValue("@EndTime", slice.EndTime.ToString("o"));
+
+                    if (duplicateCommand.ExecuteScalar() != null)
+                    {
+                        transaction.Commit();
+                        return PersistenceResult.DuplicateIgnored;
+                    }
+                }
 
                 const string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated)
                                    VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated);";
@@ -658,13 +713,33 @@ namespace ScreenTimeTracker.Services
 
                 command.ExecuteNonQuery();
                 transaction.Commit();
-                return true;
+                return PersistenceResult.Saved;
+            }
+            catch (SqliteException ex) when (IsConstraintSqliteException(ex))
+            {
+                Debug.WriteLine($"Duplicate usage slice ignored: {ex.Message}");
+                return PersistenceResult.DuplicateIgnored;
+            }
+            catch (SqliteException ex) when (IsRetryableSqliteException(ex))
+            {
+                Debug.WriteLine($"Retryable error saving usage slice: {ex.Message}");
+                return PersistenceResult.RetryableFailure;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error saving usage slice: {ex.Message}");
-                return false;
+                return PersistenceResult.FatalFailure;
             }
+        }
+
+        private static bool IsRetryableSqliteException(SqliteException ex)
+        {
+            return ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6;
+        }
+
+        private static bool IsConstraintSqliteException(SqliteException ex)
+        {
+            return ex.SqliteErrorCode == 19;
         }
 
         /// <summary>
@@ -672,7 +747,7 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void UpdateRecord(AppUsageRecord record)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback)
+            if (!_initializedSuccessfully)
             {
                 return;
             }
@@ -721,9 +796,9 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<AppUsageRecord> GetRecordsForDate(DateTime date)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback)
+            if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get records operation");
+                Debug.WriteLine("Database not initialized, skipping get records operation");
                 return new List<AppUsageRecord>();
             }
 
@@ -835,9 +910,9 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public List<(string ProcessName, TimeSpan TotalDuration)> GetUsageReportForDateRange(DateTime startDate, DateTime endDate)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping get usage report operation");
+                Debug.WriteLine("Database not initialized, skipping get usage report operation");
                 return new List<(string, TimeSpan)>();
             }
 
@@ -847,7 +922,8 @@ namespace ScreenTimeTracker.Services
 
             try
             {
-                OpenConnection(_connection);
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 const string sql = @"
                     SELECT
                         process_name,
@@ -856,7 +932,7 @@ namespace ScreenTimeTracker.Services
                     WHERE date >= @StartDate AND date <= @EndDate
                     GROUP BY process_name;";
 
-                using (var cmd = new SqliteCommand(sql, _connection))
+                using (var cmd = new SqliteCommand(sql, connection))
                 {
                     cmd.Parameters.AddWithValue("@StartDate", startDateString);
                     cmd.Parameters.AddWithValue("@EndDate",   endDateString);
@@ -870,8 +946,6 @@ namespace ScreenTimeTracker.Services
                     }
                 }
 
-                _connection.Close();
-
                 // Filter entries shorter than 5 minutes and sort descending.
                 return results.Where(r => r.Item2.TotalSeconds >= 300)
                                .OrderByDescending(r => r.Item2)
@@ -880,10 +954,6 @@ namespace ScreenTimeTracker.Services
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error retrieving usage report: {ex.Message}");
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
                 throw;
             }
         }
@@ -893,9 +963,9 @@ namespace ScreenTimeTracker.Services
         /// </summary>
         public void CleanupExpiredRecords(int daysToKeep)
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping cleanup operation");
+                Debug.WriteLine("Database not initialized, skipping cleanup operation");
                 return;
             }
 
@@ -905,13 +975,14 @@ namespace ScreenTimeTracker.Services
                 DateTime cutoffDate = DateTime.Now.AddDays(-daysToKeep).Date;
                 string cutoffDateString = cutoffDate.ToString("yyyy-MM-dd");
 
-                OpenConnection(_connection);
-                transaction = _connection.BeginTransaction();
+                using var connection = CreateConnection();
+                OpenConnection(connection);
+                transaction = connection.BeginTransaction();
 
                 string deleteSql = @"DELETE FROM app_usage WHERE date < @CutoffDate;";
                 int rowsDeleted = 0;
 
-                using (var command = new SqliteCommand(deleteSql, _connection, transaction))
+                using (var command = new SqliteCommand(deleteSql, connection, transaction))
                 {
                     command.Parameters.AddWithValue("@CutoffDate", cutoffDateString);
                     rowsDeleted = command.ExecuteNonQuery();
@@ -921,7 +992,7 @@ namespace ScreenTimeTracker.Services
 
                 if (rowsDeleted > 0)
                 {
-                    using var vacuumCommand = _connection.CreateCommand();
+                    using var vacuumCommand = connection.CreateCommand();
                     vacuumCommand.CommandText = "VACUUM;";
                     vacuumCommand.ExecuteNonQuery();
                 }
@@ -936,13 +1007,6 @@ namespace ScreenTimeTracker.Services
                 {
                 }
             }
-            finally
-            {
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
-            }
         }
 
         /// <summary>
@@ -951,19 +1015,20 @@ namespace ScreenTimeTracker.Services
         /// <returns>True if the database passes integrity checks</returns>
         public bool PerformDatabaseMaintenance()
         {
-            if (!_initializedSuccessfully || _useInMemoryFallback) // Also skip if using fallback
+            if (!_initializedSuccessfully)
             {
-                Debug.WriteLine("Database not initialized or using in-memory fallback, skipping maintenance");
+                Debug.WriteLine("Database not initialized, skipping maintenance");
                 return false;
             }
             
             try
             {
-                OpenConnection(_connection);
+                using var connection = CreateConnection();
+                OpenConnection(connection);
                 bool integrityPassed = true;
                 
                 // Run integrity check
-                using (var command = _connection.CreateCommand())
+                using (var command = connection.CreateCommand())
                 {
                     command.CommandText = "PRAGMA integrity_check;";
                     var resultObj = command.ExecuteScalar();
@@ -982,7 +1047,7 @@ namespace ScreenTimeTracker.Services
                 }
                 
                 // Optimize the database
-                using (var command = _connection.CreateCommand())
+                using (var command = connection.CreateCommand())
                 {
                     command.CommandText = "PRAGMA optimize;";
                     command.ExecuteNonQuery();
@@ -990,27 +1055,19 @@ namespace ScreenTimeTracker.Services
                 }
                 
                 // Analyze the database to improve query performance
-                using (var command = _connection.CreateCommand())
+                using (var command = connection.CreateCommand())
                 {
                     command.CommandText = "ANALYZE;";
                     command.ExecuteNonQuery();
                     Debug.WriteLine("Database analyzed");
                 }
                 
-                _connection.Close();
                 return integrityPassed;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error during database maintenance: {ex.Message}");
                 return false;
-            }
-            finally
-            {
-                if (_connection.State != System.Data.ConnectionState.Closed)
-                {
-                    _connection.Close();
-                }
             }
         }
 
@@ -1041,14 +1098,6 @@ namespace ScreenTimeTracker.Services
                 {
                     System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
                     return new List<AppUsageRecord>();
-                }
-
-                if (_useInMemoryFallback)
-                {
-                    // Use the in-memory backup data if we're in fallback mode
-                    return _memoryFallbackRecords
-                        .Where(r => r.Date.Date >= startDate.Date && r.Date.Date <= endDate.Date)
-                        .ToList();
                 }
 
                 // Convert dates to the format stored in the database (YYYY-MM-DD)
@@ -1124,27 +1173,17 @@ namespace ScreenTimeTracker.Services
         {
             try
             {
-                // If we are running in in-memory fallback mode, just clear the in-memory list
-                if (_useInMemoryFallback)
+                if (!_initializedSuccessfully)
                 {
-                    _memoryFallbackRecords.Clear();
-                    return true;
-                }
-
-                if (_connection == null)
                     return false;
-
-                // Open the connection if required
-                var needClose = false;
-                if (_connection.State != System.Data.ConnectionState.Open)
-                {
-                    OpenConnection(_connection);
-                    needClose = true;
                 }
+
+                using var connection = CreateConnection();
+                OpenConnection(connection);
 
                 // 1) Delete all rows inside an explicit transaction
-                using (var tx = _connection.BeginTransaction())
-                using (var cmd = _connection.CreateCommand())
+                using (var tx = connection.BeginTransaction())
+                using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = tx;
                     cmd.CommandText = "DELETE FROM app_usage;";
@@ -1153,14 +1192,11 @@ namespace ScreenTimeTracker.Services
                 }
 
                 // 2) Reclaim file space – now that we are outside the transaction
-                using (var vacuumCmd = _connection.CreateCommand())
+                using (var vacuumCmd = connection.CreateCommand())
                 {
                     vacuumCmd.CommandText = "VACUUM;";
                     vacuumCmd.ExecuteNonQuery();
                 }
-
-                if (needClose)
-                    _connection.Close();
 
                 return true;
             }
@@ -1171,6 +1207,7 @@ namespace ScreenTimeTracker.Services
             }
         }
 
+#if !UNIT_TEST
         /// <summary>
         /// Gets aggregated records for date range, optionally including live tracking data
         /// (Replaces UsageAggregationService.GetAggregatedRecordsForDateRange)
@@ -1335,6 +1372,7 @@ namespace ScreenTimeTracker.Services
         }
 
         #endregion
+#endif
 
     }
 } 

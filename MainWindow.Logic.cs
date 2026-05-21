@@ -222,14 +222,17 @@ namespace ScreenTimeTracker
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error starting tracking: {ex.Message}");
-                var dialog = new ContentDialog
+                if (!_disposed && Content?.XamlRoot != null)
                 {
-                    Title = "Error",
-                    Content = $"Failed to start tracking: {ex.Message}",
-                    CloseButtonText = "OK",
-                    XamlRoot = Content.XamlRoot
-                };
-                _ = dialog.ShowAsync();
+                    var dialog = new ContentDialog
+                    {
+                        Title = "Error",
+                        Content = $"Failed to start tracking: {ex.Message}",
+                        CloseButtonText = "OK",
+                        XamlRoot = Content.XamlRoot
+                    };
+                    _ = dialog.ShowAsync();
+                }
             }
             finally
             {

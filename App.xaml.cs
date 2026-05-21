@@ -20,6 +20,7 @@ using System.Threading;
 using Windows.ApplicationModel;
 using Microsoft.Windows.AppLifecycle;
 using Windows.Services.Store;
+using ScreenTimeTracker.Models;
 
 namespace ScreenTimeTracker;
 
@@ -218,6 +219,9 @@ public partial class App : Application
                 {
                     WriteToLog("CRITICAL WARNING: Could not retrieve WindowTrackingService...");
                 }
+
+                mainWindow.EnsureStartupInitialized();
+                WriteToLog("MainWindow startup services initialized");
             }
             else
             {
@@ -226,7 +230,7 @@ public partial class App : Application
 
             // Determine whether to show the window
             bool isFirstRun = IsFirstRun();
-            bool showWindow = !StartedFromWindowsStartup || isFirstRun;
+            bool showWindow = StartupLaunchPolicy.ShouldShowWindow(StartedFromWindowsStartup, isFirstRun);
 
             if (showWindow)
             {
@@ -243,8 +247,7 @@ public partial class App : Application
             else
             {
                 WriteToLog("MainWindow created but not activated (startup launch - running in background)");
-                // The window will remain hidden, and the tray icon will be available
-                // The tracking service will still start automatically in MainWindow_Loaded
+                // Startup services are initialized explicitly before activation, so tracking can run while hidden.
             }
         }
         catch (Exception ex)

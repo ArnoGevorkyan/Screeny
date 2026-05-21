@@ -12,22 +12,61 @@ This is a reliability-first plan for Screeny. It keeps the current WinUI surface
 - Prefer small changes with one user-visible reliability outcome per PR.
 - Treat the .NET 10 move as a runtime/framework migration, not a routine package bump.
 
+## Progress Snapshot
+
+Updated: May 21, 2026.
+
+Current status:
+- Build: `dotnet build ScreenTimeTracker.sln` passes with 0 warnings.
+- Tests: `dotnet test ScreenTimeTracker.sln` passes with 47 tests.
+- Release publish smoke: `dotnet publish ScreenTimeTracker.csproj -c Release --no-restore` passes.
+- Vulnerability audit: `dotnet list package --vulnerable --include-transitive` reports no vulnerable packages from the current NuGet sources.
+- SDKs installed locally: .NET SDK 9.0.314 and 10.0.300.
+- Source-control safety: no tracked `*.pfx`, database files, or `TestResults/` artifacts were found.
+
+Progress by phase:
+
+| Phase | Status | Progress | Notes |
+| --- | --- | ---: | --- |
+| Phase 0: Baseline And Safety Gates | Mostly done | 90% | Build, test, release publish, package list, SDK list, vulnerable-package audit, and sensitive-file tracking checks are current. Manual lifecycle smoke execution remains. |
+| Phase 1: Test Foundation Around Pure Logic | Strong start | 92% | 47 unit tests now cover filters, formatting, naming, slices, database behavior, startup policy, manifest/privacy policy, and tracking lifecycle seams. |
+| Phase 2: Tracking Slice Contract | Mostly done | 90% | `UsageSlice`, service finalization, snapshot live records, stop, window change, idle enter/exit, suspend, resume, and midnight rollover are covered. Remaining work is production smoke verification. |
+| Phase 3: Single Persistence Pipeline | In progress | 84% | Finalized slices are the persistence path, slice saves return typed persistence results, and exact duplicate intervals are ignored by code and database constraint. Explicit autosave behavior is still pending. |
+| Phase 4: SQLite Schema, Migrations, And Connections | Mostly done | 88% | Temp-file DB tests cover schema, WAL mode, first-run state, report aggregation, retention cleanup, maintenance, migration replay, duplicate cleanup/indexing, wipe, corruption, and degraded state. Init/migration still use the initialization connection. |
+| Phase 5: Startup, Tray, And Power Lifecycle | In progress | 55% | Hidden startup initialization and active/idle suspend finalization are fixed and unit-covered. Tray, packaged startup, and OS power smoke tests remain. |
+| Phase 6: Aggregation And UI Data Consistency | Early | 30% | Stable app identity, active-duration double-counting, and basic usage-report aggregation are addressed. UI date/range aggregation and icon-key tests still need work. |
+| Phase 7: Manifest, Privacy, And Packaging | Partial | 74% | Manifest/privacy guardrail tests cover no network capabilities, `runFullTrust`, startup/full-trust executable wiring, logo asset existence, and local-only README/PRIVACY claims. Release publish passes; installed MSIX smoke tests remain. |
+| Phase 8: Dependency Upgrade | Not started | 0% | Intentionally gated until reliability coverage and smoke checks are stronger. |
+| Phase 9: .NET 10 LTS Migration | Not started | 0% | .NET 10 SDK is installed, but app migration waits until dependency and packaging validation are ready. |
+
+Ship readiness estimate:
+- Reliability implementation: about 75%.
+- Automated test coverage for risky seams: about 90%.
+- Commit readiness: about 93%, assuming this is committed as a reliability-foundation checkpoint.
+- Release readiness: about 42%, because tray/startup/power/installed-package smoke checks have not been run yet.
+
 ## Current Risk Snapshot
 
-1. Startup/background launch depends on `MainWindow_Loaded`, but startup mode creates the window without activating it. If `Loaded` does not fire, tracking, tray setup, power notifications, and `StartTracking()` do not run.
-2. Persistence has multiple write paths: `WindowTrackingService.RecordReadyForSave`, `MainWindow.SaveRecordsToDatabase`, stop, suspend, exit, autosave, idle, and window-change paths can all touch the same active slice.
-3. `AppUsageRecord.Duration` can double count because the timer writes `_accumulatedDuration = now - StartTime` while `IsFocused` can still make the getter add live focus time again.
-4. `ApplicationProcessingHelper` mutates `ProcessName` into a display label/window title. That mixes stable identity with UI naming and can fragment one app into many rows.
-5. Fresh SQLite databases create the latest columns but leave `PRAGMA user_version` at `0`, then migrations try to add columns that already exist.
-6. `DatabaseService` mixes a shared `_connection` with per-operation connections, has no busy timeout policy, and has a fake in-memory fallback that most write/read methods skip.
-7. The manifest declares `internetClient` while README and PRIVACY promise no internet connection.
-8. Root `.pfx` files exist in the workspace even though `.gitignore` correctly excludes certificates. Confirm they are not tracked before shipping.
+1. Typed persistence failures are logged, but the UI does not yet surface a durable high-level database health state.
+2. Autosave remains intentionally disabled for open slices until an idempotent checkpoint key exists and is tested.
+3. Tray hidden startup, packaged startup, display off/on, away mode, suspend/resume, and tray exit still need manual smoke verification.
+4. Release notes need one final consistency pass before release.
+5. App display names and icons can drift or appear broken if icon cache keys are based on transient or inconsistently normalized app names.
 
 Mitigated so far:
 - Stable process identity no longer uses transient window titles.
 - `internetClient` has been removed from the package manifest.
 - `MainWindow` persistence now uses finalized `UsageSlice` events instead of grouped live-record saves.
 - Current migrations check for existing columns before altering schema, and fresh schemas are marked with the latest `user_version` only after required columns exist.
+- The fake in-memory database fallback has been removed; initialization failures now leave `DatabaseService` in a visible degraded state.
+- Hidden startup no longer depends on `MainWindow_Loaded`; `App.OnLaunched` explicitly initializes tracking, tray, and power setup before optional activation.
+- Focused live duration updates no longer overwrite accumulated duration while `AppUsageRecord.Duration` also adds live focused time.
+- Exact duplicate finalized intervals are cleaned up during initialization and protected by a partial unique index on finalized slices.
+- Stable process identity is normalized separately from display names and window titles.
+- Fresh databases opt into WAL journal mode and the behavior is covered by a temp-file database test.
+- First-run checks, report reads, retention cleanup, maintenance, and wipe now use short-lived database connections.
+- Package manifest and privacy docs are covered by tests that protect the local-only/no-network promise and required full-trust/startup wiring.
+- Release publish output builds successfully with the current MSIX project settings.
 
 ## Target Architecture
 
@@ -83,12 +122,17 @@ Exit criteria:
 - Core time math and name normalization are covered before persistence refactors.
 
 Current test baseline:
-- `dotnet test ScreenTimeTracker.sln` passes with 12 tests.
+- `dotnet test ScreenTimeTracker.sln` passes with 47 tests.
 - `ProcessFilterTests` covers empty/system/normal process filtering.
 - `TimeFormatterTests` covers compact duration formatting and duration cap formatting.
 - `ApplicationNameNormalizerTests` covers architecture suffix cleanup and keeps window titles out of stable process identity.
 - `UsageSliceTests` covers finalized interval creation, missing process names, zero-length intervals, application-name fallback, and duration caps.
-- Remaining Phase 1 work: add `AppUsageRecord` focus-transition coverage or replace its duration logic with tested finalized-slice/live-overlay helpers.
+- `DatabaseServiceTests` covers fresh schema versioning, WAL mode, first-run state, finalized slice persistence, exact duplicate cleanup plus unique finalized-slice indexing, usage-report aggregation, retention cleanup, maintenance, raw date-range reads, database wipe behavior, v0/v1/v2-like migration replay, corrupt-file recovery, and degraded-state behavior against temporary SQLite files.
+- `DatabaseServiceTests` covers typed slice-save results for saved, duplicate ignored, and fatal degraded-state outcomes.
+- `StartupLaunchPolicyTests` covers normal launch, hidden Windows startup launch, and first-run startup launch visibility decisions.
+- `WindowTrackingServiceTests` covers suspend/resume/stop finalization of active and idle records without duplicate finalized slices, focused live updates that avoid accumulated-duration double counting, snapshot reads from open tracking records, midnight rollover finalization, foreground window-change finalization, and idle enter/exit transitions.
+- `ManifestPrivacyTests` covers no package network capabilities, the expected `runFullTrust` capability, full-trust/startup executable wiring, referenced logo asset existence, and local-only/no-telemetry README/PRIVACY claims.
+- Remaining Phase 1 work: continue replacing implicit live-overlay behavior with tested service/helper contracts where touched.
 
 ## Phase 2: Define The Tracking Slice Contract
 
@@ -96,61 +140,63 @@ Current test baseline:
 - Keep these fields stable: `ProcessName`, `ApplicationName`, `WindowTitle`, `StartTime`, `EndTime`, `Duration`, `Date`.
 - Stop using mutable `AppUsageRecord` as both live UI object and persistence object. In progress: persistence now receives `UsageSlice`; live UI still uses `AppUsageRecord`.
 - Make `WindowTrackingService` the only owner of active slice lifecycle. In progress: all service finalization paths now route through one `FinalizeRecord` helper.
-- Make `GetRecords()` return snapshots, not live mutable references.
+- Make `GetRecords()` return snapshots, not live mutable references. Done: callers receive frozen `AppUsageRecord` snapshots that cannot mutate the service's open records.
 - Ensure every finalized slice has `EndTime > StartTime`, bounded duration, and a deterministic date.
 
 Exit criteria:
 - One codepath finalizes a foreground slice.
 - One codepath finalizes an idle slice.
-- Tests prove stop, window change, idle enter/exit, suspend, resume, and midnight rollover emit expected slices.
+- Tests prove stop, window change, idle enter/exit, suspend, resume, and midnight rollover emit expected slices. Covered by tests.
 
 ## Phase 3: Single Persistence Pipeline
 
-- Replace `MainWindow.SaveRecordsToDatabase()` grouping writes with one persistence handler for finalized slices. Done: `MainWindow` subscribes to `UsageSliceFinalized` and calls `DatabaseService.SaveSlice`.
+- Replace `MainWindow.SaveRecordsToDatabase()` grouping writes with one persistence handler for finalized slices. Done: `MainWindow` subscribes to `UsageSliceFinalized` and calls `DatabaseService.SaveSliceWithResult`.
 - Remove duplicate writes from stop/suspend/exit/autosave paths. Done: open-slice autosave writes and stop/suspend grouping writes were removed.
 - Decide whether autosave is:
   - disabled for open slices, or
   - an idempotent checkpoint keyed by an active slice id.
   Current decision: disabled for open slices until an idempotent checkpoint key exists.
-- Make persistence return a typed result: saved, duplicate ignored, retryable failure, fatal failure.
+- Make persistence return a typed result: saved, duplicate ignored, retryable failure, fatal failure. In progress: `SaveSliceWithResult()` returns typed outcomes; saved, duplicate ignored, and fatal outcomes are tested. Duplicate ignored is enforced both by pre-insert lookup and a partial unique index for finalized intervals. Retryable busy/locked behavior is classified but not directly tested.
 - Surface only high-level failure state in UI/logs, not private app history.
 
 Exit criteria:
-- A finalized slice is stored exactly once.
+- A finalized slice is stored exactly once. Covered for exact duplicate finalized intervals and legacy duplicate cleanup.
 - Stop, suspend, tray exit, and window change cannot duplicate the same interval.
 - Autosave behavior is explicitly tested.
 
 ## Phase 4: SQLite Schema, Migrations, And Connections
 
-- Add a test database path/options constructor to `DatabaseService`.
-- Use one connection strategy: create a new SQLite connection per operation through a factory. In progress: write/read operations now use a shared connection factory/open helper where touched; constructor still keeps the connection string holder.
+- Add a test database path/options constructor to `DatabaseService`. Done: tests create disposable temp-file SQLite databases without in-memory fallback.
+- Use one connection strategy: create a new SQLite connection per operation through a factory. Mostly done: write/read/cleanup/maintenance/wipe operations now use short-lived connections through the shared factory/open helper; init and migrations still use the initialization connection.
 - Add busy timeout in the connection string or immediately after opening. Done: opened connections set `PRAGMA busy_timeout = 5000`.
-- Decide whether to enable WAL. If enabled, test it with the app's read/write pattern.
+- Enable WAL for temp-file and production databases. Done: initialization sets `PRAGMA journal_mode = WAL`, and the fresh-database test verifies the journal mode.
 - Make schema creation idempotent and set `PRAGMA user_version` to the latest version on fresh databases. In progress: latest version is set only after required v2 columns exist.
 - Make every migration check column/index existence before altering schema. Done for current v1/v2 column migrations.
-- Remove the fake in-memory fallback or implement it fully. Preferred: fail visibly into a read-only/degraded state rather than pretend writes succeeded.
-- Test corrupt database handling with a disposable file.
+- Remove the fake in-memory fallback or implement it fully. Done: initialization failures now enter degraded state instead of pretending an in-memory DB is durable.
+- Test corrupt database handling with a disposable file. Done: corrupt DB files are moved aside and replaced with a fresh schema.
+- Add database tests. In progress: fresh DB, WAL mode, first-run state, `SaveSlice`, duplicate finalized interval cleanup/indexing, usage-report aggregation, retention cleanup, maintenance, raw range read, wipe, migration replay, corrupt recovery, and degraded-state behavior are covered.
 - Fix maintenance SQL hazards. Done: `CleanupExpiredRecords` no longer runs `VACUUM` inside an active transaction.
 
 Exit criteria:
-- Fresh DB reaches expected `user_version`.
-- Existing v0/v1/v2-like databases migrate repeatedly without errors.
+- Fresh DB reaches expected `user_version`. Covered by tests.
+- Existing v0/v1/v2-like databases migrate repeatedly without errors. Covered by tests.
 - Save/read/range/wipe/corruption tests pass against temp files.
 
 ## Phase 5: Startup, Tray, And Power Lifecycle
 
-- Split service startup from visual window loading.
-- Add an explicit app startup method that runs for both activated and hidden startup launches.
-- Do not rely on `MainWindow_Loaded` to start tracking in background mode.
-- Initialize tracking before optional visual setup when launched from Windows startup.
+- Split service startup from visual window loading. Done: `MainWindow.EnsureStartupInitialized()` owns one-time startup services.
+- Add an explicit app startup method that runs for both activated and hidden startup launches. Done: `App.OnLaunched` calls it immediately after window creation.
+- Do not rely on `MainWindow_Loaded` to start tracking in background mode. Done: `Loaded` now only calls the same guarded startup path and handles delayed visual icon refresh.
+- Initialize tracking before optional visual setup when launched from Windows startup. Done: `StartTracking()` runs before `Activate()` is skipped or called.
 - Verify tray icon behavior when the window starts hidden.
-- Wire display off/on, away mode, suspend, resume, and tray exit to the tracking slice contract.
+- Wire display off/on, away mode, suspend, resume, and tray exit to the tracking slice contract. In progress: suspend/stop finalizes both active and idle open records through one helper.
+- Avoid duplicate timer subscriptions during startup. Done: `SetUpUiElements()` no longer re-attaches `UpdateTimer_Tick`; the constructor owns timer wiring.
 
 Exit criteria:
-- Normal launch starts tracking.
-- Windows startup/background launch starts tracking.
+- Normal launch starts tracking. Build-covered; still needs app smoke verification.
+- Windows startup/background launch starts tracking. Code path fixed; still needs packaged/startup smoke verification.
 - Tray show/exit/reset works after hidden launch.
-- Sleep/resume and display off/on do not stretch active time.
+- Sleep/resume and display off/on do not stretch active or idle time. Active/idle finalization is unit-covered; OS signal smoke testing remains.
 
 ## Phase 6: Aggregation And UI Data Consistency
 
@@ -159,6 +205,8 @@ Exit criteria:
 - Remove 5-minute filtering from core aggregation unless it is a deliberate product rule. If kept, document it in UI/docs.
 - Ensure idle/away rows are included or excluded consistently across summary, list, and charts.
 - Keep `ProcessName` stable and use separate display fields for friendly names/window titles.
+- Keep app icon cache keys stable across case changes, architecture suffixes, window-title changes, and missing process names.
+- Add automated tests for app naming/icon-key behavior; reserve only Win32 image extraction itself for integration or smoke testing because it depends on live windows and shell APIs.
 
 Exit criteria:
 - Daily totals match stored intervals plus the current live slice once.
@@ -167,14 +215,14 @@ Exit criteria:
 
 ## Phase 7: Manifest, Privacy, And Packaging
 
-- Remove `internetClient` if no network access is needed.
-- Confirm `README.md`, `PRIVACY.md`, and `Package.appxmanifest` agree.
+- Remove `internetClient` if no network access is needed. Done, and covered by manifest guardrail tests.
+- Confirm `README.md`, `PRIVACY.md`, and `Package.appxmanifest` agree. Done for local-only/no-network claims with automated tests.
 - Confirm signing certificate files are ignored and not committed.
-- Validate MSIX/package launch after lifecycle changes.
-- Keep `runFullTrust` only because foreground-window tracking needs desktop integration.
+- Validate MSIX/package launch after lifecycle changes. Release publish passes; installed launch smoke remains.
+- Keep `runFullTrust` only because foreground-window tracking needs desktop integration. Covered by manifest guardrail tests.
 
 Exit criteria:
-- Package capabilities match the local-only privacy promise.
+- Package capabilities match the local-only privacy promise. Covered by tests.
 - Packaged launch and startup task behavior are manually verified.
 
 ## Phase 8: Dependency Upgrade
@@ -250,3 +298,27 @@ Exit criteria:
 - Manifest capabilities match the local-only privacy policy.
 - The app targets .NET 10 LTS after reliability tests and dependency compatibility are in place.
 - The UI remains visually familiar except for reliability/error-state fixes.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | Not run | Not needed for this reliability-only checkpoint. |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | Not run | Save for pre-commit or PR review. |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | Clear with sequencing notes | 0 blocking issues, 0 critical gaps. Idempotent exact-interval persistence is now implemented; keep smoke tests before dependency/.NET migration. |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | Not run | Not needed; current work avoids UI redesign. |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | Not run | Not needed for app reliability work. |
+
+- **UNRESOLVED:** 0 blocking engineering decisions.
+- **VERDICT:** ENG CLEARED - continue implementation, but do not start autosave, dependency upgrades, or .NET 10 migration before smoke checks.
+
+Eng review details:
+- **Scope Challenge:** scope accepted as-is. The plan remains reliability-first with no UI redesign, no telemetry, and no package upgrades yet.
+- **Architecture Review:** 0 blocking issues. The service-owned finalized-slice architecture is correct; the next architectural step is an idempotency key or unique interval constraint before any open-slice autosave.
+- **Code Quality Review:** 0 blocking issues. The current test seams are acceptable because they are `UNIT_TEST`-scoped and avoid WinUI launch.
+- **Test Review:** 1 remaining high-priority gap. Manual smoke tests for tray/startup/power/package behavior still need to run before release readiness improves.
+- **Performance Review:** 0 blocking issues. Keep live overlay aggregation under watch in Phase 6, especially database reads from timer-driven UI refresh paths.
+- **NOT in scope:** UI redesign, productivity scoring, cloud sync, dependency upgrades, .NET 10 app migration, and broad MVVM rewrite.
+- **What already exists:** `WindowTrackingService` owns active/idle/suspend/midnight flow, `DatabaseService` already has parameterized SQL and temp-file tests, `TrayIconHelper` and power notifications already exist and should be smoke-tested rather than replaced.
+- **Failure modes:** typed persistence can still silently log failures instead of showing user state; packaged hidden startup and power events still require manual smoke verification.
+- **Parallelization:** sequential implementation is preferred right now because Phase 3/4 persistence and Phase 6 aggregation touch shared database/model/service modules.

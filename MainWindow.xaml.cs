@@ -27,6 +27,7 @@ namespace ScreenTimeTracker
         private readonly DatabaseService? _databaseService;
         private ObservableCollection<AppUsageRecord> _usageRecords;
         private bool _disposed;
+        private bool _startupInitialized = false;
         private bool _iconsRefreshedOnce = false;
         
         // Static constructor to configure LiveCharts
@@ -353,116 +354,119 @@ namespace ScreenTimeTracker
             }
         }
 
+        internal void EnsureStartupInitialized()
+        {
+            if (_startupInitialized)
+            {
+                System.Diagnostics.Debug.WriteLine("MainWindow startup initialization already completed; skipping.");
+                return;
+            }
+
+            ThrowIfDisposed();
+            _startupInitialized = true;
+
+            // Setup subclassing and tray icon here so hidden startup does not depend on Loaded firing.
+            if (_hWnd != IntPtr.Zero)
+            {
+                SubclassWindow();
+                _trayIconHelper = new TrayIconHelper(_hWnd);
+                Debug.WriteLine("TrayIconHelper initialized.");
+
+                _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
+                _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
+                _trayIconHelper.ResetClicked += OnResetDataRequested;
+            }
+            else
+            {
+                Debug.WriteLine("WARNING: Skipping SubclassWindow/TrayIcon init due to missing HWND.");
+            }
+
+            _windowHelper.SetUpWindow();
+
+            if (AppTitleBar != null)
+            {
+                this.SetTitleBar(AppTitleBar);
+                Debug.WriteLine("Set AppTitleBar as the custom title bar using Window.SetTitleBar.");
+            }
+            else
+            {
+                Debug.WriteLine("WARNING: Could not set custom title bar (AppTitleBar XAML element is null).");
+            }
+
+            if (_viewModel.SelectedDate > DateTime.Today)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future date detected at startup: {_viewModel.SelectedDate:yyyy-MM-dd}");
+                _viewModel.SelectedDate = DateTime.Today;
+                System.Diagnostics.Debug.WriteLine($"[LOG] Corrected to: {_viewModel.SelectedDate:yyyy-MM-dd}");
+            }
+
+            SetUpUiElements();
+            CheckFirstRun();
+
+            _viewModel.SelectedDate = DateTime.Today;
+            _viewModel.CurrentTimePeriod = TimePeriod.Daily;
+            UpdateDatePickerButtonText();
+
+            if (DateDisplay != null)
+            {
+                DateDisplay.Text = "Today";
+            }
+
+            LoadRecordsForDate(_viewModel.SelectedDate);
+
+            if (UsageListView != null && UsageListView.ItemsSource == null)
+            {
+                UsageListView.ItemsSource = _usageRecords;
+            }
+
+            CleanupSystemProcesses();
+
+            _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
+
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                if (ViewModeLabel != null)
+                {
+                    ViewModeLabel.Text = "Hourly View";
+                }
+
+                if (ViewModePanel != null)
+                {
+                    ViewModePanel.Visibility = Visibility.Collapsed;
+                }
+            });
+
+            RegisterPowerNotifications();
+
+            string trayTooltip = App.StartedFromWindowsStartup ?
+                "Screeny - Running in background" :
+                "Screeny - Tracking";
+            _trayIconHelper?.AddIcon(trayTooltip);
+
+            StartTracking();
+
+            if (App.StartedFromWindowsStartup)
+            {
+                System.Diagnostics.Debug.WriteLine("MainWindow initialized - Started from Windows startup, running in background");
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("MainWindow initialized - Normal startup");
+            }
+        }
+
         // Methods moved to MainWindow.Logic.cs (Dispose, PrepareForSuspend, AutoSaveTimer_Tick)
 
         // New method to handle initialization after window is loaded - Made async void
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
             System.Diagnostics.Debug.WriteLine("MainWindow_Loaded event triggered");
-            
+
             try
             {
                 ThrowIfDisposed(); // Check if already disposed early
 
-                // --- Moved from constructor: Setup subclassing and tray icon --- 
-                if (_hWnd != IntPtr.Zero)
-                {
-                    SubclassWindow(); // Subclass here
-                    _trayIconHelper = new TrayIconHelper(_hWnd); // Initialize here
-                    Debug.WriteLine("TrayIconHelper initialized in Loaded.");
-                    // Subscribe to TrayIconHelper events
-                    if (_trayIconHelper != null)
-                    {
-                        _trayIconHelper.ShowClicked += TrayIcon_ShowClicked;
-                        _trayIconHelper.ExitClicked += TrayIcon_ExitClicked;
-                        _trayIconHelper.ResetClicked += OnResetDataRequested;
-                    }
-                }
-                else
-                {
-                    Debug.WriteLine("WARNING: Skipping SubclassWindow/TrayIcon init in Loaded due to missing HWND.");
-                }
-                // --- End moved section ---
-
-                // Set up window title and icon using the helper
-                _windowHelper.SetUpWindow(); 
-            
-                // Set the custom XAML TitleBar element using the Window's SetTitleBar method
-                if (AppTitleBar != null) // Check if the XAML element exists
-                {
-                    this.SetTitleBar(AppTitleBar); // Correct: Call SetTitleBar on the Window itself
-                    Debug.WriteLine("Set AppTitleBar as the custom title bar using Window.SetTitleBar.");
-                }
-                else
-                {
-                    Debug.WriteLine("WARNING: Could not set custom title bar (AppTitleBar XAML element is null).");
-                }
-
-                // Double-check our selected date is valid (not in the future)
-                if (_viewModel.SelectedDate > DateTime.Today)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[LOG] WARNING: Future date detected at load time: {_viewModel.SelectedDate:yyyy-MM-dd}");
-                    _viewModel.SelectedDate = DateTime.Today;
-                    System.Diagnostics.Debug.WriteLine($"[LOG] Corrected to: {_viewModel.SelectedDate:yyyy-MM-dd}");
-                }
-                
-                // Set up UI elements
-                SetUpUiElements();
-                
-                // Check if this is the first run
-                CheckFirstRun();
-                
-                // Set today's date and update button text
-                _viewModel.SelectedDate = DateTime.Today;
-                _viewModel.CurrentTimePeriod = TimePeriod.Daily; // Default to daily view
-                UpdateDatePickerButtonText();
-                
-                // Set the selected date display
-                if (DateDisplay != null)
-                {
-                    DateDisplay.Text = "Today";
-                }
-                
-                // Load today's records (assuming LoadRecordsForDate handles its internal errors)
-                LoadRecordsForDate(_viewModel.SelectedDate);
-
-                // Set up the UsageListView
-                if (UsageListView != null && UsageListView.ItemsSource == null)
-                {
-                    UsageListView.ItemsSource = _usageRecords;
-                }
-                
-                // Clean up system processes that shouldn't be tracked
-                CleanupSystemProcesses();
-                
-                // Set the initial chart view mode
-                _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
-                
-                // Update view mode label and hide toggle panel (since we start with Today view)
-                DispatcherQueue?.TryEnqueue(() => {
-                    if (ViewModeLabel != null)
-                    {
-                        ViewModeLabel.Text = "Hourly View";
-                    }
-                    
-                    // Hide the view mode panel (user can't change the view for Today)
-                    if (ViewModePanel != null)
-                    {
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                    }
-                });
-
-                // Register for power notifications AFTER window handle is valid and before tracking starts
-                RegisterPowerNotifications();
-
-                // Add the tray icon with appropriate tooltip based on startup mode
-                string trayTooltip = App.StartedFromWindowsStartup ? 
-                    "Screeny - Running in background" : 
-                    "Screeny - Tracking";
-                _trayIconHelper?.AddIcon(trayTooltip);
-
-                // Start tracking automatically (assuming StartTracking handles its internal errors)
-                StartTracking();
+                EnsureStartupInitialized();
                 
                 // Log the startup status
                 if (App.StartedFromWindowsStartup)

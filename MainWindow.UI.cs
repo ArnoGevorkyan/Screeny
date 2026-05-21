@@ -525,9 +525,6 @@ namespace ScreenTimeTracker
             // Initialize the date button text
             UpdateDatePickerButtonText();
 
-            // Timer configured in constructor; ensure delegate attached
-            _updateTimer.Tick += UpdateTimer_Tick;
-
             // _usageRecords collection already initialised in MainWindow constructor.
         }
 
@@ -834,7 +831,11 @@ namespace ScreenTimeTracker
             {
                 if (_databaseService != null && slice != null)
                 {
-                    _databaseService.SaveSlice(slice);
+                    var result = _databaseService.SaveSliceWithResult(slice);
+                    if (result != PersistenceResult.Saved && result != PersistenceResult.DuplicateIgnored)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Usage slice persistence failed: {result}");
+                    }
                 }
             }
             catch (Exception ex)

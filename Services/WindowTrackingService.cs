@@ -22,6 +22,7 @@ namespace ScreenTimeTracker.Services
         private bool _isIdle = false;
         private AppUsageRecord? _idleRecord;
 
+#if !UNIT_TEST
         // ---------- WinEvent hook fields ----------
         private IntPtr _focusHook = IntPtr.Zero;
         private WinEventDelegate? _winEventDelegate;
@@ -48,6 +49,7 @@ namespace ScreenTimeTracker.Services
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+#endif
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -114,10 +116,12 @@ namespace ScreenTimeTracker.Services
             IsTracking = false;
             Debug.WriteLine("WindowTrackingService initialized.");
 
+#if !UNIT_TEST
             // Register foreground-window change hook
             _winEventDelegate = OnWinEvent;
             _focusHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                                          IntPtr.Zero, _winEventDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
+#endif
         }
 
         public void StartTracking()
@@ -145,19 +149,7 @@ namespace ScreenTimeTracker.Services
                 _timer.Stop();
                 IsTracking = false;
 
-                // Finalise focused slice
-                if (_currentRecord != null)
-                {
-                    FinalizeRecord(_currentRecord, DateTime.Now);
-                    _currentRecord = null;
-                }
-
-                // Finalise idle slice if present
-                if (_idleRecord != null)
-                {
-                    FinalizeRecord(_idleRecord, DateTime.Now);
-                    _idleRecord = null;
-                }
+                FinalizeOpenRecords(DateTime.Now);
             }
         }
 
@@ -171,11 +163,7 @@ namespace ScreenTimeTracker.Services
                 _timer.Stop();
                 IsTracking = false;
 
-                if (_currentRecord != null)
-                {
-                    FinalizeRecord(_currentRecord, DateTime.Now);
-                    _currentRecord = null;
-                }
+                FinalizeOpenRecords(DateTime.Now);
             }
         }
 
@@ -203,45 +191,21 @@ namespace ScreenTimeTracker.Services
                 int idleSec = GetIdleSeconds();
                 bool mediaPlaying = IsAnyMediaPlaying();
                 bool currentlyIdle = idleSec > 300 && !mediaPlaying; // 5 minutes idle pause
+                bool shouldRefreshActiveWindow = false;
 
                 lock (_lockObject)
                 {
                     if (!IsTracking || _disposed) return;
 
-                    if (currentlyIdle && !_isIdle)
-                    {
-                        _isIdle = true;
-                        _currentRecord?.SetIdleAnchor(DateTime.Now);
-
-                        // Start idle slice
-                        if (_idleRecord == null)
-                        {
-                            _idleRecord = new AppUsageRecord
-                            {
-                                ProcessName = "Idle / Away",
-                                ApplicationName = "Idle / Away",
-                                StartTime = DateTime.Now,
-                                Date = EnsureValidDate(DateTime.Now.Date)
-                            };
-                            UsageRecordUpdated?.Invoke(this, _idleRecord);
-                        }
-                    }
-                    else if (!currentlyIdle && _isIdle)
-                    {
-                        _isIdle = false;
-                        _currentRecord?.SetIdleAnchor(DateTime.Now);
-
-                        // Finalise idle slice
-                        if (_idleRecord != null)
-                        {
-                            FinalizeRecord(_idleRecord, DateTime.Now);
-                            UsageRecordUpdated?.Invoke(this, _idleRecord);
-                            _idleRecord = null;
-                        }
-                    }
+                    shouldRefreshActiveWindow = ApplyIdleState(currentlyIdle, DateTime.Now);
                 }
 
                 if (currentlyIdle) return; // Skip heavy work while idle
+
+                if (shouldRefreshActiveWindow)
+                {
+                    CheckActiveWindow();
+                }
 
                 // ----- Active-window tracking -----
                 // Real-time events handle window changes, timer only does duration updates
@@ -249,19 +213,7 @@ namespace ScreenTimeTracker.Services
                 // ----- Live-duration update & day rollover -----
                 lock (_lockObject)
                 {
-                    if (_currentRecord != null && _currentRecord.IsFocused)
-                    {
-                        _currentRecord._accumulatedDuration = DateTime.Now - _currentRecord.StartTime;
-                        UsageRecordUpdated?.Invoke(this, _currentRecord);
-
-                        // Detect midnight crossover
-                        if (_currentRecord.Date < DateTime.Today)
-                        {
-                            var endOfPrevDay = _currentRecord.Date.AddDays(1).AddSeconds(-1);
-                            FinalizeRecord(_currentRecord, endOfPrevDay);
-                            _currentRecord = null;
-                        }
-                    }
+                    UpdateFocusedRecord(DateTime.Now);
                 }
 
                 // Update idle duration if still in idle
@@ -374,10 +326,13 @@ namespace ScreenTimeTracker.Services
 
         public IEnumerable<AppUsageRecord> GetRecords()
         {
-            var live = new List<AppUsageRecord>();
-            if (_currentRecord != null) live.Add(_currentRecord);
-            if (_idleRecord    != null) live.Add(_idleRecord);
-            return live;
+            lock (_lockObject)
+            {
+                var live = new List<AppUsageRecord>();
+                if (_currentRecord != null) live.Add(_currentRecord.CreateSnapshot());
+                if (_idleRecord != null) live.Add(_idleRecord.CreateSnapshot());
+                return live;
+            }
         }
 
         private void FinalizeRecord(AppUsageRecord record, DateTime endTime)
@@ -396,6 +351,121 @@ namespace ScreenTimeTracker.Services
                 UsageSliceFinalized?.Invoke(this, slice);
             }
         }
+
+        private void FinalizeOpenRecords(DateTime endTime)
+        {
+            if (_currentRecord != null)
+            {
+                FinalizeRecord(_currentRecord, endTime);
+                _currentRecord = null;
+            }
+
+            if (_idleRecord != null)
+            {
+                FinalizeRecord(_idleRecord, endTime);
+                _idleRecord = null;
+            }
+
+            _isIdle = false;
+        }
+
+        private void UpdateFocusedRecord(DateTime now)
+        {
+            if (_currentRecord == null || !_currentRecord.IsFocused)
+            {
+                return;
+            }
+
+            _currentRecord.RaiseDurationChanged();
+            UsageRecordUpdated?.Invoke(this, _currentRecord);
+
+            // Detect midnight crossover
+            if (_currentRecord.Date < now.Date)
+            {
+                var endOfPrevDay = _currentRecord.Date.AddDays(1).AddSeconds(-1);
+                FinalizeRecord(_currentRecord, endOfPrevDay);
+                _currentRecord = null;
+            }
+        }
+
+        private bool ApplyIdleState(bool currentlyIdle, DateTime now)
+        {
+            if (currentlyIdle && !_isIdle)
+            {
+                _isIdle = true;
+
+                if (_currentRecord != null)
+                {
+                    FinalizeRecord(_currentRecord, now);
+                    UsageRecordUpdated?.Invoke(this, _currentRecord);
+                    _currentRecord = null;
+                }
+
+                if (_idleRecord == null)
+                {
+                    _idleRecord = new AppUsageRecord
+                    {
+                        ProcessName = "Idle / Away",
+                        ApplicationName = "Idle / Away",
+                        StartTime = now,
+                        Date = EnsureValidDate(now.Date)
+                    };
+                    UsageRecordUpdated?.Invoke(this, _idleRecord);
+                }
+
+                return false;
+            }
+
+            if (!currentlyIdle && _isIdle)
+            {
+                _isIdle = false;
+
+                if (_idleRecord != null)
+                {
+                    FinalizeRecord(_idleRecord, now);
+                    UsageRecordUpdated?.Invoke(this, _idleRecord);
+                    _idleRecord = null;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+#if UNIT_TEST
+        internal void SetOpenRecordsForTest(AppUsageRecord? currentRecord, AppUsageRecord? idleRecord, bool isTracking = true)
+        {
+            lock (_lockObject)
+            {
+                _currentRecord = currentRecord;
+                _idleRecord = idleRecord;
+                _isIdle = idleRecord != null;
+                IsTracking = isTracking;
+            }
+        }
+
+        internal void UpdateFocusedRecordForTest(DateTime now)
+        {
+            lock (_lockObject)
+            {
+                UpdateFocusedRecord(now);
+            }
+        }
+
+        internal void ProcessWindowChangeForTest(IntPtr foregroundWindow, int processId, string processName, string windowTitle)
+        {
+            ProcessWindowChange(foregroundWindow, processId, processName, windowTitle);
+        }
+
+        internal bool ApplyIdleStateForTest(bool currentlyIdle, DateTime now)
+        {
+            lock (_lockObject)
+            {
+                return ApplyIdleState(currentlyIdle, now);
+            }
+        }
+#endif
 
         private void ThrowIfDisposed()
         {
@@ -427,12 +497,14 @@ namespace ScreenTimeTracker.Services
                     _currentRecord = null;
                     _disposed = true;
 
+#if !UNIT_TEST
                     if (_focusHook != IntPtr.Zero)
                     {
                         try { UnhookWinEvent(_focusHook); } catch { }
                         _focusHook = IntPtr.Zero;
                         _winEventDelegate = null;
                     }
+#endif
 
                 }
             }
@@ -448,6 +520,7 @@ namespace ScreenTimeTracker.Services
             return date;
         }
 
+#if !UNIT_TEST
         // ---------- WinEvent hook callback ----------
         private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
         {
@@ -487,6 +560,7 @@ namespace ScreenTimeTracker.Services
                 System.Diagnostics.Debug.WriteLine($"Error in window tracking callback: {ex.Message}");
             }
         }
+#endif
 
         // Extracted shared logic from original CheckActiveWindow body starting after obtaining names
         private void ProcessWindowChange(IntPtr foregroundWindow, int processId, string processName, string windowTitle)

@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !UNIT_TEST
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Storage.Streams;
+#endif
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -27,6 +29,7 @@ namespace ScreenTimeTracker.Models
         public DateTime Date { get; set; }
         public DateTime? LastUpdated { get; set; }
         
+#if !UNIT_TEST
         private BitmapImage? _appIcon;
         public BitmapImage? AppIcon
         {
@@ -40,6 +43,7 @@ namespace ScreenTimeTracker.Models
                 }
             }
         }
+#endif
         
         private DateTime _startTime;
         public DateTime StartTime
@@ -75,13 +79,14 @@ namespace ScreenTimeTracker.Models
 
         internal TimeSpan _accumulatedDuration = TimeSpan.Zero;
         private DateTime _lastFocusTime;
+        private bool _durationIsSnapshot;
 
         public TimeSpan Duration
         {
             get
             {
                 var baseDuration = _accumulatedDuration;
-                if (IsFocused)
+                if (IsFocused && !_durationIsSnapshot)
                 {
                     var currentTime = DateTime.Now;
                     var focusedDuration = currentTime - _lastFocusTime;
@@ -139,6 +144,8 @@ namespace ScreenTimeTracker.Models
 
         public void SetFocus(bool isFocused)
         {
+            _durationIsSnapshot = false;
+
             if (IsFocused != isFocused)
             {
              if (isFocused)
@@ -177,6 +184,27 @@ namespace ScreenTimeTracker.Models
             NotifyPropertyChanged(nameof(FormattedDuration));
         }
 
+        internal AppUsageRecord CreateSnapshot()
+        {
+            return new AppUsageRecord
+            {
+                Id = Id,
+                ProcessName = ProcessName,
+                ProcessId = ProcessId,
+                WindowTitle = WindowTitle,
+                WindowHandle = WindowHandle,
+                IsFocused = IsFocused,
+                ApplicationName = ApplicationName,
+                Date = Date,
+                LastUpdated = LastUpdated,
+                StartTime = StartTime,
+                EndTime = EndTime,
+                _accumulatedDuration = Duration,
+                _lastFocusTime = DateTime.Now,
+                _durationIsSnapshot = true
+            };
+        }
+
         public void MergeWith(AppUsageRecord other)
         {
             if (other.EndTime.HasValue)
@@ -213,12 +241,15 @@ namespace ScreenTimeTracker.Models
                 _accumulatedDuration = TimeSpan.Zero
             };
             
+#if !UNIT_TEST
             // Initialize icon loading in the background
             record.LoadAppIconIfNeeded();
+#endif
             
             return record;
         }
 
+#if !UNIT_TEST
         public async void LoadAppIconIfNeeded()
         {
             if (AppIcon != null || _loadingIcon) return;
@@ -250,6 +281,15 @@ namespace ScreenTimeTracker.Models
         {
             AppIcon = null;
         }
+#else
+        public void LoadAppIconIfNeeded()
+        {
+        }
+
+        public void ClearIcon()
+        {
+        }
+#endif
 
         public void RaiseDurationChanged()
         {
@@ -258,4 +298,4 @@ namespace ScreenTimeTracker.Models
             NotifyPropertyChanged(nameof(FormattedDuration));
         }
     }
-} 
+}
