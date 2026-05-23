@@ -832,14 +832,25 @@ namespace ScreenTimeTracker
                 if (_databaseService != null && slice != null)
                 {
                     var result = _databaseService.SaveSliceWithResult(slice);
-                    if (result != PersistenceResult.Saved && result != PersistenceResult.DuplicateIgnored)
+                    if (result == PersistenceResult.Saved || result == PersistenceResult.DuplicateIgnored)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Usage slice persistence failed: {result}");
+                        _viewModel.PersistenceHealth = PersistenceHealthStatus.Healthy;
+                    }
+                    else if (result == PersistenceResult.RetryableFailure)
+                    {
+                        _viewModel.PersistenceHealth = PersistenceHealthStatus.RetryableIssue;
+                        System.Diagnostics.Debug.WriteLine("Usage slice persistence was delayed by a retryable database error.");
+                    }
+                    else
+                    {
+                        _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
+                        System.Diagnostics.Debug.WriteLine("Usage slice persistence failed with a fatal database error.");
                     }
                 }
             }
             catch (Exception ex)
             {
+                _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
                 System.Diagnostics.Debug.WriteLine($"Error saving usage slice from service: {ex.Message}");
             }
         }

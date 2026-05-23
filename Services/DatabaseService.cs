@@ -946,10 +946,7 @@ namespace ScreenTimeTracker.Services
                     }
                 }
 
-                // Filter entries shorter than 5 minutes and sort descending.
-                return results.Where(r => r.Item2.TotalSeconds >= 300)
-                               .OrderByDescending(r => r.Item2)
-                               .ToList();
+                return results.OrderByDescending(r => r.Item2).ToList();
             }
             catch (Exception ex)
             {

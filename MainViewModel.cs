@@ -76,8 +76,24 @@ namespace ScreenTimeTracker
             }
         }
 
+        private PersistenceHealthStatus _persistenceHealth = PersistenceHealthStatus.Healthy;
+        public PersistenceHealthStatus PersistenceHealth
+        {
+            get => _persistenceHealth;
+            set
+            {
+                SetProperty(ref _persistenceHealth, value);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TrackingStatusText)));
+            }
+        }
+
         // Properties to replace converters
-        public string TrackingStatusText => IsTracking ? "Active" : "Paused";
+        public string TrackingStatusText => PersistenceHealth switch
+        {
+            PersistenceHealthStatus.FatalIssue => "Data issue",
+            PersistenceHealthStatus.RetryableIssue => "Saving delayed",
+            _ => IsTracking ? "Active" : "Paused"
+        };
         public string ChartViewModeLabel => CurrentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
         public string FormattedSelectedDate => SelectedDate.ToString("MMM dd, yyyy");
 
@@ -134,4 +150,4 @@ namespace ScreenTimeTracker
             public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
         }
     }
-} 
+}
