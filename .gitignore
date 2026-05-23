@@ -35,6 +35,10 @@ artifacts/
 coverage/
 coverage.cobertura.xml
 
+# Local-only reliability tests and planning
+ScreenTimeTracker.Tests/
+RELIABILITY_PLAN.md
+
 # Files built by Visual Studio
 *_i.c
 *_p.c

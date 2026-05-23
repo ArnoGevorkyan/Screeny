@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
+using ScreenTimeTracker.Helpers;
 using ScreenTimeTracker.Models;
 using System.Linq;
 using System.Collections.Generic;
@@ -41,14 +42,15 @@ namespace ScreenTimeTracker.Services
         {
             if (record == null) throw new ArgumentNullException(nameof(record));
 
-            // Primary cache key – process name only (case-insensitive)
-            string cacheKey = record.ProcessName.ToLowerInvariant();
+            // Primary cache key: stable process identity only, case-insensitive.
+            string cacheKey = AppIconIdentity.CreateProcessCacheKey(record);
             if (_iconCache.TryGetValue(cacheKey, out var cached))
             {
                 return cached;
             }
-            // Secondary key that includes the window handle (covers edge-cases where two apps share name)
-            string handleKey = cacheKey + "|" + record.WindowHandle.ToInt64();
+
+            // Secondary key that includes the window handle for shared-name edge cases.
+            string handleKey = AppIconIdentity.CreateWindowHandleCacheKey(record);
             if (_iconCache.TryGetValue(handleKey, out cached))
             {
                 return cached;
@@ -267,4 +269,4 @@ namespace ScreenTimeTracker.Services
             }
         }
     }
-} 
+}

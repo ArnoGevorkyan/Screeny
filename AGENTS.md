@@ -9,16 +9,20 @@ Screeny is a privacy-focused WinUI 3 desktop app targeting `.NET 8` and Windows 
 - `Services/`: active-window tracking, SQLite persistence, and icon loading.
 - `Models/`: usage records, finalized usage slices, enums, filters, and observable base types.
 - `Helpers/`: charting, Win32, tray, date picker, window utilities, name normalization, and time formatting.
-- `ScreenTimeTracker.Tests/`: MSTest coverage for pure helpers and domain contracts that can run without launching WinUI.
 - `Assets/`: app icons, splash images, and Store assets.
 - `.agents/skills/`: optional local agent skills installed for this repo.
 
-Follow `RELIABILITY_PLAN.md` for reliability sequencing. Prefer reliability and data correctness over visual churn.
+Local-only files may exist for agent work:
+
+- `ScreenTimeTracker.Tests/`: ignored MSTest coverage for pure helpers and domain contracts that can run without launching WinUI.
+- `RELIABILITY_PLAN.md`: ignored reliability execution plan used during local agent work.
+
+Prefer reliability and data correctness over visual churn.
 
 ## Build, Test, And Development Commands
 
-- `dotnet build ScreenTimeTracker.sln`: restores and builds the app plus test project.
-- `dotnet test ScreenTimeTracker.sln`: runs the MSTest suite without launching WinUI.
+- `dotnet build ScreenTimeTracker.sln`: restores and builds the WinUI app.
+- `dotnet test ScreenTimeTracker.Tests/ScreenTimeTracker.Tests.csproj`: runs the local ignored MSTest suite when it exists.
 - `dotnet build ScreenTimeTracker.csproj`: builds only the WinUI app.
 - `dotnet run --project ScreenTimeTracker.csproj`: launches the app locally when Windows desktop prerequisites are available.
 - `dotnet publish ScreenTimeTracker.csproj -c Release`: creates release output for distribution.
@@ -48,14 +52,14 @@ Use `ProcessName` as stable application identity. Use `ApplicationName` and `Win
 
 ## Testing Guidelines
 
-Tests currently use MSTest in `ScreenTimeTracker.Tests`. The suite covers pure helper/model logic such as `ProcessFilter`, `TimeFormatter`, `ApplicationNameNormalizer`, and `UsageSlice`.
+Tests are local-only and ignored in `ScreenTimeTracker.Tests` when present. The suite covers pure helper/model logic such as `ProcessFilter`, `TimeFormatter`, `ApplicationNameNormalizer`, and `UsageSlice`.
 
 For tracking, persistence, aggregation, migration, or lifecycle changes:
 
 - Add focused tests first when the code can be tested without launching WinUI.
 - Prefer small pure helpers or domain types when extracting testable behavior from WinUI code.
 - Suggested test names: `MethodName_State_ExpectedBehavior`.
-- At minimum, run `dotnet build ScreenTimeTracker.sln` and `dotnet test ScreenTimeTracker.sln`.
+- At minimum, run `dotnet build ScreenTimeTracker.sln`. If local tests are present, also run `dotnet test ScreenTimeTracker.Tests/ScreenTimeTracker.Tests.csproj`.
 - Manually verify startup, active-window tracking, date ranges, reset data, tray behavior, suspend/resume, and packaged launch when relevant.
 
 Do not broaden the UI or MVVM architecture just to make tests easier. Extract only the smallest stable contract needed for the reliability change.
@@ -68,7 +72,7 @@ Use a gstack-style workflow with Codex for substantial work:
 2. Plan: update a small checklist before broad changes.
 3. Build: keep edits scoped and avoid UI redesign unless requested.
 4. Review: check for reliability, data loss, duplicate counting, privacy, and lifecycle regressions.
-5. Test: run `dotnet build ScreenTimeTracker.sln` and `dotnet test ScreenTimeTracker.sln`; manually verify relevant WinUI/tray/startup flows.
+5. Test: run `dotnet build ScreenTimeTracker.sln` and, when local tests are present, `dotnet test ScreenTimeTracker.Tests/ScreenTimeTracker.Tests.csproj`; manually verify relevant WinUI/tray/startup flows.
 6. Ship: summarize changes, verification, and remaining risk.
 
 Relevant gstack skills for this repo:
@@ -79,7 +83,7 @@ Relevant gstack skills for this repo:
 - `cso`: use for privacy, capabilities, certificates, and local-only checks.
 - `ship`: use only after build, tests, and relevant smoke checks pass.
 
-Prefer project-specific guidance in this file and `RELIABILITY_PLAN.md` over generic .NET skill advice when they conflict.
+Prefer project-specific guidance in this file over generic .NET skill advice when they conflict. Use `RELIABILITY_PLAN.md` only when it exists locally.
 
 ## Commit & Pull Request Guidelines
 
