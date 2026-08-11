@@ -1,3 +1,5 @@
+
+
 # Screeny
 
 A privacy-focused screen time tracker for Windows, built with WinUI 3 and the Windows App SDK.
@@ -39,7 +41,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 ```
 git clone https://github.com/ArnoGevorkyan/Screeny.git
 cd Screeny
-dotnet build
+dotnet build ScreenTimeTracker.sln
 ```
 
 ## Contributing
@@ -52,4 +54,4 @@ This project is licensed under the Apache License - see the [LICENSE](LICENSE.md
 
 ## Privacy
 
-Screeny is designed with privacy in mind. All tracking data is stored locally on your device and never transmitted over the internet. See the [PRIVACY](PRIVACY.md) file for our full privacy policy. 
+Screeny is designed with privacy in mind. All tracking data is stored locally on your device and never transmitted over the internet. See the [PRIVACY](PRIVACY.md) file for our full privacy policy.
