@@ -171,7 +171,7 @@ namespace ScreenTimeTracker
                 else
                 {
                     UpdateUsageChart();
-                    UpdateSummaryTab(_viewModel.IsDateRangeSelected ? _viewModel.AggregatedRecords : _usageRecords);
+                    UpdateSummaryTab(_usageRecords);
                 }
             }
             catch (Exception ex)

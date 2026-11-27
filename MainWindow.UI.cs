@@ -413,6 +413,9 @@ namespace ScreenTimeTracker
             try
             {
                 var totalTime = TimeUtil.CalculateUniqueTotalTime(recordsToSummarize);
+                var (start, end) = GetCurrentViewDateRange();
+                var maxDuration = TimeSpan.FromDays((end - start).Days + 1);
+                if (totalTime > maxDuration) totalTime = maxDuration;
 
                 // Update summary UI – total screen time block
                 if (TotalScreenTime != null)
@@ -439,19 +442,17 @@ namespace ScreenTimeTracker
                     }
                 }
 
-                // Determine most-used application within the supplied list (excluding idle)
-                AppUsageRecord? mostUsedApp = null;
-                foreach (var record in recordsToSummarize)
-                {
-                    if (Models.ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) continue;
-                    if (mostUsedApp == null || record.Duration > mostUsedApp.Duration)
-                        mostUsedApp = record;
-                }
+                var mostUsed = recordsToSummarize
+                    .Where(r => !ProcessFilter.ShouldIgnoreProcess(r.ProcessName))
+                    .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => (Record: group.First(), Duration: TimeUtil.CalculateUniqueTotalTime(group)))
+                    .OrderByDescending(app => app.Duration)
+                    .FirstOrDefault();
 
-                if (mostUsedApp != null)
+                if (mostUsed.Record is { } mostUsedApp)
                 {
                     if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
-                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsedApp.Duration);
+                    if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsed.Duration);
 
                     // Ensure icon is loaded (deferred)
                     mostUsedApp.LoadAppIconIfNeeded();
@@ -653,7 +654,7 @@ namespace ScreenTimeTracker
                         return;
 
                     UpdateUsageChart(hourlyRecords);
-                    UpdateSummaryTab(_viewModel.IsDateRangeSelected ? _viewModel.AggregatedRecords : _usageRecords);
+                    UpdateSummaryTab(_usageRecords);
                 }
                 catch (Exception ex)
                 {
