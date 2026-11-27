@@ -15,20 +15,28 @@ namespace ScreenTimeTracker
     // compilation.
     public sealed partial class MainWindow
     {
+        private int _chartRevision;
+        private bool _chartRefreshPending;
+
         // ---------------- Chart update helper ----------------
-        private void UpdateUsageChart(AppUsageRecord? liveFocusedRecord = null)
+        private void UpdateUsageChart(List<AppUsageRecord>? hourlyRecords = null)
         {
             // Safety checks
             if (UsageChartLive == null || _usageRecords == null) return;
 
+            _chartRevision++;
+            ICollection<AppUsageRecord> chartRecords = _usageRecords;
+            if (_viewModel.CurrentChartViewMode == ChartViewMode.Hourly)
+                chartRecords = hourlyRecords ?? _databaseService?.GetHourlyRecordsWithLive(_viewModel.SelectedDate, _trackingService)
+                    ?? new List<AppUsageRecord>();
+
             var totalTime = Helpers.ChartHelper.UpdateUsageChart(
                 UsageChartLive,
-                _usageRecords,
+                chartRecords,
                 _viewModel.CurrentChartViewMode,
                 _viewModel.CurrentTimePeriod,
                 _viewModel.SelectedDate,
-                _viewModel.SelectedEndDate,
-                liveFocusedRecord);
+                _viewModel.SelectedEndDate);
 
             // Update UI text block with formatted total time if available
             if (ChartTimeValue != null)
@@ -131,7 +139,7 @@ namespace ScreenTimeTracker
         }
 
         // ---------------- Additional UI helpers migrated from MainWindow.xaml.cs ----------------
-        private void UpdateChartViewMode()
+        private void UpdateChartViewMode(List<AppUsageRecord>? hourlyRecords = null)
         {
             var today = DateTime.Today;
             var yesterday = today.AddDays(-1);
@@ -211,24 +219,7 @@ namespace ScreenTimeTracker
             if (ViewModePanel != null)
                 ViewModePanel.Visibility = Visibility.Collapsed;
 
-            UpdateUsageChart();
-        }
-
-        // Forces the LiveCharts control to refresh completely
-        private void ForceChartRefresh()
-        {
-            if (UsageChartLive == null) return;
-
-            var totalTime = ChartHelper.ForceChartRefresh(
-                UsageChartLive,
-                _usageRecords,
-                _viewModel.CurrentChartViewMode,
-                _viewModel.CurrentTimePeriod,
-                _viewModel.SelectedDate,
-                _viewModel.SelectedEndDate);
-
-            if (ChartTimeValue != null)
-                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
+            UpdateUsageChart(hourlyRecords);
         }
 
         private void UpdateDatePickerButtonText()
@@ -641,22 +632,42 @@ namespace ScreenTimeTracker
 
         private void DoChartRefresh()
         {
+            if (_chartRefreshPending) return;
+
             _isChartDirty = false;
+            _chartRefreshPending = true;
+            var revision = _chartRevision;
 
             // Run heavy chart work at idle priority to keep UI responsive
-            DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            if (DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, async () =>
             {
-                if (_disposed) return;
                 try
                 {
-                    UpdateUsageChart();
+                    if (_disposed || _chartRevision != revision) return;
+
+                    var date = _viewModel.SelectedDate;
+                    var mode = _viewModel.CurrentChartViewMode;
+                    var hourlyRecords = mode == ChartViewMode.Hourly && _databaseService is { } database
+                        ? await Task.Run(() => database.GetHourlyRecordsWithLive(date, _trackingService))
+                        : null;
+
+                    if (_disposed || _isReloading || _chartRevision != revision ||
+                        _viewModel.SelectedDate != date || _viewModel.CurrentChartViewMode != mode)
+                        return;
+
+                    UpdateUsageChart(hourlyRecords);
                     UpdateSummaryTab(_usageRecords.ToList());
                 }
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"Error in chart refresh: {ex.Message}");
                 }
-            });
+                finally
+                {
+                    _chartRefreshPending = false;
+                }
+            }) != true)
+                _chartRefreshPending = false;
         }
 
         private void DoIconRetry()

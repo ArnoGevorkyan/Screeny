@@ -629,7 +629,6 @@ namespace ScreenTimeTracker
                             
                             // Load the data directly on UI thread
                             LoadRecordsForDate(_viewModel.SelectedDate);
-                            UpdateChartViewMode(); // Update chart view after loading
                             
                             // Hide loading indicator AFTER loading is done
                             if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;

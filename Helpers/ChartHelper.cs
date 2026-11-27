@@ -26,7 +26,6 @@ namespace ScreenTimeTracker.Helpers
         /// <param name="timePeriod">The time period (Daily, Weekly, etc.)</param>
         /// <param name="selectedDate">The selected date for filtering</param>
         /// <param name="selectedEndDate">Optional end date for range selection</param>
-        /// <param name="liveFocusedRecord">The currently active/focused record from the tracking service (optional)</param>
         /// <returns>The total time calculated from the records</returns>
         public static TimeSpan UpdateUsageChart(
             LiveChartsCore.SkiaSharpView.WinUI.CartesianChart chart, 
@@ -34,8 +33,7 @@ namespace ScreenTimeTracker.Helpers
             ChartViewMode viewMode,
             TimePeriod timePeriod,
             DateTime selectedDate,
-            DateTime? selectedEndDate = null,
-            AppUsageRecord? liveFocusedRecord = null)
+            DateTime? selectedEndDate = null)
         {
             if (chart == null)
             {
@@ -196,8 +194,8 @@ namespace ScreenTimeTracker.Helpers
                     if (nonZeroHours.Count <= 3)
                     {
                         int middleHour       = (earliestHour + latestHour) / 2;
-                        filteredStartHour    = Math.Max(0, middleHour - 3);
-                        filteredEndHour      = Math.Min(23, middleHour + 3);
+                        filteredStartHour    = Math.Clamp(middleHour - 3, 0, earliestHour);
+                        filteredEndHour      = Math.Clamp(middleHour + 3, latestHour, 23);
                     }
                     else
                     {
@@ -543,4 +541,4 @@ namespace ScreenTimeTracker.Helpers
             }
         }
     }
-} 
+}
