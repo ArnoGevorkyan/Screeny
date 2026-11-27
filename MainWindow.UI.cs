@@ -470,34 +470,17 @@ namespace ScreenTimeTracker
                     if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
                     if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsedApp.Duration);
 
-                    // Ensure icon is loaded (deferred)
                     mostUsedApp.LoadAppIconIfNeeded();
-
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        if (mostUsedApp.AppIcon != null)
-                        {
-                            MostUsedAppIcon.Source = mostUsedApp.AppIcon;
-                            MostUsedAppIcon.Visibility = Visibility.Visible;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
-                        }
-                        else
-                        {
-                            MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                            MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                        }
-                    }
                 }
                 else
                 {
                     if (MostUsedApp != null)       MostUsedApp.Text = "None";
                     if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(TimeSpan.Zero);
-                    if (MostUsedAppIcon != null && MostUsedPlaceholderIcon != null)
-                    {
-                        MostUsedAppIcon.Visibility = Visibility.Collapsed;
-                        MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
-                    }
                 }
+
+                if (MostUsedAppIcon != null) MostUsedAppIcon.DataContext = mostUsedApp;
+                if (MostUsedPlaceholderIcon != null)
+                    MostUsedPlaceholderIcon.Visibility = mostUsedApp == null ? Visibility.Visible : Visibility.Collapsed;
             }
             catch (Exception ex)
             {
@@ -692,10 +675,7 @@ namespace ScreenTimeTracker
             {
                 foreach (var rec in _usageRecords)
                 {
-                    if (rec.AppIcon == null)
-                    {
-                        rec.LoadAppIconIfNeeded();
-                    }
+                    rec.LoadAppIconIfNeeded();
                 }
             }
             catch (Exception ex) 
@@ -775,6 +755,7 @@ namespace ScreenTimeTracker
                 }
 
                 if (isFocused && !existing.IsFocused) existing.SetFocus(true);
+                if (isFocused) existing.LoadAppIconIfNeeded(record);
                 existing.RaiseDurationChanged();
             }
 

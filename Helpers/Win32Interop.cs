@@ -6,60 +6,33 @@ namespace ScreenTimeTracker.Helpers
 {
     internal static class Win32Interop
     {
-        // For ExtractAssociatedIcon
         [DllImport("Shell32.dll", CharSet = CharSet.Unicode)]
-        internal static extern IntPtr ExtractAssociatedIcon(IntPtr hInst, StringBuilder lpIconPath, out ushort lpiIcon);
+        internal static extern uint ExtractIconEx(string file, int index, out IntPtr large, IntPtr small, uint count);
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool DestroyIcon(IntPtr hIcon);
 
-        // For SHGetFileInfo
-        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
-        internal static extern IntPtr SHGetFileInfo(
-            string pszPath,
-            uint dwFileAttributes,
-            ref SHFILEINFO psfi,
-            uint cbFileInfo,
-            uint uFlags);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-        internal struct SHFILEINFO
-        {
-            public IntPtr hIcon;
-            public int iIcon;
-            public uint dwAttributes;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-            public string szDisplayName;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
-            public string szTypeName;
-        }
-
-        internal const uint SHGFI_ICON = 0x100;
-        internal const uint SHGFI_SMALLICON = 0x1;
-        internal const uint SHGFI_LARGEICON = 0x0;
-        internal const uint SHGFI_USEFILEATTRIBUTES = 0x10;
-        internal const uint FILE_ATTRIBUTE_NORMAL = 0x80;
-
         // For Window-handle icon extraction
-        internal const int WM_GETICON = 0x007F;
-        internal const int ICON_SMALL = 0;
-        internal const int ICON_BIG = 1;
-        internal const int ICON_SMALL2 = 2;
-        internal const int GCL_HICON = -14;
-        internal const int GCL_HICONSM = -34;
-
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        internal static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+        private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam,
+            uint flags, uint timeout, out IntPtr result);
 
-        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW", SetLastError = true)]
-        private static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
-        [DllImport("user32.dll", EntryPoint = "GetClassLongW", SetLastError = true)]
-        private static extern uint GetClassLongPtr32(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
+        private static extern IntPtr GetClassLongPtr(IntPtr window, int index);
 
-        internal static IntPtr GetClassLongPtrSafe(IntPtr hWnd, int nIndex)
+        internal static IntPtr GetWindowIcon(IntPtr window)
         {
-            return IntPtr.Size == 8 ? GetClassLongPtr64(hWnd, nIndex) : new IntPtr(GetClassLongPtr32(hWnd, nIndex));
+            const uint WM_GETICON = 0x007F;
+            const uint SMTO_ABORTIFHUNG = 0x0002;
+            if (SendMessageTimeout(window, WM_GETICON, (IntPtr)1, IntPtr.Zero, SMTO_ABORTIFHUNG, 100, out var handle) == IntPtr.Zero)
+                return IntPtr.Zero;
+            if (handle == IntPtr.Zero)
+                SendMessageTimeout(window, WM_GETICON, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 100, out handle);
+            if (handle == IntPtr.Zero) handle = GetClassLongPtr(window, -14);
+            return handle != IntPtr.Zero ? handle : GetClassLongPtr(window, -34);
         }
 
         // For IImageList (UWP/Store icons)
