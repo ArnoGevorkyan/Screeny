@@ -40,6 +40,7 @@ public partial class App : Application
 
     private Window? m_window;
     private WindowTrackingService? _trackingService; // Field to hold the service instance
+    private bool _showOnRelaunch;
 
     // Add static property to hold MainWindow instance
     public static Window? MainWindowInstance { get; private set; }
@@ -51,13 +52,13 @@ public partial class App : Application
     /// Initializes the singleton application object.  This is the first line of authored code
     /// executed, and as such is the logical equivalent of main() or WinMain().
     /// </summary>
-    public App()
+    internal App(bool startupTask)
     {
         // Log the start of the application
         WriteToLog("Application starting...");
 
         // Check if started from Windows startup
-        StartedFromWindowsStartup = IsStartedFromWindowsStartup();
+        StartedFromWindowsStartup = startupTask || IsStartedFromWindowsStartup();
         WriteToLog($"Started from Windows startup: {StartedFromWindowsStartup}");
 
         try
@@ -93,6 +94,18 @@ public partial class App : Application
         {
             WriteToLog($"CRITICAL ERROR during App constructor: {ex.Message}\n{ex.StackTrace}");
             ShowErrorAndExit("The application failed to initialize properly.", ex);
+        }
+    }
+
+    internal void ShowExistingWindow()
+    {
+        if (m_window is MainWindow window)
+        {
+            window.ShowFromRelaunch();
+        }
+        else
+        {
+            _showOnRelaunch = true;
         }
     }
 
@@ -230,7 +243,8 @@ public partial class App : Application
 
             // Determine whether to show the window
             bool isFirstRun = IsFirstRun();
-            bool showWindow = StartupLaunchPolicy.ShouldShowWindow(StartedFromWindowsStartup, isFirstRun);
+            bool showWindow = _showOnRelaunch ||
+                StartupLaunchPolicy.ShouldShowWindow(StartedFromWindowsStartup, isFirstRun);
 
             if (showWindow)
             {
@@ -445,5 +459,3 @@ public partial class App : Application
         }
     }
 }
-
-

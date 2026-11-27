@@ -818,6 +818,23 @@ namespace ScreenTimeTracker
             }
         }
         
+        internal void ShowFromRelaunch()
+        {
+            if (_disposed || (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0)
+            {
+                return;
+            }
+
+            if (_appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter
+                { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized } presenter)
+            {
+                presenter.Restore();
+            }
+
+            _appWindow.Show();
+            Activate();
+        }
+
         // Event Handlers for Tray Icon Clicks
         private void TrayIcon_ShowClicked(object? sender, EventArgs e)
         {
