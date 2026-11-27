@@ -53,7 +53,8 @@ internal static class Program
                     return 0;
                 }
 
-                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.CurrentUserOnly);
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out,
+                    PipeOptions.CurrentUserOnly, TokenImpersonationLevel.Anonymous);
                 client.Connect(5000);
                 if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out uint ownerPid))
                 {
@@ -67,6 +68,7 @@ internal static class Program
 
             using var user = WindowsIdentity.GetCurrent();
             var security = new PipeSecurity();
+            security.SetOwner(user.Owner!);
             security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
                 PipeAccessRights.FullControl, AccessControlType.Deny));
             security.AddAccessRule(new PipeAccessRule(user.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
