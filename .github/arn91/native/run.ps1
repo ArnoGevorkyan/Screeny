@@ -17,7 +17,7 @@ function Wait-For([scriptblock]$condition, [string]$what, [int]$ms = 8000) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
         $result = & $condition
-        if ($null -ne $result -and $result -ne $false -and $result -ne [IntPtr]::Zero) { return $result }
+        if ($result) { return $result }
         Start-Sleep -Milliseconds 110
     } while ($timer.ElapsedMilliseconds -lt $ms)
     throw "Did not observe $what"
@@ -49,7 +49,14 @@ try {
     } 'native tracking control'
 
     $alpha = Synthetic Alpha
-    [void](Wait-For { [WindowProbe]::ForegroundPid() -eq $alpha.Id } 'synthetic Alpha foreground')
+    [void](Wait-For {
+        $alpha.Refresh()
+        if ($alpha.HasExited) { throw "Alpha exited before foreground: $($alpha.ExitCode)" }
+        if ($alpha.MainWindowHandle -ne [IntPtr]::Zero -and [WindowProbe]::ForegroundPid() -ne $alpha.Id) {
+            [void][AuditNative]::SetForegroundWindow($alpha.MainWindowHandle)
+        }
+        [WindowProbe]::ForegroundPid() -eq $alpha.Id
+    } 'synthetic Alpha foreground')
     $priorInputTick = [IdleNative]::Tick()
     if (![WindowProbe]::RefreshSyntheticInput($alpha.Id)) { throw 'Alpha synthetic input not sent' }
     [void](Wait-For { [IdleNative]::Tick() -ne $priorInputTick } 'fresh Alpha input stamp')
