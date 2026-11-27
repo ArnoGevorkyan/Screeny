@@ -1,0 +1,57 @@
+name: Verification only - ARN-91 tracking timeline
+on:
+  push:
+    branches: [verify/arn91-timeline]
+    paths: ['.github/workflows/arn91-timeline-proof.yml', '.github/arn91/**']
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      SOURCE: ac6b16b43ce6a1e4eb83f28460c791d15c2478a1
+      TREE: 75b65fa37731737a88621bc856f970c09ec4940b
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verification
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ac6b16b43ce6a1e4eb83f28460c791d15c2478a1
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.404'
+      - name: Check pinned source and run controlled cases against native SQLite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $src = (Resolve-Path source).Path
+          $verify = (Resolve-Path verification/.github/arn91).Path
+          if ((git -C $src rev-parse HEAD) -cne $env:SOURCE -or (git -C $src rev-parse 'HEAD^{tree}') -cne $env:TREE -or (git -C $src status --porcelain)) { throw 'Product tree mismatch' }
+          if ((git -C verification diff --name-only "${env:SOURCE}..HEAD" -- . ':(exclude).github/arn91/**' ':(exclude).github/workflows/arn91-timeline-proof.yml')) { throw 'Verifier includes product edits' }
+          "Verified source=$env:SOURCE tree=$env:TREE; Windows=$([Environment]::OSVersion.Version); image=$env:ImageVersion"
+          dotnet new globaljson --sdk-version 10.0.404 --roll-forward disable
+          [xml]$app = Get-Content -Raw "$src/ScreenTimeTracker.csproj"
+          [xml]$test = Get-Content -Raw "$verify/Audit.csproj"
+          $appPins = @($app.Project.ItemGroup.PackageReference | Where-Object Include -Match '^(Microsoft\.Data\.Sqlite|SQLite)' | ForEach-Object { "$($_.Include)=$($_.Version)" } | Sort-Object)
+          $testPins = @($test.Project.ItemGroup.PackageReference | ForEach-Object { "$($_.Include)=$($_.Version)" } | Sort-Object)
+          if (($appPins -join ',') -cne ($testPins -join ',')) { throw 'Product SQLite pins differ from audit' }
+          "Audit SQLite pins: $($appPins -join ', ')"
+          python "$verify/generate.py" $src
+          dotnet build "$verify/Audit.csproj" -c Release -r win-x64 --self-contained false "-p:Screeny=$src"
+          dotnet "$verify/bin/Release/net10.0/win-x64/Audit.dll"
+      - name: Build pinned WinUI solution x64
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-Location source
+          dotnet build ScreenTimeTracker.sln -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false
