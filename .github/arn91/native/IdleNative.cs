@@ -19,5 +19,8 @@ public static class IdleNative
         return info.dwTime;
     }
 
-    public static uint Seconds() => unchecked((uint)Environment.TickCount - Tick()) / 1000;
+    public static uint Seconds()
+    {
+        return unchecked((uint)Environment.TickCount - Tick()) / 1000;
+    }
 }
