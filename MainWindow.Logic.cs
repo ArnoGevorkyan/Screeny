@@ -287,6 +287,7 @@ namespace ScreenTimeTracker
             }
 
             List<AppUsageRecord> records = new();
+            List<AppUsageRecord>? hourlyRecords = null;
             try
             {
                 switch (_viewModel.CurrentTimePeriod)
@@ -305,7 +306,8 @@ namespace ScreenTimeTracker
                         break;
                     case TimePeriod.Daily:
                     default:
-                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService));
+                        hourlyRecords = new List<AppUsageRecord>();
+                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords));
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";
@@ -313,7 +315,7 @@ namespace ScreenTimeTracker
                         break;
                 }
 
-                if (records.Count == 0 && date.Date != DateTime.Today)
+                if (records.Count == 0 && hourlyRecords is not { Count: > 0 } && date.Date != DateTime.Today)
                 {
                     DispatcherQueue?.TryEnqueue(async () =>
                     {
@@ -358,7 +360,7 @@ namespace ScreenTimeTracker
                 });
 
                 UpdateSummaryTab(_usageRecords.ToList());
-                UpdateChartViewMode();
+                UpdateChartViewMode(hourlyRecords);
             }
             catch (Exception ex)
             {
@@ -485,7 +487,10 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
 
-                var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService));
+                var hourlyRecords = updateUI && _viewModel.CurrentChartViewMode == ChartViewMode.Hourly
+                    ? new List<AppUsageRecord>()
+                    : null;
+                var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords));
 
                 if (!updateUI)
                     return records;
@@ -515,7 +520,7 @@ namespace ScreenTimeTracker
                         UsageListView.ItemsSource = _usageRecords;
                     }
 
-                    UpdateUsageChart();
+                    UpdateUsageChart(hourlyRecords);
                     UpdateSummaryTab(_usageRecords.ToList());
                     _isReloading = false;
                 });

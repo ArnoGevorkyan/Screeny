@@ -205,7 +205,7 @@ namespace ScreenTimeTracker
                     _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
                 else
                     _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
-                UpdateUsageChart();
+                DoChartRefresh();
             };
 
         }
@@ -604,7 +604,6 @@ namespace ScreenTimeTracker
                             
                             // Load the data directly on UI thread
                             LoadRecordsForDate(_viewModel.SelectedDate);
-                            UpdateChartViewMode(); // Update chart view after loading
                             
                             // Hide loading indicator AFTER loading is done
                             if (LoadingIndicator != null) LoadingIndicator.Visibility = Visibility.Collapsed;
@@ -906,7 +905,7 @@ namespace ScreenTimeTracker
                         _usageGeneration++;
                         _usageRecords?.Clear();
                         _viewModel?.AggregatedRecords?.Clear();
-                        UpdateUsageChart();
+                        UpdateUsageChart(new List<AppUsageRecord>());
                         UpdateSummaryTab();
                     }
                 }

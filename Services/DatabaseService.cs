@@ -640,7 +640,7 @@ namespace ScreenTimeTracker.Services
         /// <summary>
         /// Retrieves all app usage records for a specific date
         /// </summary>
-        public List<AppUsageRecord> GetRecordsForDate(DateTime date)
+        public List<AppUsageRecord> GetRecordsForDate(DateTime date, List<AppUsageRecord>? hourlyRecords = null)
         {
             if (!_initializedSuccessfully)
             {
@@ -676,15 +676,22 @@ namespace ScreenTimeTracker.Services
                             {
                                 string processName = reader.GetString(reader.GetOrdinal("process_name"));
                                 var dbStartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time")));
+                                DateTime? dbEndTime = reader.IsDBNull(reader.GetOrdinal("end_time")) ? null : DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
                                 long durationMs = !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0;
                                 bool isFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1;
                                 DateTime? lastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : null;
-                                
-                                // If we already have a record for this process, update it (this logic might need review for non-aggregated view)
-                                // For now, GetRecordsForDate is used by the chart which shows aggregated bars per hour,
-                                // but the main list is usually a simple list of timed events.
-                                // The current aggregation here might be a leftover or for a specific purpose.
-                                // Let's assume for now it's intended. If this is for a raw list, aggregation should be removed.
+
+                                if (hourlyRecords != null && !isFocused && dbEndTime > dbStartTime && IsHourlyProcess(processName))
+                                {
+                                    hourlyRecords.Add(new AppUsageRecord
+                                    {
+                                        ProcessName = processName,
+                                        StartTime = dbStartTime,
+                                        EndTime = dbEndTime,
+                                        _accumulatedDuration = TimeSpan.FromMilliseconds(durationMs)
+                                    });
+                                }
+
                                 if (processGroups.TryGetValue(processName, out var existingRecord))
                                 {
                                     // Add the duration to the existing record
@@ -696,11 +703,8 @@ namespace ScreenTimeTracker.Services
                                         existingRecord.IsFocused = isFocused; // Assume focus state from the latest update within the group
                                     }
                                     if (dbStartTime < existingRecord.StartTime) existingRecord.StartTime = dbStartTime;
-                                    if (reader.IsDBNull(reader.GetOrdinal("end_time"))) existingRecord.EndTime = null; // If any segment is open, keep it open
-                                    else if (existingRecord.EndTime.HasValue && DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time"))) > existingRecord.EndTime.Value)
-                                    {
-                                        existingRecord.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
-                                    }
+                                    if (!dbEndTime.HasValue || dbEndTime > existingRecord.EndTime)
+                                        existingRecord.EndTime = dbEndTime;
 
 
                                     Debug.WriteLine($"Merged record: {processName}, total duration now: {existingRecord.Duration.TotalSeconds:F1}s, IsFocused: {existingRecord.IsFocused}");
@@ -715,14 +719,10 @@ namespace ScreenTimeTracker.Services
                                         ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
                                         Date = date, // Use date for the Date field
                                         StartTime = dbStartTime, // Use actual start time from database
+                                        EndTime = dbEndTime,
                                         IsFocused = isFocused,
                                         LastUpdated = lastUpdated
                                     };
-                                    
-                                    if (!reader.IsDBNull(reader.GetOrdinal("end_time")))
-                                    {
-                                        record.EndTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
-                                    }
                                     
                                     record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
                                     
@@ -1094,15 +1094,23 @@ namespace ScreenTimeTracker.Services
         /// Gets detailed records for a date, optionally including live data
         /// (Replaces UsageAggregationService.GetDetailRecordsForDate)
         /// </summary>
-        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService, List<AppUsageRecord>? hourlyRecords = null)
         {
-            var dbRecords = GetRecordsForDate(date) ?? new List<AppUsageRecord>();
+            var liveRecords = hourlyRecords == null ? null : GetLiveRecordsForDay(date, trackingService);
+            var dbRecords = GetRecordsForDate(date, hourlyRecords);
             var aggregated = AggregateRecords(dbRecords, date);
-            
-            if (date.Date == DateTime.Today && trackingService != null)
+
+            if (hourlyRecords == null)
+                liveRecords = GetLiveRecordsForDay(date, trackingService);
+            else if (liveRecords != null)
+                liveRecords = liveRecords.Where(r => !HasFinalizedRecord(hourlyRecords, r)).ToList();
+
+            if (liveRecords != null)
             {
-                var liveRecords = trackingService.GetRecords().Where(r => r.IsFromDate(date));
                 var liveAggregated = AggregateRecords(liveRecords, date);
+
+                if (hourlyRecords != null)
+                    AddHourlyLiveRecords(hourlyRecords, liveRecords);
                 
                 foreach (var (processName, liveRecord) in liveAggregated)
                 {
@@ -1120,6 +1128,39 @@ namespace ScreenTimeTracker.Services
             }
 
             return aggregated.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
+        }
+
+        public List<AppUsageRecord> GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        {
+            var liveRecords = GetLiveRecordsForDay(date, trackingService);
+            var records = GetRawRecordsForDateRange(date, date);
+            records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
+
+            if (liveRecords != null)
+                AddHourlyLiveRecords(records, liveRecords.Where(r => !HasFinalizedRecord(records, r)));
+
+            return records;
+        }
+
+        private static IEnumerable<AppUsageRecord>? GetLiveRecordsForDay(DateTime date, WindowTrackingService? trackingService)
+            => date.Date == DateTime.Today && trackingService != null
+                ? trackingService.GetRecords().Where(r => r.IsFromDate(date))
+                : null;
+
+        private static bool HasFinalizedRecord(List<AppUsageRecord> records, AppUsageRecord liveRecord)
+            => records.Any(r => r.StartTime == liveRecord.StartTime &&
+                string.Equals(r.ProcessName, liveRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
+
+        private static void AddHourlyLiveRecords(List<AppUsageRecord> records, IEnumerable<AppUsageRecord> liveRecords)
+        {
+            foreach (var record in liveRecords)
+            {
+                var duration = record.Duration;
+                if (duration.TotalSeconds < 5 || !IsHourlyProcess(record.ProcessName)) continue;
+
+                record.EndTime ??= record.StartTime + duration;
+                records.Add(record);
+            }
         }
 
         #region Helper Methods
@@ -1215,6 +1256,9 @@ namespace ScreenTimeTracker.Services
 
         #endregion
 #endif
+
+        private static bool IsHourlyProcess(string processName)
+            => !ProcessFilter.ShouldIgnoreProcess(Helpers.ApplicationNameNormalizer.NormalizeProcessName(processName));
 
     }
 } 

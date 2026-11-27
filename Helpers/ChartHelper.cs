@@ -26,7 +26,6 @@ namespace ScreenTimeTracker.Helpers
         /// <param name="timePeriod">The time period (Daily, Weekly, etc.)</param>
         /// <param name="selectedDate">The selected date for filtering</param>
         /// <param name="selectedEndDate">Optional end date for range selection</param>
-        /// <param name="liveFocusedRecord">The currently active/focused record from the tracking service (optional)</param>
         /// <returns>The total time calculated from the records</returns>
         public static TimeSpan UpdateUsageChart(
             LiveChartsCore.SkiaSharpView.WinUI.CartesianChart chart, 
@@ -34,8 +33,7 @@ namespace ScreenTimeTracker.Helpers
             ChartViewMode viewMode,
             TimePeriod timePeriod,
             DateTime selectedDate,
-            DateTime? selectedEndDate = null,
-            AppUsageRecord? liveFocusedRecord = null)
+            DateTime? selectedEndDate = null)
         {
             if (chart == null)
             {
@@ -142,28 +140,9 @@ namespace ScreenTimeTracker.Helpers
                     hourlyUsage[hr] = totalHr;
                 }
 
-                // Check if all values are zero
-                bool allZero = true;
-                double maxValue = 0;
-                foreach (var value in hourlyUsage.Values)
-                {
-                    if (value > 0.0001)
-                    {
-                        allZero = false;
-                    }
-                    maxValue = Math.Max(maxValue, value);
-                }
-                
-                // If all values are zero, add a tiny value to the current hour to make the chart visible
-                if (allZero || maxValue < 0.001)
-                {
-                    int currentHour = DateTime.Now.Hour;
-                    hourlyUsage[currentHour] = 0.001; // Add a tiny value
-                }
-
                 // MODIFICATION: Filter to only include hours with usage
                 var nonZeroHours = hourlyUsage
-                    .Where(h => h.Value > 0.0001)
+                    .Where(h => h.Value > 0)
                     .Select(h => h.Key)
                     .OrderBy(h => h)
                     .ToList();
@@ -171,7 +150,9 @@ namespace ScreenTimeTracker.Helpers
                 // If we have no non-zero hours, include the current hour
                 if (nonZeroHours.Count == 0)
                 {
-                    nonZeroHours.Add(DateTime.Now.Hour);
+                    int currentHour = DateTime.Now.Hour;
+                    hourlyUsage[currentHour] = 0.001;
+                    nonZeroHours.Add(currentHour);
                 }
                 
                 // Determine if we should show a compact view (no empty bars)
@@ -196,8 +177,8 @@ namespace ScreenTimeTracker.Helpers
                     if (nonZeroHours.Count <= 3)
                     {
                         int middleHour       = (earliestHour + latestHour) / 2;
-                        filteredStartHour    = Math.Max(0, middleHour - 3);
-                        filteredEndHour      = Math.Min(23, middleHour + 3);
+                        filteredStartHour    = Math.Clamp(middleHour - 3, 0, earliestHour);
+                        filteredEndHour      = Math.Clamp(middleHour + 3, latestHour, 23);
                     }
                     else
                     {
@@ -247,7 +228,7 @@ namespace ScreenTimeTracker.Helpers
                     labels.Add(label);
                 }
 
-                maxValue = values.Count > 0 ? values.Max() : 0;
+                double maxValue = values.Count > 0 ? values.Max() : 0;
                 
                 // Determine a good Y-axis maximum based on the actual data
                 double yAxisMax = maxValue;
@@ -543,4 +524,4 @@ namespace ScreenTimeTracker.Helpers
             }
         }
     }
-} 
+}
