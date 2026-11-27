@@ -46,15 +46,24 @@ namespace ScreenTimeTracker.Services
 
                 Debug.WriteLine($"Database path: {_dbPath}");
 
-                // Check integrity BEFORE opening connection
-                if (File.Exists(_dbPath) && !CheckDatabaseIntegrity(_dbPath))
+                var databaseExists = DatabaseFileExists(_dbPath);
+                var hadSidecars = HasDatabaseSidecars();
+                var createDatabase = !databaseExists || IsDatabaseCorrupt();
+                if (createDatabase)
                 {
-                    // Handle corruption (e.g., backup and create new)
-                    HandleCorruptedDatabase(_dbPath);
-                    // After handling, initialization will create a new DB file
+                    if (hadSidecars || HasDatabaseSidecars())
+                        throw new IOException("Cannot replace or create a database while its journal files are present.");
+
+                    if (databaseExists)
+                    {
+                        var backupPath = _dbPath + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmss");
+                        File.Move(_dbPath, backupPath);
+                        Debug.WriteLine($"Moved corrupted database to: {backupPath}");
+                    }
                 }
 
-                var connectionString = CreateConnectionString(_dbPath);
+                var mode = createDatabase ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite;
+                var connectionString = CreateConnectionString(_dbPath, mode);
                 Debug.WriteLine($"Using connection string: {connectionString}");
 
                 _connection = new SqliteConnection(connectionString);
@@ -71,16 +80,15 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        // Helper to create connection string
-        private string CreateConnectionString(string dataSource)
+        private static string CreateConnectionString(string dataSource, SqliteOpenMode mode, bool pooling = true)
         {
-             return new SqliteConnectionStringBuilder
-             {
-                 DataSource = dataSource,
-                 Mode = SqliteOpenMode.ReadWriteCreate,
-                 Cache = SqliteCacheMode.Shared,
-                 Pooling = true // Pooling can be beneficial
-             }.ToString();
+            return new SqliteConnectionStringBuilder
+            {
+                DataSource = dataSource,
+                Mode = mode,
+                Cache = SqliteCacheMode.Shared,
+                Pooling = pooling
+            }.ToString();
         }
 
         private SqliteConnection CreateConnection()
@@ -96,72 +104,53 @@ namespace ScreenTimeTracker.Services
             command.ExecuteNonQuery();
         }
 
-        // New method to check DB integrity using PRAGMA
-        private bool CheckDatabaseIntegrity(string dbPath)
+        private static bool DatabaseFileExists(string path)
         {
-            Debug.WriteLine($"Checking database integrity for: {dbPath}");
-            if (!File.Exists(dbPath)) return true; // No file, considered intact
-
-            // Use a temporary connection for the check
-            var checkConnectionString = new SqliteConnectionStringBuilder(CreateConnectionString(dbPath))
+            try
             {
-                Pooling = false
-            }.ToString();
-            using (var checkConnection = new SqliteConnection(checkConnectionString))
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
             {
-                try
-                {
-                    OpenConnection(checkConnection);
-                    using (var command = checkConnection.CreateCommand())
-                    {
-                        command.CommandText = "PRAGMA integrity_check;";
-                        var result = command.ExecuteScalar()?.ToString();
-                        Debug.WriteLine($"PRAGMA integrity_check result: {result}");
-                        // Integrity check returns "ok" if the database is valid
-                        return result != null && result.Equals("ok", StringComparison.OrdinalIgnoreCase);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Error during integrity check: {ex.Message}");
-                    SqliteConnection.ClearPool(checkConnection);
-                    return false; // Assume corruption if check fails
-                }
-                // No need for finally block, 'using' handles disposal/closing
+                return false;
             }
         }
 
-        // New method to handle corrupted database
-        private void HandleCorruptedDatabase(string dbPath)
+        private bool HasDatabaseSidecars() =>
+            DatabaseFileExists(_dbPath + "-wal") ||
+            DatabaseFileExists(_dbPath + "-shm") ||
+            DatabaseFileExists(_dbPath + "-journal");
+
+        private bool IsDatabaseCorrupt()
         {
-            string backupPath = dbPath + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmss");
-            Debug.WriteLine($"Database integrity check failed! Moving corrupted file to: {backupPath}");
             try
             {
-                SqliteConnection.ClearAllPools();
-                File.Move(dbPath, backupPath);
-                Debug.WriteLine("Successfully moved corrupted database file.");
-                // Optionally: Notify user about the corruption and reset
+                return IntegrityCheckReportsCorruption(SqliteOpenMode.ReadOnly);
             }
-            catch (IOException ioEx)
+            catch (SqliteException ex) when (ex.SqliteExtendedErrorCode == raw.SQLITE_READONLY_ROLLBACK)
             {
-                 Debug.WriteLine($"Error moving corrupted database file (IOException): {ioEx.Message}");
-                 // Attempt to delete if move failed (e.g., file locked)
-                 try
-                 {
-                     File.Delete(dbPath);
-                     Debug.WriteLine("Successfully deleted corrupted database file after move failed.");
-                 }
-                 catch (Exception delEx)
-                 {
-                     Debug.WriteLine($"CRITICAL ERROR: Failed to move AND delete corrupted database file: {delEx.Message}");
-                     // At this point, initialization will fail into degraded mode.
-                 }
+                return IntegrityCheckReportsCorruption(SqliteOpenMode.ReadWrite);
             }
-            catch (Exception ex)
+        }
+
+        private bool IntegrityCheckReportsCorruption(SqliteOpenMode mode)
+        {
+            using var checkConnection = new SqliteConnection(CreateConnectionString(_dbPath, mode, pooling: false));
+            try
             {
-                Debug.WriteLine($"CRITICAL ERROR: Failed to move corrupted database file: {ex.Message}");
-                // Initialization might fail into degraded mode.
+                OpenConnection(checkConnection);
+                using var command = checkConnection.CreateCommand();
+                command.CommandText = "PRAGMA integrity_check(1);";
+                var result = command.ExecuteScalar() as string
+                    ?? throw new InvalidDataException("Database integrity check returned no result.");
+                Debug.WriteLine($"PRAGMA integrity_check result: {result}");
+                return !result.Equals("ok", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode is raw.SQLITE_CORRUPT or raw.SQLITE_NOTADB)
+            {
+                Debug.WriteLine($"Database integrity check confirmed corruption: {ex.Message}");
+                return true;
             }
         }
 
@@ -563,100 +552,6 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        /// <summary>
-        /// Validates a date to ensure it's not in the future
-        /// </summary>
-        private DateTime ValidateDate(DateTime date)
-        {
-            if (date > DateTime.Now)
-            {
-                Debug.WriteLine($"WARNING: Future date detected ({date:yyyy-MM-dd}), using current date instead.");
-                return DateTime.Now;
-            }
-            return date;
-        }
-
-        /// <summary>
-        /// Validates and prepares duration and date data for database operations
-        /// </summary>
-        private (DateTime validatedStartTime, DateTime? validatedEndTime, string dateString, long durationMs) 
-            ValidateRecordData(AppUsageRecord record)
-        {
-            DateTime validatedStartTime = ValidateDate(record.StartTime);
-            DateTime? validatedEndTime = record.EndTime.HasValue ? ValidateDate(record.EndTime.Value) : null;
-            string dateString = validatedStartTime.ToString("yyyy-MM-dd");
-
-            long durationMs = (long)record.Duration.TotalMilliseconds;
-            
-            // Cap duration at 8 hours for a single session
-            const long maxSessionDurationMs = 8 * 60 * 60 * 1000;
-            if (durationMs > maxSessionDurationMs) durationMs = maxSessionDurationMs;
-            if (durationMs < 0) durationMs = 0;
-            
-            // Recalculate from actual times if available
-            if (validatedEndTime.HasValue)
-            {
-                var calculatedDuration = (validatedEndTime.Value - validatedStartTime).TotalMilliseconds;
-                if (calculatedDuration >= 0 && calculatedDuration < durationMs)
-                {
-                    durationMs = (long)calculatedDuration;
-                }
-            }
-
-            return (validatedStartTime, validatedEndTime, dateString, durationMs);
-        }
-
-        /// <summary>
-        /// Saves an app usage record to the database
-        /// </summary>
-        public bool SaveRecord(AppUsageRecord record)
-        {
-            if (!_initializedSuccessfully)
-            {
-                return false;
-            }
-
-            try
-            {
-                var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
-
-                // Use connection-per-operation pattern
-                using var connection = CreateConnection();
-                OpenConnection(connection);
-                using var transaction = connection.BeginTransaction();
-                
-                string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated) 
-                                   VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated); 
-                                   SELECT last_insert_rowid();";
-
-                using var command = new SqliteCommand(insertSql, connection, transaction);
-                command.Parameters.AddWithValue("@Date", dateString);
-                command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                command.Parameters.AddWithValue("@StartTime", validatedStartTime.ToString("o"));
-                command.Parameters.AddWithValue("@EndTime", validatedEndTime?.ToString("o") ?? (object)DBNull.Value);
-                command.Parameters.AddWithValue("@Duration", durationMs);
-                command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
-                command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
-                
-                var result = command.ExecuteScalar();
-                
-                if (result != null)
-                {
-                    record.Id = (int)Convert.ToInt64(result);
-                    transaction.Commit();
-                    return true;
-                }
-                
-                return false;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error saving record: {ex.Message}");
-                return false;
-            }
-        }
-
         public bool SaveSlice(UsageSlice slice)
         {
             var result = SaveSliceWithResult(slice);
@@ -740,55 +635,6 @@ namespace ScreenTimeTracker.Services
         private static bool IsConstraintSqliteException(SqliteException ex)
         {
             return ex.SqliteErrorCode == 19;
-        }
-
-        /// <summary>
-        /// Updates an existing app usage record in the database
-        /// </summary>
-        public void UpdateRecord(AppUsageRecord record)
-        {
-            if (!_initializedSuccessfully)
-            {
-                return;
-            }
-
-            try
-            {
-                var (validatedStartTime, validatedEndTime, dateString, durationMs) = ValidateRecordData(record);
-
-                using var connection = CreateConnection();
-                OpenConnection(connection);
-                using var transaction = connection.BeginTransaction();
-                
-                string updateSql = @"UPDATE app_usage SET date = @Date, process_name = @ProcessName, app_name = @ApplicationName, 
-                                   end_time = @EndTime, duration = @Duration, is_focused = @IsFocused, last_updated = @LastUpdated 
-                                   WHERE id = @Id;";
-
-                using var command = new SqliteCommand(updateSql, connection, transaction);
-                command.Parameters.AddWithValue("@Id", record.Id);
-                command.Parameters.AddWithValue("@Date", dateString);
-                command.Parameters.AddWithValue("@ProcessName", record.ProcessName);
-                command.Parameters.AddWithValue("@ApplicationName", record.ApplicationName ?? "");
-                command.Parameters.AddWithValue("@EndTime", validatedEndTime?.ToString("o") ?? (object)DBNull.Value);
-                command.Parameters.AddWithValue("@Duration", durationMs);
-                command.Parameters.AddWithValue("@IsFocused", record.IsFocused ? 1 : 0);
-                command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
-                
-                int rowsAffected = command.ExecuteNonQuery();
-                
-                if (rowsAffected > 0)
-                {
-                    transaction.Commit();
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"Update failed, record with ID {record.Id} not found.");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error updating record: {ex.Message}");
-            }
         }
 
         /// <summary>
@@ -1168,40 +1014,39 @@ namespace ScreenTimeTracker.Services
 
         public bool WipeDatabase()
         {
+            if (!_initializedSuccessfully)
+            {
+                return false;
+            }
+
+            bool deleteCommitted = false;
             try
             {
-                if (!_initializedSuccessfully)
-                {
-                    return false;
-                }
-
                 using var connection = CreateConnection();
                 OpenConnection(connection);
 
-                // 1) Delete all rows inside an explicit transaction
                 using (var tx = connection.BeginTransaction())
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = tx;
                     cmd.CommandText = "DELETE FROM app_usage;";
                     cmd.ExecuteNonQuery();
-                    tx.Commit(); // Commit BEFORE running VACUUM – it cannot execute inside a transaction
+                    tx.Commit();
+                    deleteCommitted = true;
                 }
 
-                // 2) Reclaim file space – now that we are outside the transaction
-                using (var vacuumCmd = connection.CreateCommand())
-                {
-                    vacuumCmd.CommandText = "VACUUM;";
-                    vacuumCmd.ExecuteNonQuery();
-                }
-
-                return true;
+                using var vacuumCmd = connection.CreateCommand();
+                vacuumCmd.CommandText = "VACUUM;";
+                vacuumCmd.ExecuteNonQuery();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Swallow any exception – caller receives failure via 'false'
-                return false;
+                Debug.WriteLine(deleteCommitted
+                    ? $"Usage data deleted, but database compaction failed: {ex.Message}"
+                    : $"Error deleting usage data: {ex.Message}");
             }
+
+            return deleteCommitted;
         }
 
 #if !UNIT_TEST

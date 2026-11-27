@@ -1,0 +1,31 @@
+name: Windows build
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build x64
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        id: sdk
+        with:
+          dotnet-version: '8.0.428'
+
+      - name: Build without packaging or signing
+        env:
+          DOTNET_SDK_VERSION: ${{ steps.sdk.outputs.dotnet-version }}
+        run: |
+          dotnet new globaljson --sdk-version $env:DOTNET_SDK_VERSION --roll-forward disable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build ScreenTimeTracker.sln -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false

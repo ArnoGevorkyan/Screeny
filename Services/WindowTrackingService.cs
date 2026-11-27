@@ -100,11 +100,19 @@ namespace ScreenTimeTracker.Services
         }
 
         public event EventHandler<AppUsageRecord>? UsageRecordUpdated;
-        public event EventHandler? WindowChanged;
         public event EventHandler<UsageSlice>? UsageSliceFinalized;
         
         public bool IsTracking { get; private set; }
-        public AppUsageRecord? CurrentRecord => _currentRecord;
+        public AppUsageRecord? CurrentRecord
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _currentRecord?.CreateSnapshot();
+                }
+            }
+        }
 
         public WindowTrackingService()
         {
@@ -153,35 +161,6 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        public void PauseTrackingForSuspend()
-        {
-            lock (_lockObject)
-            {
-                ThrowIfDisposed();
-                if (!IsTracking) return;
-
-                _timer.Stop();
-                IsTracking = false;
-
-                FinalizeOpenRecords(DateTime.Now);
-            }
-        }
-
-        public void ResumeTrackingAfterSuspend()
-        {
-            lock (_lockObject)
-            {
-                ThrowIfDisposed();
-                if (IsTracking) return;
-
-                IsTracking = true;
-                _timer.Start();
-            }
-            
-            // Call CheckActiveWindow outside of lock to avoid deadlock
-            CheckActiveWindow();
-        }
-
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
         {
             // Lightweight tick: idle detection, active-window check, live duration update, day rollover.
@@ -214,13 +193,12 @@ namespace ScreenTimeTracker.Services
                 lock (_lockObject)
                 {
                     UpdateFocusedRecord(DateTime.Now);
-                }
 
-                // Update idle duration if still in idle
-                if (_idleRecord != null)
-                {
-                    _idleRecord._accumulatedDuration = DateTime.Now - _idleRecord.StartTime;
-                    UsageRecordUpdated?.Invoke(this, _idleRecord);
+                    if (_idleRecord is { } idleRecord)
+                    {
+                        idleRecord._accumulatedDuration = DateTime.Now - idleRecord.StartTime;
+                        PublishUsageRecord(idleRecord);
+                    }
                 }
             }
             catch (Exception ex)
@@ -335,6 +313,11 @@ namespace ScreenTimeTracker.Services
             }
         }
 
+        private void PublishUsageRecord(AppUsageRecord record)
+        {
+            UsageRecordUpdated?.Invoke(this, record.CreateSnapshot());
+        }
+
         private void FinalizeRecord(AppUsageRecord record, DateTime endTime)
         {
             record.SetFocus(false);
@@ -350,6 +333,8 @@ namespace ScreenTimeTracker.Services
             {
                 UsageSliceFinalized?.Invoke(this, slice);
             }
+
+            PublishUsageRecord(record);
         }
 
         private void FinalizeOpenRecords(DateTime endTime)
@@ -376,8 +361,7 @@ namespace ScreenTimeTracker.Services
                 return;
             }
 
-            _currentRecord.RaiseDurationChanged();
-            UsageRecordUpdated?.Invoke(this, _currentRecord);
+            PublishUsageRecord(_currentRecord);
 
             // Detect midnight crossover
             if (_currentRecord.Date < now.Date)
@@ -397,7 +381,6 @@ namespace ScreenTimeTracker.Services
                 if (_currentRecord != null)
                 {
                     FinalizeRecord(_currentRecord, now);
-                    UsageRecordUpdated?.Invoke(this, _currentRecord);
                     _currentRecord = null;
                 }
 
@@ -410,7 +393,7 @@ namespace ScreenTimeTracker.Services
                         StartTime = now,
                         Date = EnsureValidDate(now.Date)
                     };
-                    UsageRecordUpdated?.Invoke(this, _idleRecord);
+                    PublishUsageRecord(_idleRecord);
                 }
 
                 return false;
@@ -423,7 +406,6 @@ namespace ScreenTimeTracker.Services
                 if (_idleRecord != null)
                 {
                     FinalizeRecord(_idleRecord, now);
-                    UsageRecordUpdated?.Invoke(this, _idleRecord);
                     _idleRecord = null;
                 }
 
@@ -576,7 +558,7 @@ namespace ScreenTimeTracker.Services
                     if (!_currentRecord.IsFocused)
                     {
                         _currentRecord.SetFocus(true);
-                        UsageRecordUpdated?.Invoke(this, _currentRecord);
+                        PublishUsageRecord(_currentRecord);
                     }
                     return;
                 }
@@ -585,7 +567,6 @@ namespace ScreenTimeTracker.Services
                 if (_currentRecord != null)
                 {
                     FinalizeRecord(_currentRecord, DateTime.Now);
-                    UsageRecordUpdated?.Invoke(this, _currentRecord);
                 }
 
                 // Start new slice
@@ -601,8 +582,7 @@ namespace ScreenTimeTracker.Services
                 };
                 ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
                 _currentRecord.SetFocus(true);
-                UsageRecordUpdated?.Invoke(this, _currentRecord);
-                WindowChanged?.Invoke(this, EventArgs.Empty);
+                PublishUsageRecord(_currentRecord);
             }
         }
     }

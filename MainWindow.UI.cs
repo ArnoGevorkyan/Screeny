@@ -704,128 +704,81 @@ namespace ScreenTimeTracker
             }
         }
 
+        private volatile int _usageGeneration;
+
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
             if (_disposed) return;
-            DispatcherQueue?.TryEnqueue(() =>
+            var generation = _usageGeneration;
+            try
             {
-                try
+                DispatcherQueue.TryEnqueue(() =>
                 {
-                    // --- keep check whether current view includes today ---
-                    bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
-                    if (!viewIncludesToday) return;
-                    
-                    // Always filter out the current process regardless of ProcessFilter
-                    var currentProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
-                    if (record.ProcessName.Equals(currentProcessName, StringComparison.OrdinalIgnoreCase)) return;
-                    
-                    if (ScreenTimeTracker.Models.ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) return;
+                    if (_disposed || generation != _usageGeneration) return;
 
-                    // Mark chart for deferred refresh
-                    UpdateOrAddLiveRecord(record);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in UsageRecordUpdated handler: {ex.Message}");
-                }
-            });
-        }
+                    try
+                    {
+                        bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
+                        if (!viewIncludesToday) return;
 
-        private void TrackingService_WindowChanged(object? sender, EventArgs e)
-        {
-            if (_disposed) return;
-            DispatcherQueue?.TryEnqueue(() =>
+                        var currentProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+                        if (record.ProcessName.Equals(currentProcessName, StringComparison.OrdinalIgnoreCase)) return;
+                        if (ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) return;
+
+                        UpdateOrAddLiveRecord(record);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error in UsageRecordUpdated handler: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    // -------------------------------------------------------------
-                    // Guard: only apply live updates if the active view includes today
-                    // -------------------------------------------------------------
-                    bool viewIncludesToday;
-                    if (_viewModel.IsDateRangeSelected)
-                    {
-                        if (_viewModel.SelectedEndDate == null)
-                        {
-                            viewIncludesToday = false;
-                        }
-                        else
-                        {
-                            viewIncludesToday = _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today;
-                        }
-                    }
-                    else
-                    {
-                        viewIncludesToday = _viewModel.SelectedDate.Date == DateTime.Today;
-                    }
-
-                    if (!viewIncludesToday)
-                        return; // Ignore live tracking updates for historic views
-
-                    // Update focus using centralized manager
-                    var current = _trackingService?.CurrentRecord;
-                    if (current != null)
-                    {
-                        ApplicationProcessingHelper.ProcessApplicationRecord(current);
-                        foreach (var record in _usageRecords) record.SetFocus(false);
-                        var targetRecord = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(current.ProcessName, StringComparison.OrdinalIgnoreCase));
-                        targetRecord?.SetFocus(true);
-                    }
-                    else
-                    {
-                        foreach (var record in _usageRecords) record.SetFocus(false);
-                    }
-                    _isChartDirty = true;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in WindowChanged handler: {ex.Message}");
-                }
-            });
+                System.Diagnostics.Debug.WriteLine($"Error queuing live usage record: {ex.Message}");
+            }
         }
 
         // Helper: update or insert a live record without rebuilding the entire list (reduces flicker)
         private void UpdateOrAddLiveRecord(AppUsageRecord record)
         {
-            try
+            ApplicationProcessingHelper.ProcessApplicationRecord(record);
+
+            var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+            bool isFocused = record.IsFocused && _trackingService?.IsTracking == true;
+            if (isFocused)
             {
-                ApplicationProcessingHelper.ProcessApplicationRecord(record);
-
-                var existing = _usageRecords?.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
-
-                if (existing == null)
-                {
-                    // New app appearing – add once
-                    record.LoadAppIconIfNeeded();
-                    _usageRecords?.Add(record);
-                }
-                else
-                {
-                    // Update duration & focus flag even if same instance
-                    if (!ReferenceEquals(existing, record))
-                    {
-                        if (record.Duration > existing.Duration)
-                            existing._accumulatedDuration = record.Duration;
-                    }
-
-                    if (record.IsFocused)
-                    {
-                        if (_usageRecords != null)
-                        {
-                            foreach (var r in _usageRecords) r.SetFocus(false);
-                        }
-                        existing.SetFocus(true);
-                    }
-
-                    existing.RaiseDurationChanged();
-                }
-
-                // Mark chart for refresh in deferred timer
-                _isChartDirty = true;
+                foreach (var row in _usageRecords)
+                    if (row.IsFocused && !ReferenceEquals(row, existing))
+                        row.SetFocus(false);
             }
-            catch (Exception ex)
+
+            if (existing == null)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in UpdateOrAddLiveRecord: {ex.Message}");
+                record.IsFocused = isFocused;
+                if (isFocused) record.SetFocus(true);
+                record.LoadAppIconIfNeeded();
+                _usageRecords.Add(record);
             }
+            else
+            {
+                if (!isFocused && existing.IsFocused) existing.SetFocus(false);
+
+                if (existing.StartTime == record.StartTime && record.EndTime.HasValue)
+                {
+                    existing._accumulatedDuration = record.Duration;
+                    existing.EndTime = record.EndTime;
+                }
+                else if (!existing.IsFocused && record.Duration > existing.Duration)
+                {
+                    existing._accumulatedDuration = record.Duration;
+                }
+
+                if (isFocused && !existing.IsFocused) existing.SetFocus(true);
+                existing.RaiseDurationChanged();
+            }
+
+            _isChartDirty = true;
         }
 
         // Helper: rebuild live records list for today (used on initial load)
@@ -854,31 +807,45 @@ namespace ScreenTimeTracker
         // Service boundary handler: persists finalized immutable slices from tracking service.
         private void TrackingService_UsageSliceFinalized(object? sender, UsageSlice slice)
         {
+            if (_databaseService == null || slice == null) return;
+
+            PersistenceResult result;
             try
             {
-                if (_databaseService != null && slice != null)
-                {
-                    var result = _databaseService.SaveSliceWithResult(slice);
-                    if (result == PersistenceResult.Saved || result == PersistenceResult.DuplicateIgnored)
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.Healthy;
-                    }
-                    else if (result == PersistenceResult.RetryableFailure)
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.RetryableIssue;
-                        System.Diagnostics.Debug.WriteLine("Usage slice persistence was delayed by a retryable database error.");
-                    }
-                    else
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
-                        System.Diagnostics.Debug.WriteLine("Usage slice persistence failed with a fatal database error.");
-                    }
-                }
+                result = _databaseService.SaveSliceWithResult(slice);
             }
             catch (Exception ex)
             {
-                _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
+                result = PersistenceResult.FatalFailure;
                 System.Diagnostics.Debug.WriteLine($"Error saving usage slice from service: {ex.Message}");
+            }
+
+            var health = result switch
+            {
+                PersistenceResult.Saved or PersistenceResult.DuplicateIgnored => PersistenceHealthStatus.Healthy,
+                PersistenceResult.RetryableFailure => PersistenceHealthStatus.RetryableIssue,
+                _ => PersistenceHealthStatus.FatalIssue
+            };
+
+            try
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (_disposed) return;
+
+                    try
+                    {
+                        _viewModel.PersistenceHealth = health;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error notifying persistence health: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error queuing persistence health: {ex.Message}");
             }
         }
     }
