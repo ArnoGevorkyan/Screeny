@@ -769,6 +769,9 @@ namespace ScreenTimeTracker.Services
         }
 
         public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
+            => ReadRawRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
+
+        private List<AppUsageRecord>? ReadRawRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
             try
             {
@@ -776,7 +779,7 @@ namespace ScreenTimeTracker.Services
                 if (!IsDatabaseInitialized())
                 {
                     System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
-                    return new List<AppUsageRecord>();
+                    return null;
                 }
 
                 // Convert dates to the format stored in the database (YYYY-MM-DD)
@@ -838,7 +841,7 @@ namespace ScreenTimeTracker.Services
             {
                 System.Diagnostics.Debug.WriteLine($"Error in GetRawRecordsForDateRange: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                return new List<AppUsageRecord>();
+                return null;
             }
         }
 
@@ -967,14 +970,15 @@ namespace ScreenTimeTracker.Services
             return aggregated.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
         }
 
-        public List<AppUsageRecord> GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        public List<AppUsageRecord>? GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
             => GetDashboardRecordsWithLive(date, date, trackingService);
 
-        public List<AppUsageRecord> GetDashboardRecordsWithLive(DateTime start, DateTime end, WindowTrackingService? trackingService)
+        public List<AppUsageRecord>? GetDashboardRecordsWithLive(DateTime start, DateTime end, WindowTrackingService? trackingService)
         {
             var today = DateTime.Today;
             var liveRecords = start.Date <= today && today <= end.Date ? GetLiveRecordsForDay(today, trackingService) : null;
-            var records = GetRawRecordsForDateRange(start, end);
+            var records = ReadRawRecordsForDateRange(start, end);
+            if (records == null) return null;
             records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
 
             if (liveRecords != null)

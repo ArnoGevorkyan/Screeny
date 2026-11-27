@@ -418,6 +418,7 @@ namespace ScreenTimeTracker
                         Record: group.FirstOrDefault(r => r.WindowHandle != IntPtr.Zero) ?? group.First(),
                         Duration: TimeUtil.CalculateUniqueTotalTime(group)))
                     .OrderByDescending(app => app.Duration)
+                    .ThenBy(app => app.ProcessName, StringComparer.OrdinalIgnoreCase)
                     .FirstOrDefault();
 
                 if (mostUsed.Record is { } mostUsedApp)
@@ -583,7 +584,7 @@ namespace ScreenTimeTracker
                         GetCurrentViewDateRange() != (start, end) || _viewModel.CurrentChartViewMode != mode)
                         return;
 
-                    UpdateUsageChart(visits);
+                    if (visits != null) UpdateUsageChart(visits);
                 }
                 catch (Exception ex)
                 {
@@ -603,6 +604,9 @@ namespace ScreenTimeTracker
         {
             try
             {
+                if (MostUsedAppIcon?.DataContext is AppUsageRecord displayed)
+                    displayed.LoadAppIconIfNeeded();
+
                 foreach (var rec in _usageRecords)
                 {
                     rec.LoadAppIconIfNeeded();
