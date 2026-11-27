@@ -88,12 +88,19 @@ namespace ScreenTimeTracker
         }
 
         // Properties to replace converters
-        public string TrackingStatusText => PersistenceHealth switch
+        public string TrackingStatusText
         {
-            PersistenceHealthStatus.FatalIssue => "Data issue",
-            PersistenceHealthStatus.RetryableIssue => "Saving delayed",
-            _ => IsTracking ? "Active" : "Paused"
-        };
+            get
+            {
+                string status = IsTracking ? "Active" : "Paused";
+                return PersistenceHealth switch
+                {
+                    PersistenceHealthStatus.FatalIssue => $"{status} · Data issue",
+                    PersistenceHealthStatus.RetryableIssue => $"{status} · Saving delayed",
+                    _ => status
+                };
+            }
+        }
         public string ChartViewModeLabel => CurrentChartViewMode == ChartViewMode.Hourly ? "Hourly View" : "Daily View";
         public string FormattedSelectedDate => SelectedDate.ToString("MMM dd, yyyy");
 
