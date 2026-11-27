@@ -172,7 +172,6 @@ namespace ScreenTimeTracker
                 else
                 {
                     UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords);
                 }
             }
             catch (Exception ex)
@@ -375,8 +374,7 @@ namespace ScreenTimeTracker
                     _isReloading = false;
                 });
 
-                UpdateSummaryTab(_usageRecords.ToList());
-                UpdateChartViewMode(hourlyRecords);
+                UpdateChartViewMode(hourlyRecords ?? records);
             }
             catch (Exception ex)
             {
@@ -425,13 +423,12 @@ namespace ScreenTimeTracker
                     _usageRecords.Add(rec);
                 }
 
-                // Build aggregated list for summary tab and average
+                // Build the per-process list separately from the dashboard visits.
                 var aggregated = _databaseService?.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false) ?? new List<AppUsageRecord>();
 
                 // Update UI helpers
                 CleanupSystemProcesses();
-                UpdateAveragePanel(aggregated, startDate, endDate);
-                UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
+                UpdateViewModeAndChartForDateRange(records.Select(r => r.CreateSnapshot()).ToList());
                 _isReloading = false;
 
                 // Publish aggregated list to ViewModel
@@ -493,7 +490,7 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
 
-                var hourlyRecords = updateUI && _viewModel.CurrentChartViewMode == ChartViewMode.Hourly
+                var hourlyRecords = updateUI
                     ? new List<AppUsageRecord>()
                     : null;
                 var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords));
@@ -527,7 +524,6 @@ namespace ScreenTimeTracker
                     }
 
                     UpdateUsageChart(hourlyRecords);
-                    UpdateSummaryTab(_usageRecords.ToList());
                     _isReloading = false;
                 });
 

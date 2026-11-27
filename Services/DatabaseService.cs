@@ -517,6 +517,8 @@ namespace ScreenTimeTracker.Services
                                 {
                                     hourlyRecords.Add(new AppUsageRecord
                                     {
+                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        Date = date.Date,
                                         ProcessName = processName,
                                         StartTime = dbStartTime,
                                         EndTime = dbEndTime,
@@ -966,9 +968,13 @@ namespace ScreenTimeTracker.Services
         }
 
         public List<AppUsageRecord> GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+            => GetDashboardRecordsWithLive(date, date, trackingService);
+
+        public List<AppUsageRecord> GetDashboardRecordsWithLive(DateTime start, DateTime end, WindowTrackingService? trackingService)
         {
-            var liveRecords = GetLiveRecordsForDay(date, trackingService);
-            var records = GetRawRecordsForDateRange(date, date);
+            var today = DateTime.Today;
+            var liveRecords = start.Date <= today && today <= end.Date ? GetLiveRecordsForDay(today, trackingService) : null;
+            var records = GetRawRecordsForDateRange(start, end);
             records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
 
             if (liveRecords != null)
@@ -991,7 +997,7 @@ namespace ScreenTimeTracker.Services
             foreach (var record in liveRecords)
             {
                 var duration = record.Duration;
-                if (duration.TotalSeconds < 5 || !IsHourlyProcess(record.ProcessName)) continue;
+                if ((record.EndTime == null && duration.TotalSeconds < 5) || !IsHourlyProcess(record.ProcessName)) continue;
 
                 record.EndTime ??= record.StartTime + duration;
                 records.Add(record);

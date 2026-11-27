@@ -18,40 +18,42 @@ namespace ScreenTimeTracker
         private int _chartRevision;
         private bool _chartRefreshPending;
         private bool _chartRefreshRequested;
-        private (DateTime Date, List<AppUsageRecord> Records)? _loadedHourlyChart;
+        private (DateTime Start, DateTime End, List<AppUsageRecord> Records)? _loadedDashboardVisits;
 
         // ---------------- Chart update helper ----------------
-        private void UpdateUsageChart(List<AppUsageRecord>? hourlyRecords = null)
+        private void UpdateUsageChart(List<AppUsageRecord>? visits = null)
         {
             // Safety checks
             if (UsageChartLive == null || _usageRecords == null) return;
 
-            var date = _viewModel.SelectedDate.Date;
-            if (hourlyRecords != null)
+            var (start, end) = GetCurrentViewDateRange();
+            if (visits != null)
             {
                 _chartRevision++;
-                _loadedHourlyChart = (date, hourlyRecords);
+                _loadedDashboardVisits = (start, end, visits);
             }
 
-            ICollection<AppUsageRecord> chartRecords = _usageRecords;
-            if (_viewModel.CurrentChartViewMode == ChartViewMode.Hourly)
-                chartRecords = _loadedHourlyChart is { } loaded && loaded.Date == date
-                    ? loaded.Records
-                    : Array.Empty<AppUsageRecord>();
+            IEnumerable<AppUsageRecord> records = _loadedDashboardVisits is { } loaded && loaded.Start == start && loaded.End == end
+                ? loaded.Records
+                : Array.Empty<AppUsageRecord>();
+            var usage = DashboardUsage.Calculate(records, start, end, DateTime.Now);
 
-            var totalTime = Helpers.ChartHelper.UpdateUsageChart(
+            ChartHelper.UpdateUsageChart(
                 UsageChartLive,
-                chartRecords,
+                usage.Visits,
                 _viewModel.CurrentChartViewMode,
                 _viewModel.CurrentTimePeriod,
                 _viewModel.SelectedDate,
                 _viewModel.SelectedEndDate);
 
-            // Update UI text block with formatted total time if available
+            var total = TimeUtil.FormatTimeSpan(usage.Total);
             if (ChartTimeValue != null)
             {
-                ChartTimeValue.Text = TimeUtil.FormatTimeSpan(totalTime);
+                ChartTimeValue.Text = total;
             }
+            UpdateSummaryTab(usage.Visits, total);
+            if (_viewModel.IsDateRangeSelected)
+                UpdateAveragePanel(usage.DailyAverage);
         }
 
         // ---------------- Restored helper methods ----------------
@@ -63,38 +65,22 @@ namespace ScreenTimeTracker
             foreach (var rec in toRemove) _usageRecords.Remove(rec);
         }
 
-        private void UpdateAveragePanel(List<AppUsageRecord> aggregatedRecords, DateTime startDate, DateTime endDate)
+        private void UpdateAveragePanel(TimeSpan average)
         {
             if (AveragePanel == null || DailyAverage == null) return;
 
-            int dayCount = (endDate.Date - startDate.Date).Days + 1;
-            if (dayCount <= 0) dayCount = 1;
-
-            var total = TimeUtil.CalculateUniqueTotalTime(aggregatedRecords);
-
-            // Determine how many days actually have usage
-            int activeDayCount = _usageRecords
-                                 .Where(r => r.Duration.TotalSeconds > 0)
-                                 .Select(r => r.StartTime.Date)
-                                 .Distinct()
-                                 .Count();
-            if (activeDayCount <= 0) activeDayCount = 1; // safeguard
-
-            var avg = TimeSpan.FromSeconds(total.TotalSeconds / activeDayCount);
-
-            DailyAverage.Text = TimeUtil.FormatTimeSpan(avg);
+            DailyAverage.Text = TimeUtil.FormatTimeSpan(average);
 
             // Always show average panel for multi-day views
             AveragePanel.Visibility = Visibility.Visible;
         }
 
-        private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
+        private void UpdateViewModeAndChartForDateRange(List<AppUsageRecord> visits)
         {
             // Minimal version: force weekly period & daily chart view then refresh
             _viewModel.CurrentTimePeriod = TimePeriod.Weekly;
             _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
-            UpdateUsageChart();
-            UpdateSummaryTab(aggregatedRecords);
+            UpdateUsageChart(visits);
         }
 
         private void ShowNoDataDialog(DateTime startDate, DateTime endDate)
@@ -301,7 +287,7 @@ namespace ScreenTimeTracker
                     double dailyAverage = totalHours / 7.0;
                 }
 
-                UpdateChartWithRecords(weekRecords);
+                UpdateChartWithRecords(_databaseService?.GetRawRecordsForDateRange(startDate, today) ?? new List<AppUsageRecord>());
 
                 for (var d = startDate; d <= today; d = d.AddDays(1))
                     LoadRecordsForSpecificDay(d, false);
@@ -354,8 +340,7 @@ namespace ScreenTimeTracker
                     if (ViewModePanel != null)
                         ViewModePanel.Visibility = Visibility.Collapsed;
 
-                    UpdateUsageChart();
-                    UpdateSummaryTab(records);
+                    UpdateUsageChart(records);
                 });
             }
             catch (Exception ex)
@@ -384,18 +369,8 @@ namespace ScreenTimeTracker
             }
         }
 
-        private void UpdateSummaryTab()
-        {
-            // Always recalc from authoritative source: the aggregation service + live slice
-            var (start, end) = GetCurrentViewDateRange();
-            var aggregated = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
-            
-            // Reset cache when view changes to ensure accurate totals
-            _cachedTotalTime = TimeSpan.Zero;
-            _lastFullRefresh = DateTime.MinValue;
-            
-            UpdateSummaryTab(aggregated);
-        }
+        private void UpdateSummaryTab() =>
+            UpdateSummaryTab(Array.Empty<AppUsageRecord>(), TimeUtil.FormatTimeSpan(TimeSpan.Zero));
 
         // Helper returns the date-span currently shown in the UI
         private (DateTime Start, DateTime End) GetCurrentViewDateRange()
@@ -408,24 +383,19 @@ namespace ScreenTimeTracker
             return (_viewModel?.SelectedDate.Date ?? DateTime.Today, _viewModel?.SelectedDate.Date ?? DateTime.Today);
         }
 
-        private void UpdateSummaryTab(IEnumerable<AppUsageRecord> recordsToSummarize)
+        private void UpdateSummaryTab(IEnumerable<AppUsageRecord> visits, string total)
         {
             try
             {
-                var totalTime = TimeUtil.CalculateUniqueTotalTime(recordsToSummarize);
-                var (start, end) = GetCurrentViewDateRange();
-                var maxDuration = TimeSpan.FromDays((end - start).Days + 1);
-                if (totalTime > maxDuration) totalTime = maxDuration;
-
                 // Update summary UI – total screen time block
                 if (TotalScreenTime != null)
                 {
-                    TotalScreenTime.Text = TimeUtil.FormatTimeSpan(totalTime);
+                    TotalScreenTime.Text = total;
                 }
 
                 // Compute idle time and update IdleRow visibility
                 // Calculate idle time from any processes that start with "Idle" 
-                var idleTotal = recordsToSummarize
+                var idleTotal = visits
                                     .Where(r => r.ProcessName.StartsWith("Idle", StringComparison.OrdinalIgnoreCase))
                                     .Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
 
@@ -442,21 +412,33 @@ namespace ScreenTimeTracker
                     }
                 }
 
-                var mostUsed = recordsToSummarize
-                    .Where(r => !ProcessFilter.ShouldIgnoreProcess(r.ProcessName))
-                    .GroupBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => (Record: group.First(), Duration: TimeUtil.CalculateUniqueTotalTime(group)))
+                var mostUsed = visits
+                    .GroupBy(r => ApplicationNameNormalizer.NormalizeProcessName(r.ProcessName), StringComparer.OrdinalIgnoreCase)
+                    .Select(group => (ProcessName: group.Key,
+                        Record: group.FirstOrDefault(r => r.WindowHandle != IntPtr.Zero) ?? group.First(),
+                        Duration: TimeUtil.CalculateUniqueTotalTime(group)))
                     .OrderByDescending(app => app.Duration)
                     .FirstOrDefault();
 
                 if (mostUsed.Record is { } mostUsedApp)
                 {
-                    if (MostUsedApp != null)       MostUsedApp.Text  = mostUsedApp.ProcessName;
+                    if (MostUsedApp != null)       MostUsedApp.Text  = mostUsed.ProcessName;
                     if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsed.Duration);
 
-                    mostUsedApp.LoadAppIconIfNeeded();
-
-                    if (MostUsedAppIcon != null) MostUsedAppIcon.DataContext = mostUsedApp;
+                    if (MostUsedAppIcon != null)
+                    {
+                        if (MostUsedAppIcon.DataContext is AppUsageRecord displayed &&
+                            string.Equals(ApplicationNameNormalizer.NormalizeProcessName(displayed.ProcessName),
+                                mostUsed.ProcessName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            displayed.LoadAppIconIfNeeded(mostUsedApp);
+                        }
+                        else
+                        {
+                            mostUsedApp.LoadAppIconIfNeeded();
+                            MostUsedAppIcon.DataContext = mostUsedApp;
+                        }
+                    }
                     if (MostUsedPlaceholderIcon != null) MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
                 }
                 else
@@ -511,8 +493,8 @@ namespace ScreenTimeTracker
                     DoLiveUpdates();
                 }
 
-                // Every 5 seconds: Chart refresh if needed
-                if (_tickCount % 5 == 0 && _isChartDirty)
+                int chartRefreshInterval = _viewModel.IsDateRangeSelected && _trackingService?.IsTracking == true ? 10 : 5;
+                if (_tickCount % chartRefreshInterval == 0 && _isChartDirty)
                 {
                     DoChartRefresh();
                 }
@@ -534,9 +516,6 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error in UpdateTimer_Tick: {ex.Message}");
             }
         }
-
-        private TimeSpan _cachedTotalTime = TimeSpan.Zero;
-        private DateTime _lastFullRefresh = DateTime.MinValue;
 
         private void DoLiveUpdates()
         {
@@ -565,41 +544,6 @@ namespace ScreenTimeTracker
             var activeRec = _usageRecords?.FirstOrDefault(r => r.IsFocused);
             activeRec?.RaiseDurationChanged();
 
-            // Optimize total time updates - only do expensive database calls every 10 seconds
-            bool shouldDoFullRefresh = (DateTime.Now - _lastFullRefresh).TotalSeconds >= 10;
-            
-            if (shouldDoFullRefresh)
-            {
-                // Move database call off UI thread to prevent freezing
-                Task.Run(() =>
-                {
-                    try
-                    {
-                        var (start,end) = GetCurrentViewDateRange();
-                        var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
-                        var totalTime = TimeUtil.CalculateUniqueTotalTime(agg);
-                        
-                        // Update UI on UI thread
-                        DispatcherQueue.TryEnqueue(() =>
-                        {
-                            _cachedTotalTime = totalTime;
-                            _lastFullRefresh = DateTime.Now;
-                            if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
-                        });
-                    }
-                    catch (Exception ex) 
-                    { 
-                        System.Diagnostics.Debug.WriteLine($"Error updating live total time: {ex.Message}");
-                    }
-                });
-            }
-            else if (activeRec != null && _trackingService?.IsTracking == true)
-            {
-                // Fast update: just increment cached total by 1 second for the focused app
-                _cachedTotalTime = _cachedTotalTime.Add(TimeSpan.FromSeconds(1));
-                if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
-            }
-
             // Mark chart as dirty every 15 seconds for less frequent but coordinated refreshes
             if (_tickCount % 15 == 0)
             {
@@ -627,18 +571,19 @@ namespace ScreenTimeTracker
                 {
                     if (_disposed || _chartRefreshRequested || _chartRevision != revision) return;
 
-                    var date = _viewModel.SelectedDate;
+                    var (start, end) = GetCurrentViewDateRange();
                     var mode = _viewModel.CurrentChartViewMode;
-                    var hourlyRecords = mode == ChartViewMode.Hourly && _databaseService is { } database
-                        ? await Task.Run(() => database.GetHourlyRecordsWithLive(date, _trackingService))
+                    var visits = _databaseService is { } database
+                        ? await Task.Run(() => mode == ChartViewMode.Hourly
+                            ? database.GetHourlyRecordsWithLive(start, _trackingService)
+                            : database.GetDashboardRecordsWithLive(start, end, _trackingService))
                         : null;
 
                     if (_disposed || _isReloading || _chartRefreshRequested || _chartRevision != revision ||
-                        _viewModel.SelectedDate != date || _viewModel.CurrentChartViewMode != mode)
+                        GetCurrentViewDateRange() != (start, end) || _viewModel.CurrentChartViewMode != mode)
                         return;
 
-                    UpdateUsageChart(hourlyRecords);
-                    UpdateSummaryTab(_usageRecords);
+                    UpdateUsageChart(visits);
                 }
                 catch (Exception ex)
                 {
@@ -752,7 +697,8 @@ namespace ScreenTimeTracker
         {
             try
             {
-                var live = _databaseService?.GetDetailRecordsWithLive(DateTime.Today, _trackingService) ?? new List<AppUsageRecord>();
+                var visits = new List<AppUsageRecord>();
+                var live = _databaseService?.GetDetailRecordsWithLive(DateTime.Today, _trackingService, visits) ?? new List<AppUsageRecord>();
                 _usageRecords.Clear();
                 foreach (var r in live.OrderByDescending(r => r.Duration))
                 {
@@ -762,7 +708,7 @@ namespace ScreenTimeTracker
 
                 // Ensure chart and summary refresh
                 _isChartDirty = true;
-                UpdateSummaryTab(_usageRecords.ToList());
+                UpdateUsageChart(visits);
             }
             catch (Exception ex)
             {
