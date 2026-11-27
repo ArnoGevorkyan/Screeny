@@ -60,16 +60,7 @@
     <Content Include="Assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Remove="Assets\app-icon.ico" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Assets\app-icon.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <Content Remove="Assets\microsoft.png;Assets\app-icon.ico;Assets\app-icon.svg" />
   </ItemGroup>
 
   <ItemGroup>
