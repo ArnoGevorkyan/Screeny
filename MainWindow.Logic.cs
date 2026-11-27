@@ -167,6 +167,7 @@ namespace ScreenTimeTracker
 
                 if (_viewModel.SelectedDate.Date == DateTime.Now.Date && _viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
+                    InvalidateUsageView();
                     LoadRecordsForDate(_viewModel.SelectedDate);
                 }
                 else
@@ -261,6 +262,7 @@ namespace ScreenTimeTracker
                 else
                 {
                     _updateTimer.Stop();
+                    _liveTotalRead = null;
                     foreach (var record in _usageRecords) record.SetFocus(false);
                 }
 
@@ -284,12 +286,7 @@ namespace ScreenTimeTracker
         // ---------------- Data loading logic ----------------
         private void LoadRecordsForDate(DateTime date)
         {
-            if (date > DateTime.Today) date = DateTime.Today;
-
-            _viewModel.SelectedDate = date;
-            _viewModel.SelectedEndDate = null;
-            _viewModel.IsDateRangeSelected = false;
-
+            var revision = _usageViewRevision;
             _usageRecords.Clear();
 
             // Update header text (Today/Yesterday/etc.)
@@ -335,7 +332,7 @@ namespace ScreenTimeTracker
                 {
                     DispatcherQueue?.TryEnqueue(async () =>
                     {
-                        if (Content != null)
+                        if (IsCurrentUsageView(revision) && Content != null)
                         {
                             var dlg = new ContentDialog
                             {
@@ -346,15 +343,11 @@ namespace ScreenTimeTracker
                             };
 
                             // Snap immediately to today *before* showing the dialog so live data is displayed under the correct day even if the user never presses OK.
-                            if (date.Date != DateTime.Today)
-                            {
-                                _viewModel.SelectedDate = DateTime.Today;
-                                _viewModel.SelectedEndDate = null;
-                                _viewModel.IsDateRangeSelected = false;
-
-                                UpdateDatePickerButtonText(); // defined in UI partial
-                                LoadRecordsForDate(DateTime.Today);
-                            }
+                            InvalidateUsageView();
+                            var today = DateTime.Today;
+                            _viewModel.SelectedDate = today;
+                            UpdateDatePickerButtonText();
+                            LoadRecordsForDate(today);
 
                             await dlg.ShowAsync();
                         }
@@ -369,12 +362,6 @@ namespace ScreenTimeTracker
 
                 CleanupSystemProcesses();
 
-                DispatcherQueue?.TryEnqueue(() =>
-                {
-                    // Binding handles ItemsSource updates
-                    _isReloading = false;
-                });
-
                 UpdateSummaryTab(_usageRecords.ToList());
                 UpdateChartViewMode(hourlyRecords);
             }
@@ -383,7 +370,7 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
                 DispatcherQueue?.TryEnqueue(async () =>
                 {
-                    if (Content != null)
+                    if (IsCurrentUsageView(revision) && Content != null)
                     {
                         var dlg = new ContentDialog
                         {
@@ -400,17 +387,6 @@ namespace ScreenTimeTracker
         // ---------------- Date range loading logic ----------------
         private void LoadRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
-            // Ensure valid input range
-            if (startDate > endDate)
-            {
-                var temp = startDate;
-                startDate = endDate;
-                endDate   = temp;
-            }
-
-            _viewModel.SelectedDate = startDate;
-            _viewModel.SelectedEndDate = endDate;
-            _viewModel.IsDateRangeSelected = true;
             _usageRecords.Clear();
 
             try
@@ -431,9 +407,8 @@ namespace ScreenTimeTracker
                 // Update UI helpers
                 CleanupSystemProcesses();
                 UpdateAveragePanel(aggregated, startDate, endDate);
-                UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
-                _isReloading = false;
-
+                UpdateChartViewMode();
+                UpdateSummaryTab(aggregated);
                 // Publish aggregated list to ViewModel
                 _viewModel.AggregatedRecords.Clear();
                 foreach (var rec in aggregated) _viewModel.AggregatedRecords.Add(rec);
@@ -443,8 +418,6 @@ namespace ScreenTimeTracker
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
                 ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
             }
-
-            DispatcherQueue?.TryEnqueue(() => { _isReloading = false; });
         }
 
         /// <summary>
