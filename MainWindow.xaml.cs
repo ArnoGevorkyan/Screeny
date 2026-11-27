@@ -116,6 +116,7 @@ namespace ScreenTimeTracker
         private bool _isChartDirty = false; // set by events; consumed by unified timer
         private bool _isReloading = false;  // true while usage records are being regenerated
         private int _tickCount = 0; // unified tick counter for all periodic tasks
+        private bool _resetInProgress;
 
         public MainWindow()
         {
@@ -897,62 +898,97 @@ namespace ScreenTimeTracker
 
         private async void OnResetDataRequested(object? sender, EventArgs e)
         {
-            if (_disposed) return;
-
-            var confirm = new ContentDialog
-            {
-                Title             = "Erase all screen-time data?",
-                Content           = "This permanently deletes every recorded session.",
-                PrimaryButtonText = "Delete",
-                CloseButtonText   = "Cancel",
-                DefaultButton     = ContentDialogButton.Close,
-                XamlRoot          = this.Content?.XamlRoot
-            };
-
-            var res = await confirm.ShowAsync();
-            if (res != ContentDialogResult.Primary || _disposed ||
+            if (_disposed || _resetInProgress ||
                 (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0) return;
 
+            _resetInProgress = true;
             try
             {
-                bool ok;
+                _appWindow.Show();
+                Activate();
+                var xamlRoot = await WaitForResetXamlRootAsync();
+                if (xamlRoot == null || _disposed ||
+                    (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0) return;
+
+                var res = await new ContentDialog
+                {
+                    Title = "Erase all screen-time data?",
+                    Content = "This permanently deletes every recorded session.",
+                    PrimaryButtonText = "Delete",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Close,
+                    XamlRoot = xamlRoot
+                }.ShowAsync();
+                if (res != ContentDialogResult.Primary || _disposed ||
+                    (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0) return;
+
+                var result = new ContentDialog
+                {
+                    CloseButtonText = "OK",
+                    XamlRoot = xamlRoot
+                };
                 try
                 {
-                    SetTrackingPauseReason(TrackingPauseReason.Resetting, true);
-                    ok = _sliceWriter.Reset();
-
-                    if (ok)
+                    bool ok;
+                    try
                     {
-                        _usageGeneration++;
-                        _usageRecords?.Clear();
-                        _viewModel?.AggregatedRecords?.Clear();
-                        UpdateUsageChart(new List<AppUsageRecord>());
-                        UpdateSummaryTab();
+                        SetTrackingPauseReason(TrackingPauseReason.Resetting, true);
+                        ok = _sliceWriter.Reset();
+
+                        if (ok)
+                        {
+                            _usageGeneration++;
+                            _usageRecords?.Clear();
+                            _viewModel?.AggregatedRecords?.Clear();
+                            UpdateUsageChart(new List<AppUsageRecord>());
+                            UpdateSummaryTab();
+                        }
                     }
+                    finally
+                    {
+                        SetTrackingPauseReason(TrackingPauseReason.Resetting, false);
+                    }
+
+                    result.Title = ok ? "Data deleted" : "Deletion failed";
+                    result.Content = ok ? "All records were removed." : "Could not clear the database.";
                 }
-                finally
+                catch (Exception ex)
                 {
-                    SetTrackingPauseReason(TrackingPauseReason.Resetting, false);
+                    Debug.WriteLine($"Error wiping database: {ex.Message}");
+                    result.Title = "Error";
+                    result.Content = $"Could not delete data: {ex.Message}";
                 }
 
-                await new ContentDialog
-                {
-                    Title           = ok ? "Data deleted" : "Deletion failed",
-                    Content         = ok ? "All records were removed." : "Could not clear the database.",
-                    CloseButtonText = "OK",
-                    XamlRoot        = this.Content?.XamlRoot
-                }.ShowAsync();
+                if (!_disposed) await result.ShowAsync();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error wiping database: {ex.Message}");
-                await new ContentDialog
-                {
-                    Title           = "Error",
-                    Content         = $"Could not delete data: {ex.Message}",
-                    CloseButtonText = "OK",
-                    XamlRoot        = this.Content?.XamlRoot
-                }.ShowAsync();
+                Debug.WriteLine($"Could not show Reset dialog: {ex.Message}");
+            }
+            finally
+            {
+                _resetInProgress = false;
+            }
+        }
+
+        private async Task<XamlRoot?> WaitForResetXamlRootAsync()
+        {
+            if (_disposed || Content is not FrameworkElement root) return null;
+            if (root.XamlRoot is { } xamlRoot) return xamlRoot;
+
+            var ready = new TaskCompletionSource<XamlRoot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnLoaded(object sender, RoutedEventArgs e) => ready.TrySetResult(root.XamlRoot);
+            void OnClosed(object sender, WindowEventArgs e) => ready.TrySetResult(null);
+            root.Loaded += OnLoaded;
+            Closed += OnClosed;
+            try
+            {
+                return await ready.Task;
+            }
+            finally
+            {
+                root.Loaded -= OnLoaded;
+                Closed -= OnClosed;
             }
         }
 
