@@ -2,769 +2,210 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
-using System.Linq;
-using ScreenTimeTracker.Models;
 using System;
+using System.Collections.Generic;
 
 namespace ScreenTimeTracker.Helpers
 {
-    /// <summary>
-    /// Helper class that encapsulates date picker popup functionality
-    /// </summary>
     public class DatePickerPopup
     {
-        // Global scale factor to shrink the popup uniformly (1.0 = original size)
-        private const double POPUP_SCALE = 0.85; // 85 % of original dimensions
-        // Base (unscaled) width of the entire popup – bump this a bit to give the calendar extra room
-        private const double POPUP_BASE_WIDTH = 600; // previously hard-coded as 550
-        // Slightly narrower preset-button column to avoid clipping the Sunday column in the calendar
-        private const double PRESET_COLUMN_WIDTH = 150; // narrower to fully show Sunday column
+        private const double PopupWidth = 510;
 
-        private Popup? _datePickerPopup;
-        private Button? _todayButton;
-        private Button? _yesterdayButton;
-        private Button? _last7DaysButton;
-        private Button? _last30DaysButton;
-        private Button? _thisMonthButton;
-        private CalendarView? _calendarView;
-        private TextBlock? _dateText;
         private readonly Window _owner;
-        
-        // Events for notifying the owner window about date selection changes
+        private readonly List<(Button Button, Func<DateTime, Selection> GetSelection)> _presets = new();
+        private (Popup Popup, CalendarView Calendar, TextBlock Caption)? _view;
+        private Selection _draft;
+
         public event EventHandler<DateTime>? SingleDateSelected;
         public event EventHandler<(DateTime Start, DateTime End)>? DateRangeSelected;
         public event EventHandler? PopupClosed;
-        
-        // Current state
-        private DateTime _selectedDate;
-        private DateTime? _selectedEndDate;
-        private bool _isDateRangeSelected;
 
-        /// <summary>
-        /// Initializes a new instance of the DatePickerPopup class
-        /// </summary>
-        /// <param name="owner">The owner window that will host this popup</param>
+        private readonly record struct Selection(DateTime Start, DateTime? End = null);
+
         public DatePickerPopup(Window owner)
         {
             _owner = owner;
-            _selectedDate = DateTime.Today;
         }
 
-        /// <summary>
-        /// Shows the date picker popup near the specified button
-        /// </summary>
-        /// <param name="sender">The button that triggered this action</param>
-        /// <param name="currentDate">The currently selected date</param>
-        /// <param name="currentEndDate">The currently selected end date (for ranges)</param>
-        /// <param name="isDateRange">Whether a date range is currently selected</param>
         public void ShowDatePicker(object sender, DateTime currentDate, DateTime? currentEndDate, bool isDateRange)
         {
-            _selectedDate = currentDate;
-            _selectedEndDate = currentEndDate;
-            _isDateRangeSelected = isDateRange;
+            if (sender is not Button anchor)
+                return;
 
-            // Create the popup if it doesn't exist
-            if (_datePickerPopup == null)
-            {
-                CreateDatePickerPopup();
-            }
-            else
-            {
-                // Ensure XamlRoot is set (in case it was lost)
-                _datePickerPopup.XamlRoot = _owner.Content.XamlRoot;
-                
-                // When reopening, update the selected date in the calendar
-                if (_datePickerPopup.Child is Grid rootGrid)
-                {
-                    // Find the calendar and date display
-                    var calendar = _calendarView;
-                    var dateDisplayText = _dateText;
-                    
-                    if (calendar != null)
-                    {
-                        // Clear previous selection
-                        calendar.SelectedDates.Clear();
-                        
-                        // Set the current selected date
-                        calendar.SelectedDates.Add(new DateTimeOffset(_selectedDate));
-                        
-                        // Reset button highlighting
-                        ResetQuickSelectButtonStyles();
-                        
-                        // Update the quick selection button highlighting
-                        var today = DateTime.Today;
-                        var yesterday = today.AddDays(-1);
-                        
-                        if (_selectedDate == today && !_isDateRangeSelected)
-                        {
-                            HighlightQuickSelectButton("Today");
-                            if (dateDisplayText != null)
-                                dateDisplayText.Text = "Today";
-                        }
-                        else if (_selectedDate == yesterday && !_isDateRangeSelected)
-                        {
-                            HighlightQuickSelectButton("Yesterday");
-                            if (dateDisplayText != null)
-                                dateDisplayText.Text = "Yesterday";
-                        }
-                        else if (_isDateRangeSelected && _selectedEndDate.HasValue &&
-                                 _selectedDate == today.AddDays(-6) && _selectedEndDate.Value == today)
-                        {
-                            HighlightQuickSelectButton("Last 7 Days");
-                            if (dateDisplayText != null)
-                                dateDisplayText.Text = "Last 7 days";
-                        }
-                        else
-                        {
-                            // Regular date or unrecognized preset
-                            if (dateDisplayText != null)
-                            {
-                                dateDisplayText.Text = _isDateRangeSelected && _selectedEndDate.HasValue ? 
-                                    $"{_selectedDate:MMM dd} - {_selectedEndDate:MMM dd}" : 
-                                    _selectedDate.ToString("MMM dd");
-                            }
-                        }
-                    }
-                }
-            }
+            _view ??= CreatePopup();
+            var (popup, calendar, caption) = _view.Value;
+            _draft = new Selection(currentDate, isDateRange ? currentEndDate : null);
 
-            if (_datePickerPopup != null)
-            {
-                // Position the popup near the button and adjust for screen boundaries
-                PositionPopup(sender as Button);
-                
-                // Show the popup
-                _datePickerPopup.IsOpen = true;
-            }
-        }
-
-        /// <summary>
-        /// Positions the popup relative to the button and adjusts for screen boundaries
-        /// </summary>
-        /// <param name="button">The button that triggered the popup</param>
-        private void PositionPopup(Button? button)
-        {
-            if (button == null || _datePickerPopup == null) return;
-            
+            var date = new DateTimeOffset(_draft.Start);
+            calendar.SelectedDatesChanged -= CalendarSelectedDatesChanged;
             try
             {
-                // Get the button position
-                var transform = button.TransformToVisual(null);
-                var pointBelow = transform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
-                // Start slightly below the button (12 px gap)
-                double verticalOffset = pointBelow.Y + 12;
-
-                // Popup width for horizontal boundary checks (scaled)
-                double popupWidth = POPUP_BASE_WIDTH * POPUP_SCALE;
-
-                // Get window dimensions
-                var windowWidth = _owner.Bounds.Width;
-
-                // Default horizontal offset (we reuse existing logic below)
-                double horizontalOffset = pointBelow.X;
-                
-                // Adjust horizontal position if needed
-                if (horizontalOffset + popupWidth > windowWidth - 20) // 20px safety margin
-                {
-                    // If popup would go beyond right edge, align it to the right
-                    horizontalOffset = windowWidth - popupWidth - 20;
-                }
-                
-                // Set the position of the popup
-                _datePickerPopup.HorizontalOffset = horizontalOffset;
-                _datePickerPopup.VerticalOffset = verticalOffset;
-                
-                System.Diagnostics.Debug.WriteLine($"Positioned popup at X:{horizontalOffset}, Y:{verticalOffset}");
+                var today = new DateTimeOffset(DateTime.Today);
+                if (calendar.MaxDate != today)
+                    calendar.MaxDate = today;
+                calendar.SelectedDates.Clear();
+                calendar.SelectedDates.Add(date);
+                calendar.SetDisplayDate(date);
             }
-            catch (Exception ex)
+            finally
             {
-                System.Diagnostics.Debug.WriteLine($"Error positioning popup: {ex.Message}");
-                
-                // Fallback positioning - just position at the button location
-                var fallbackTransform = button.TransformToVisual(null);
-                var fallbackPoint = fallbackTransform.TransformPoint(new Windows.Foundation.Point(0, button.ActualHeight));
-                _datePickerPopup.HorizontalOffset = fallbackPoint.X;
-                _datePickerPopup.VerticalOffset = fallbackPoint.Y;
+                calendar.SelectedDatesChanged += CalendarSelectedDatesChanged;
             }
+
+            RenderSelection(caption, "MMM dd");
+            popup.XamlRoot = _owner.Content.XamlRoot;
+            var belowAnchor = anchor.TransformToVisual(null)
+                .TransformPoint(new Windows.Foundation.Point(0, anchor.ActualHeight));
+            popup.HorizontalOffset = Math.Min(belowAnchor.X, _owner.Bounds.Width - PopupWidth - 20);
+            popup.VerticalOffset = belowAnchor.Y + 12;
+            popup.IsOpen = true;
         }
 
-        /// <summary>
-        /// Creates the date picker popup UI
-        /// </summary>
-        private void CreateDatePickerPopup()
+        private (Popup, CalendarView, TextBlock) CreatePopup()
         {
-            try
+            var resources = Application.Current.Resources;
+            var root = new Grid
             {
-                // Create a new popup
-                _datePickerPopup = new Popup();
-                
-                // Set the XamlRoot property to connect the popup to the UI tree
-                _datePickerPopup.XamlRoot = _owner.Content.XamlRoot;
-                
-                // Enable light dismiss - allows closing by clicking outside
-                _datePickerPopup.IsLightDismissEnabled = true;
-                
-                // Handle the Closed event to notify when popup is dismissed
-                _datePickerPopup.Closed += (s, e) => PopupClosed?.Invoke(this, EventArgs.Empty);
-                
-                // Create the root grid (two-column layout)
-                var rootGrid = new Grid
-                {
-                    Background = Application.Current.Resources["ApplicationPageBackgroundThemeBrush"] as Brush,
-                    BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(8),
-                    Padding = new Thickness(16 * POPUP_SCALE, 16, 16 * POPUP_SCALE, 16),
-                    Width = POPUP_BASE_WIDTH * POPUP_SCALE,    // scaled popup width
-                    MaxHeight = 540 // keep original height to avoid clipping
-                };
-                // Add spacing between the two main columns
-                rootGrid.ColumnSpacing = 12 * POPUP_SCALE; // slightly tighter gap
+                Background = resources["ApplicationPageBackgroundThemeBrush"] as Brush,
+                BorderBrush = resources["CardStrokeColorDefaultBrush"] as Brush,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(13.6, 16, 13.6, 16),
+                Width = PopupWidth,
+                MaxHeight = 540,
+                ColumnSpacing = 10.2,
+                RowSpacing = 8
+            };
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(127.5) });
+            for (int i = 0; i < 3; i++)
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-                // Two columns: calendar (flex) on the left, preset buttons fixed on the right
-                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // calendar column
-                rootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(PRESET_COLUMN_WIDTH * POPUP_SCALE) }); // presets column (reduced)
-
-                // Create a vertical StackPanel for buttons (reuse buttonsGrid)
-                var buttonsGrid = new StackPanel
-                { 
-                    Orientation = Orientation.Vertical,
-                    Spacing = 4 // tighter vertical gap
-                };
-                Grid.SetColumn(buttonsGrid, 1); // move presets to right column
-                rootGrid.Children.Add(buttonsGrid);
-
-                // Right-side container with rows: calendar at top, caption near bottom
-                var contentGrid = new Grid();
-                Grid.SetColumn(contentGrid, 0); // calendar on the left column
-                // Define rows so caption and action buttons can span both columns
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // main content (columns)
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // spacing between calendar and caption
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // date caption
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) }); // consistent spacing before actions
-                rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // action buttons
-                rootGrid.Children.Add(contentGrid);
-                
-                // Create quick selection buttons in a simple horizontal grid layout
-                var topButtonsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-                topButtonsRow.HorizontalAlignment = HorizontalAlignment.Stretch; // Make sure the row takes full width
-                
-                // Create column definitions for the button row to ensure equal widths
-                var todayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
-                var yesterdayColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
-                
-                // Create Today button (full-width row)
-                _todayButton = new Button
+            var popup = new Popup
+            {
+                IsLightDismissEnabled = true,
+                Child = new ScrollViewer
                 {
-                    Content = "Today",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 4), // bottom spacing 4
-                    Style = Application.Current.Resources["AccentButtonStyle"] as Style
-                };
-                _todayButton.Click += QuickSelect_Today_Click;
-                buttonsGrid.Children.Add(_todayButton);
-                
-                // Create Yesterday button (full-width row)
-                _yesterdayButton = new Button
-                {
-                    Content = "Yesterday",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 4)
-                };
-                _yesterdayButton.Click += QuickSelect_Yesterday_Click;
-                buttonsGrid.Children.Add(_yesterdayButton);
-                
-                // Create second row with just Last 7 days button
-                _last7DaysButton = new Button
-                {
-                    Content = "Last 7 days",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 4) // Bottom spacing reduced
-                };
-                _last7DaysButton.Click += QuickSelect_Last7Days_Click;
-                buttonsGrid.Children.Add(_last7DaysButton);
-                
-                // Create third row with Last 30 days button
-                _last30DaysButton = new Button
-                {
-                    Content = "Last 30 days",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 4)
-                };
-                _last30DaysButton.Click += QuickSelect_Last30Days_Click;
-                buttonsGrid.Children.Add(_last30DaysButton);
-                
-                // Create fourth row with This month button
-                _thisMonthButton = new Button
-                {
-                    Content = "This month",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 0, 4)
-                };
-                _thisMonthButton.Click += QuickSelect_ThisMonth_Click;
-                buttonsGrid.Children.Add(_thisMonthButton);
-                
-                // Create date display text block to show selected date/range
-                var dateDisplayBorder = new Border
-                {
-                    Background = Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"] as Brush,
-                    BorderBrush = Application.Current.Resources["CardStrokeColorDefaultBrush"] as Brush,
-                    BorderThickness = new Thickness(0), // remove border
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(8),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
-                };
-                _dateText = new TextBlock
-                {
-                    Text = "Today",
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    Style = Application.Current.Resources["BodyStrongTextBlockStyle"] as Style
-                };
-                dateDisplayBorder.Child = _dateText;
-                // Place the caption spanning both columns in row 2
-                Grid.SetRow(dateDisplayBorder, 2);
-                Grid.SetColumnSpan(dateDisplayBorder, 2);
-                rootGrid.Children.Add(dateDisplayBorder);
-                
-                // Create calendar view
-                _calendarView = new CalendarView
-                {
-                    SelectionMode = CalendarViewSelectionMode.Single,
-                    FirstDayOfWeek = Windows.Globalization.DayOfWeek.Monday,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    VerticalAlignment = VerticalAlignment.Stretch,
-                    MaxDate = DateTimeOffset.Now, // Can't select future dates
-                    MinHeight = 320, // keep original min height to prevent clipping
-                    Margin = new Thickness(0), // Even margin
-                    CalendarIdentifier = "GregorianCalendar", // Explicitly set calendar type
-                    IsGroupLabelVisible = true, // Show month/year label
-                    IsTodayHighlighted = true // Highlight today's date
-                };
-                _calendarView.SelectedDatesChanged += Calendar_SelectedDatesChanged;
-                _calendarView.CalendarViewDayItemChanging += Calendar_DayItemChanging;
-                Grid.SetRow(_calendarView, 0);
-                contentGrid.Children.Add(_calendarView);
-                
-                // Create action buttons (Cancel/Done) spanning both columns
-                var actionButtonsGrid = new Grid();
-                Grid.SetRow(actionButtonsGrid, 4);
-                Grid.SetColumnSpan(actionButtonsGrid, 2);
-                actionButtonsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                actionButtonsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                
-                var cancelButton = new Button
-                {
-                    Content = "Cancel",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0, 0, 4, 0)
-                };
-                cancelButton.Click += DatePickerCancel_Click;
-                Grid.SetColumn(cancelButton, 0);
-                actionButtonsGrid.Children.Add(cancelButton);
-                
-                var doneButton = new Button
-                {
-                    Content = "Done",
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(4, 0, 0, 0),
-                    Style = Application.Current.Resources["AccentButtonStyle"] as Style
-                };
-                doneButton.Click += DatePickerDone_Click;
-                Grid.SetColumn(doneButton, 1);
-                actionButtonsGrid.Children.Add(doneButton);
-                
-                rootGrid.Children.Add(actionButtonsGrid);
-                
-                // Set the popup content
-                var scrollViewer = new ScrollViewer
-                {
-                    Content = rootGrid,
+                    Content = root,
                     VerticalScrollMode = ScrollMode.Enabled,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                }
+            };
+            popup.Closed += (_, _) => PopupClosed?.Invoke(this, EventArgs.Empty);
+
+            var presets = new StackPanel { Spacing = 4 };
+            Grid.SetColumn(presets, 1);
+            root.Children.Add(presets);
+            AddPreset("Today", today => new Selection(today));
+            AddPreset("Yesterday", today => new Selection(today.AddDays(-1)));
+            AddPreset("Last 7 days", today => new Selection(today.AddDays(-6), today));
+            AddPreset("Last 30 days", today => new Selection(today.AddDays(-29), today));
+            AddPreset("This month", today => new Selection(new DateTime(today.Year, today.Month, 1), today));
+
+            var calendar = new CalendarView
+            {
+                SelectionMode = CalendarViewSelectionMode.Single,
+                FirstDayOfWeek = Windows.Globalization.DayOfWeek.Monday,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                MinHeight = 320,
+                CalendarIdentifier = "GregorianCalendar",
+                IsGroupLabelVisible = true,
+                IsTodayHighlighted = true
+            };
+            calendar.SelectedDatesChanged += CalendarSelectedDatesChanged;
+            root.Children.Add(calendar);
+
+            var caption = new TextBlock
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Style = resources["BodyStrongTextBlockStyle"] as Style
+            };
+            var captionBorder = new Border
+            {
+                Background = resources["CardBackgroundFillColorSecondaryBrush"] as Brush,
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8),
+                Child = caption
+            };
+            Grid.SetRow(captionBorder, 1);
+            Grid.SetColumnSpan(captionBorder, 2);
+            root.Children.Add(captionBorder);
+
+            var actions = new Grid { ColumnSpacing = 8 };
+            Grid.SetRow(actions, 2);
+            Grid.SetColumnSpan(actions, 2);
+            actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var cancel = new Button { Content = "Cancel", HorizontalAlignment = HorizontalAlignment.Stretch };
+            cancel.Click += (_, _) => popup.IsOpen = false;
+            actions.Children.Add(cancel);
+
+            var done = new Button
+            {
+                Content = "Done",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Style = resources["AccentButtonStyle"] as Style
+            };
+            done.Click += (_, _) => Apply(popup, _draft);
+            Grid.SetColumn(done, 1);
+            actions.Children.Add(done);
+            root.Children.Add(actions);
+
+            return (popup, calendar, caption);
+
+            void AddPreset(string label, Func<DateTime, Selection> getSelection)
+            {
+                var button = new Button
+                {
+                    Content = label,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0, 0, 0, 4)
                 };
-                _datePickerPopup.Child = scrollViewer;
-                
-                // Initialize date selection
-                var today = DateTime.Today;
-                _calendarView.SelectedDates.Add(new DateTimeOffset(today));
-                if (_dateText != null) _dateText.Text = "Today";
-                _selectedDate = today;
-                _isDateRangeSelected = false;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error creating date picker popup: {ex.Message}");
+                button.Click += (_, _) => Apply(popup, getSelection(DateTime.Today));
+                presets.Children.Add(button);
+                _presets.Add((button, getSelection));
             }
         }
 
-        /// <summary>
-        /// Handles the DayItemChanging event to customize calendar day items
-        /// </summary>
-        private void Calendar_DayItemChanging(CalendarView sender, CalendarViewDayItemChangingEventArgs args)
+        private void CalendarSelectedDatesChanged(CalendarView sender, CalendarViewSelectedDatesChangedEventArgs args)
         {
-            // In WinUI 3, we let the CalendarView handle the styling
+            if (args.AddedDates.Count == 0 || _view is not { } view)
+                return;
+
+            _draft = new Selection(args.AddedDates[0].Date);
+            RenderSelection(view.Caption, "MMM dd, yyyy");
         }
 
-        /// <summary>
-        /// Handles date selection changes in the calendar
-        /// </summary>
-        private void Calendar_SelectedDatesChanged(CalendarView sender, CalendarViewSelectedDatesChangedEventArgs args)
+        private void RenderSelection(TextBlock caption, string singleDateFormat)
         {
-            try
+            var today = DateTime.Today;
+            var resources = Application.Current.Resources;
+            var accent = resources["AccentButtonStyle"] as Style;
+            var normal = resources["DefaultButtonStyle"] as Style;
+            string? label = null;
+            foreach (var (button, getSelection) in _presets)
             {
-                // Reset button highlighting when manually selecting dates
-                ResetQuickSelectButtonStyles();
-                
-                if (sender.SelectedDates.Count > 0)
-                {
-                    // Get the selected date
-                    _selectedDate = sender.SelectedDates[0].DateTime;
-                    _isDateRangeSelected = false;
-                    
-                    // Update the date display
-                    if (_dateText != null)
-                        {
-                            var today = DateTime.Today;
-                            if (_selectedDate == today)
-                            {
-                            _dateText.Text = "Today";
-                                HighlightQuickSelectButton("Today");
-                            }
-                            else if (_selectedDate == today.AddDays(-1))
-                            {
-                            _dateText.Text = "Yesterday";
-                                HighlightQuickSelectButton("Yesterday");
-                            }
-                            else
-                            {
-                            _dateText.Text = _selectedDate.ToString("MMM dd, yyyy");
-                        }
-                    }
-                }
+                bool selected = label == null && getSelection(today) == _draft;
+                button.Style = selected ? accent : normal;
+                if (selected)
+                    label = (string)button.Content;
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in Calendar_SelectedDatesChanged: {ex.Message}");
-            }
+
+            caption.Text = label ?? (_draft.End is DateTime end
+                ? $"{_draft.Start:MMM dd} - {end:MMM dd}"
+                : _draft.Start.ToString(singleDateFormat));
         }
 
-        /// <summary>
-        /// Closes the date picker popup
-        /// </summary>
-        public void ClosePopup()
+        private void Apply(Popup popup, Selection selection)
         {
-            if (_datePickerPopup != null)
-            {
-                _datePickerPopup.IsOpen = false;
-            }
-        }
+            if (selection.End is DateTime end)
+                DateRangeSelected?.Invoke(this, (selection.Start, end));
+            else
+                SingleDateSelected?.Invoke(this, selection.Start);
 
-        /// <summary>
-        /// Highlights a quick select button based on its content
-        /// </summary>
-        private void HighlightQuickSelectButton(string buttonContent)
-        {
-            try
-            {
-                // Reset all buttons first
-                ResetQuickSelectButtonStyles();
-                
-                // Find the button by its content and highlight it
-                if (buttonContent == "Today" && _todayButton != null)
-                {
-                    _todayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                }
-                else if (buttonContent == "Yesterday" && _yesterdayButton != null)
-                {
-                    _yesterdayButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                }
-                else if (buttonContent == "Last 7 Days" && _last7DaysButton != null)
-                {
-                    _last7DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                }
-                else if (buttonContent == "Last 30 Days" && _last30DaysButton != null)
-                {
-                    _last30DaysButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                }
-                else if (buttonContent == "This Month" && _thisMonthButton != null)
-                {
-                    _thisMonthButton.Style = Application.Current.Resources["AccentButtonStyle"] as Style;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error highlighting button: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Resets the styles of all quick select buttons
-        /// </summary>
-        private void ResetQuickSelectButtonStyles()
-        {
-            try
-            {
-                if (_todayButton != null)
-                    _todayButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-                
-                if (_yesterdayButton != null)
-                    _yesterdayButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-                
-                if (_last7DaysButton != null)
-                    _last7DaysButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-                
-                if (_last30DaysButton != null)
-                    _last30DaysButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-                
-                if (_thisMonthButton != null)
-                    _thisMonthButton.Style = Application.Current.Resources["DefaultButtonStyle"] as Style;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error resetting button styles: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handler for Today quick select button
-        /// </summary>
-        private void QuickSelect_Today_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var today = DateTime.Today;
-                _selectedDate = today;
-                _isDateRangeSelected = false;
-                _selectedEndDate = null;
-                
-                // Update button styles
-                HighlightQuickSelectButton("Today");
-                
-                // Update calendar selection
-                if (_calendarView != null)
-                    {
-                    _calendarView.SelectedDates.Clear();
-                    _calendarView.SelectedDates.Add(new DateTimeOffset(today));
-                    }
-                    
-                if (_dateText != null)
-                    {
-                    _dateText.Text = "Today";
-                }
-                
-                // Apply the selection immediately (optional)
-                SingleDateSelected?.Invoke(this, today);
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Today_Click: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handler for Yesterday quick select button
-        /// </summary>
-        private void QuickSelect_Yesterday_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var yesterday = DateTime.Today.AddDays(-1);
-                _selectedDate = yesterday;
-                _isDateRangeSelected = false;
-                _selectedEndDate = null;
-                
-                // Update button styles
-                HighlightQuickSelectButton("Yesterday");
-                
-                // Update calendar selection
-                if (_calendarView != null)
-                    {
-                    _calendarView.SelectedDates.Clear();
-                    _calendarView.SelectedDates.Add(new DateTimeOffset(yesterday));
-                    }
-                    
-                if (_dateText != null)
-                    {
-                    _dateText.Text = "Yesterday";
-                }
-                
-                // Apply the selection immediately (optional)
-                SingleDateSelected?.Invoke(this, yesterday);
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Yesterday_Click: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handler for Last 7 Days quick select button
-        /// </summary>
-        private void QuickSelect_Last7Days_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var today = DateTime.Today;
-                var lastWeek = today.AddDays(-6); // 7 days including today
-                
-                // Extra validation to ensure dates are valid
-                if (lastWeek > today)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Invalid date range calculation - lastWeek ({lastWeek:yyyy-MM-dd}) is after today ({today:yyyy-MM-dd})");
-                    lastWeek = today.AddDays(-1); // Fallback to yesterday if calculation is wrong
-                }
-                
-                _selectedDate = lastWeek;
-                _selectedEndDate = today;
-                _isDateRangeSelected = true;
-                
-                // Update button styles
-                HighlightQuickSelectButton("Last 7 Days");
-                
-                // Update calendar selection and date display
-                if (_calendarView != null)
-                    {
-                        try
-                        {
-                            // WinUI 3 Calendar can't show range selection visually,
-                            // so we just select the start date
-                        _calendarView.SelectedDates.Clear();
-                        _calendarView.SelectedDates.Add(new DateTimeOffset(lastWeek));
-                        }
-                        catch (Exception calEx)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error updating calendar selection: {calEx.Message}");
-                        }
-                    }
-                    
-                if (_dateText != null)
-                    {
-                    _dateText.Text = "Last 7 days";
-                }
-                
-                // Apply the selection immediately
-                DateRangeSelected?.Invoke(this, (lastWeek, today));
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Last7Days_Click: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                
-                // Recover from error - close popup without changing selection
-                ClosePopup();
-            }
-        }
-
-        /// <summary>
-        /// Handler for Last 30 Days quick select button
-        /// </summary>
-        private void QuickSelect_Last30Days_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var today = DateTime.Today;
-                var startDate = today.AddDays(-29); // 30 days including today
-
-                _selectedDate = startDate;
-                _selectedEndDate = today;
-                _isDateRangeSelected = true;
-
-                HighlightQuickSelectButton("Last 30 Days");
-
-                // Update calendar and date display
-                if (_calendarView != null)
-                {
-                    _calendarView.SelectedDates.Clear();
-                    _calendarView.SelectedDates.Add(new DateTimeOffset(startDate));
-                }
-
-                if (_dateText != null)
-                {
-                    _dateText.Text = "Last 30 days";
-                }
-
-                DateRangeSelected?.Invoke(this, (startDate, today));
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_Last30Days_Click: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handler for This Month quick select button
-        /// </summary>
-        private void QuickSelect_ThisMonth_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var today = DateTime.Today;
-                var startOfMonth = new DateTime(today.Year, today.Month, 1);
-
-                _selectedDate = startOfMonth;
-                _selectedEndDate = today;
-                _isDateRangeSelected = true;
-
-                HighlightQuickSelectButton("This Month");
-
-                // Update calendar and date display
-                if (_calendarView != null)
-                {
-                    _calendarView.SelectedDates.Clear();
-                    _calendarView.SelectedDates.Add(new DateTimeOffset(startOfMonth));
-                }
-
-                if (_dateText != null)
-                {
-                    _dateText.Text = "This month";
-                }
-
-                DateRangeSelected?.Invoke(this, (startOfMonth, today));
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in QuickSelect_ThisMonth_Click: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handler for Cancel button click
-        /// </summary>
-        private void DatePickerCancel_Click(object sender, RoutedEventArgs e)
-        {
-            // Close the popup without applying changes
-            ClosePopup();
-            PopupClosed?.Invoke(this, EventArgs.Empty);
-        }
-
-        /// <summary>
-        /// Handler for Done button click
-        /// </summary>
-        private void DatePickerDone_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                // Apply the current selection and close the popup
-                if (_isDateRangeSelected && _selectedEndDate.HasValue)
-                {
-                    DateRangeSelected?.Invoke(this, (_selectedDate, _selectedEndDate.Value));
-                }
-                else
-                {
-                    SingleDateSelected?.Invoke(this, _selectedDate);
-                }
-                
-                ClosePopup();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in DatePickerDone_Click: {ex.Message}");
-            }
+            popup.IsOpen = false;
         }
     }
-} 
+}
