@@ -111,7 +111,16 @@ namespace ScreenTimeTracker.Helpers
 
                     if (end < start) end = start; // safety guard
 
-                    for (int hr = start.Hour; hr <= end.Hour; hr++)
+                    int lastHour = end.Hour;
+                    if (end.Date > start.Date)
+                    {
+                        if (end.TimeOfDay != TimeSpan.Zero || end.Date != start.Date.AddDays(1))
+                            continue;
+
+                        lastHour = 23;
+                    }
+
+                    for (int hr = start.Hour; hr <= lastHour; hr++)
                     {
                         var slotStart      = start.Date.AddHours(hr);
                         var slotEnd        = slotStart.AddHours(1);

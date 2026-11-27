@@ -24,8 +24,10 @@ namespace ScreenTimeTracker.Services
         private long _observation;
         private long _lastAppliedForegroundObservation;
         private long _lastAppliedIdleObservation;
+        private DateTime _lastRecordObservation;
         private bool _isIdle = false;
         private AppUsageRecord? _idleRecord;
+        private static readonly TimeSpan MaximumUnobservedInterval = TimeSpan.FromHours(24);
 
 #if !UNIT_TEST
         // ---------- WinEvent hook fields ----------
@@ -317,36 +319,43 @@ namespace ScreenTimeTracker.Services
         private void FinalizeRecord(AppUsageRecord record, DateTime endTime)
         {
             var startTime = FinalizeCompletedDays(record, endTime);
-            FinalizeSegment(record, startTime, endTime);
-        }
+            if (startTime != record.StartTime && startTime == endTime) return;
 
-        private void FinalizeSegment(AppUsageRecord record, DateTime startTime, DateTime endTime)
-        {
+            var duration = FinalizeSegment(record, startTime, endTime);
             var ended = record.CreateSnapshot();
             ended.StartTime = startTime;
             ended.Date = startTime.Date;
             ended.IsFocused = false;
             ended.EndTime = endTime;
-            ended._accumulatedDuration = TimeSpan.Zero;
-            if (UsageSlice.TryCreate(
+            ended._accumulatedDuration = duration;
+            UsageRecordUpdated?.Invoke(this, ended);
+        }
+
+        private TimeSpan FinalizeSegment(AppUsageRecord record, DateTime startTime, DateTime endTime)
+        {
+            if (!UsageSlice.TryCreate(
                 record.ProcessName,
                 record.ApplicationName,
                 record.WindowTitle,
                 startTime,
                 endTime,
-                out var slice) && slice != null)
-            {
-                ended._accumulatedDuration = slice.Duration;
-                if (slice.Duration.TotalMilliseconds >= 1)
-                    UsageSliceFinalized?.Invoke(this, slice);
-            }
+                out var slice) || slice == null)
+                return TimeSpan.Zero;
 
-            UsageRecordUpdated?.Invoke(this, ended);
+            if (slice.Duration.TotalMilliseconds >= 1)
+                UsageSliceFinalized?.Invoke(this, slice);
+            return slice.Duration;
         }
 
         private DateTime FinalizeCompletedDays(AppUsageRecord record, DateTime now)
         {
             var start = record.StartTime;
+            if (start.Date < now.Date && now - _lastRecordObservation > MaximumUnobservedInterval)
+            {
+                FinalizeSegment(record, start, _lastRecordObservation);
+                return now;
+            }
+
             while (start.Date < now.Date)
             {
                 var midnight = start.Date.AddDays(1);
@@ -388,6 +397,7 @@ namespace ScreenTimeTracker.Services
             }
 
             if (_isIdle) record._accumulatedDuration = now - start;
+            _lastRecordObservation = now;
             PublishUsageRecord(record);
         }
 
@@ -421,6 +431,7 @@ namespace ScreenTimeTracker.Services
 
                 if (_idleRecord == null)
                 {
+                    _lastRecordObservation = now;
                     _idleRecord = new AppUsageRecord
                     {
                         ProcessName = "Idle / Away",
@@ -451,6 +462,7 @@ namespace ScreenTimeTracker.Services
                 _currentRecord = currentRecord;
                 _idleRecord = idleRecord;
                 _isIdle = idleRecord != null;
+                _lastRecordObservation = (idleRecord ?? currentRecord)?.StartTime ?? default;
                 IsTracking = isTracking;
             }
         }
@@ -551,10 +563,14 @@ namespace ScreenTimeTracker.Services
                     _currentRecord.ProcessId   == processId        &&
                     _currentRecord.WindowTitle == windowTitle)
                 {
-                    if (!_currentRecord.IsFocused)
+                    if (!_currentRecord.IsFocused || _currentRecord.StartTime.Date < now.Date)
                     {
                         _currentRecord.SetFocus(true);
-                        PublishUsageRecord(_currentRecord);
+                        UpdateLiveRecord(now);
+                    }
+                    else
+                    {
+                        _lastRecordObservation = now;
                     }
                     return;
                 }
@@ -576,6 +592,7 @@ namespace ScreenTimeTracker.Services
                     Date           = now.Date,
                     ApplicationName= processName
                 };
+                _lastRecordObservation = now;
                 ApplicationProcessingHelper.ProcessApplicationRecord(_currentRecord);
                 _currentRecord.SetFocus(true);
                 PublishUsageRecord(_currentRecord);
