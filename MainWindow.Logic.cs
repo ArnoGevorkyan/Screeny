@@ -136,30 +136,6 @@ namespace ScreenTimeTracker
             }
         }
 
-        /// <summary>
-        /// Called from App.OnSuspending to pause tracking and save data.
-        /// </summary>
-        public void PrepareForSuspend()
-        {
-            try
-            {
-                if (_viewModel.SelectedDate > DateTime.Today)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Future date detected ({_viewModel.SelectedDate:yyyy-MM-dd}), resetting to today.");
-                    _viewModel.SelectedDate = DateTime.Today;
-                }
-
-                if (_trackingService != null && _trackingService.IsTracking)
-                {
-                    _trackingService?.StopTracking();
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"ERROR in PrepareForSuspend: {ex.Message}");
-            }
-        }
-
         private void DoAutoSave()
         {
             try
@@ -199,27 +175,31 @@ namespace ScreenTimeTracker
             }
         }
 
-        // ---------------- Tracking control logic ----------------
-        private void StartTracking()
+        [Flags]
+        private enum TrackingPauseReason
+        {
+            None = 0,
+            DisplayOff = 1,
+            AwayMode = 2,
+            Suspended = 4,
+            Resetting = 8,
+            Exiting = 16
+        }
+
+        private bool _trackingRequested;
+        private TrackingPauseReason _trackingPauseReasons;
+
+        private void SetTrackingRequested(bool requested)
         {
             ThrowIfDisposed();
+            _trackingRequested = requested;
+            ToolTipService.SetToolTip(TrackingStatusButton, requested ? "Pause tracking" : "Resume tracking");
+
             try
             {
-                _trackingService?.StartTracking();
-
-                // Start/Stop buttons are collapsed; tracking indicator handles state.
-
-                // Start unified timer
-                _updateTimer.Start();
-                _isChartDirty = true; // force initial chart render
-
-                UpdateUsageChart();
-                UpdateSummaryTab(_usageRecords.ToList());
-
-                // Sync ViewModel state
-                _viewModel.IsTracking = true;
+                UpdateTrackingState();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (requested)
             {
                 System.Diagnostics.Debug.WriteLine($"Error starting tracking: {ex.Message}");
                 if (!_disposed && Content?.XamlRoot != null)
@@ -234,31 +214,48 @@ namespace ScreenTimeTracker
                     _ = dialog.ShowAsync();
                 }
             }
-            finally
-            {
-                // Tracking indicator now handled via data bindings (no imperative update needed)
-            }
         }
 
-        private void StopTracking()
+        private void SetTrackingPauseReason(TrackingPauseReason reason, bool paused)
         {
-            ThrowIfDisposed();
-            _trackingService?.StopTracking();
+            if (_disposed) return;
 
-            _viewModel.IsTracking = false;
+            if (paused) _trackingPauseReasons |= reason;
+            else _trackingPauseReasons &= ~reason;
 
-            // Unfocus all UI records
-            foreach (var record in _usageRecords) record.SetFocus(false);
+            UpdateTrackingState();
+        }
 
-            // Stop timer
-            _updateTimer.Stop();
+        private void UpdateTrackingState()
+        {
+            bool shouldTrack = _trackingRequested && _trackingPauseReasons == TrackingPauseReason.None;
+            if (shouldTrack == _trackingService.IsTracking) return;
 
-            CleanupSystemProcesses();
+            try
+            {
+                if (shouldTrack) _trackingService.StartTracking();
+                else _trackingService.StopTracking();
+            }
+            finally
+            {
+                bool isTracking = _trackingService.IsTracking;
+                if (isTracking)
+                {
+                    _updateTimer.Start();
+                }
+                else
+                {
+                    _updateTimer.Stop();
+                    foreach (var record in _usageRecords) record.SetFocus(false);
+                }
 
-            // Update summary and chart
-            UpdateSummaryTab(_usageRecords.ToList());
-            UpdateUsageChart();
-            // Tracking indicator handled via binding; no imperative call.
+                _viewModel.IsTracking = isTracking;
+            }
+
+            if ((_trackingPauseReasons & (TrackingPauseReason.Resetting | TrackingPauseReason.Exiting)) != 0) return;
+
+            if (!_trackingService.IsTracking) CleanupSystemProcesses();
+            DoChartRefresh();
         }
 
         // Helper to retrieve current live records for today
