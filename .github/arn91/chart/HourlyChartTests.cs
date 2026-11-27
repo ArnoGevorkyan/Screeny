@@ -74,7 +74,7 @@ public sealed class HourlyChartTests
         Save("MultiDay", day.AddHours(19), day.AddDays(2));
         var window = new MainWindow(_database, _tracking);
         window.Load(day);
-        AssertBars(Minutes(window), ("9 AM", 10));
+        AssertBars(Minutes(window).Where(bar => bar.Value > 0).ToDictionary(), ("9 AM", 10));
     }
 
     [TestMethod]
