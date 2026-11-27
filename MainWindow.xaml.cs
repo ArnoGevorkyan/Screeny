@@ -91,6 +91,9 @@ namespace ScreenTimeTracker
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetDpiForWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
         private const int GWLP_WNDPROC = -4;
 
         // Fields for power notification handles
@@ -832,6 +835,7 @@ namespace ScreenTimeTracker
 
             _appWindow.Show();
             Activate();
+            SetForegroundWindow(_hWnd);
         }
 
         // Event Handlers for Tray Icon Clicks
