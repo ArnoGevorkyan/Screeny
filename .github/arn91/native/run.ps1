@@ -17,7 +17,7 @@ function Wait-For([scriptblock]$condition, [string]$what, [int]$ms = 8000) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
         $result = & $condition
-        if ($result) { return $result }
+        if ($null -ne $result -and $result -ne $false -and $result -ne [IntPtr]::Zero) { return $result }
         Start-Sleep -Milliseconds 110
     } while ($timer.ElapsedMilliseconds -lt $ms)
     throw "Did not observe $what"
@@ -35,7 +35,11 @@ function Rows {
 $app = $alpha = $bravo = $null
 try {
     $app = Start-Process $Exe -WorkingDirectory (Split-Path $Exe) -PassThru
-    $window = Wait-For { $app.Refresh(); if ($app.MainWindowHandle) { $app.MainWindowHandle } } 'Screeny HWND' 18000
+    $window = Wait-For {
+        $app.Refresh()
+        if ($app.HasExited) { throw "Screeny exited before window: $($app.ExitCode)" }
+        if ($app.MainWindowHandle -ne [IntPtr]::Zero) { $app.MainWindowHandle }
+    } 'owned Screeny HWND' 18000
     $root = [Windows.Automation.AutomationElement]::FromHandle($window)
     if ($root.Current.ProcessId -ne $app.Id) { throw 'Application window ownership mismatch' }
     $ae = [Windows.Automation.AutomationElement]
