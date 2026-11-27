@@ -644,7 +644,8 @@ namespace ScreenTimeTracker.Services
                                 string processName = reader.GetString(reader.GetOrdinal("process_name"));
                                 var dbStartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time")));
                                 DateTime? dbEndTime = reader.IsDBNull(reader.GetOrdinal("end_time")) ? null : DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
-                                long durationMs = !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0;
+                                var duration = AppUsageRecord.BoundVisitDuration(TimeSpan.FromMilliseconds(
+                                    !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0));
                                 bool isFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1;
                                 DateTime? lastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : null;
 
@@ -655,14 +656,14 @@ namespace ScreenTimeTracker.Services
                                         ProcessName = processName,
                                         StartTime = dbStartTime,
                                         EndTime = dbEndTime,
-                                        _accumulatedDuration = TimeSpan.FromMilliseconds(durationMs)
+                                        _accumulatedDuration = duration
                                     });
                                 }
 
                                 if (processGroups.TryGetValue(processName, out var existingRecord))
                                 {
                                     // Add the duration to the existing record
-                                    existingRecord._accumulatedDuration += TimeSpan.FromMilliseconds(durationMs);
+                                    existingRecord._accumulatedDuration += duration;
                                     // How to handle IsFocused and LastUpdated for merged records? Take the latest?
                                     if (lastUpdated.HasValue && (!existingRecord.LastUpdated.HasValue || lastUpdated.Value > existingRecord.LastUpdated.Value))
                                     {
@@ -682,6 +683,7 @@ namespace ScreenTimeTracker.Services
                                     var record = new AppUsageRecord
                                     {
                                         Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        IsAggregate = true,
                                         ProcessName = processName,
                                         ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
                                         Date = date, // Use date for the Date field
@@ -691,7 +693,7 @@ namespace ScreenTimeTracker.Services
                                         LastUpdated = lastUpdated
                                     };
                                     
-                                    record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
+                                    record._accumulatedDuration = duration;
                                     
                                     // Add to our dictionary
                                     processGroups[processName] = record;
@@ -740,13 +742,14 @@ namespace ScreenTimeTracker.Services
                 const string sql = @"
                     SELECT
                         process_name,
-                        SUM(total_duration_ms) AS total_ms
-                    FROM vw_daily_app_usage
+                        SUM(MIN(duration, @MaxVisitDurationMs)) AS total_ms
+                    FROM app_usage
                     WHERE date >= @StartDate AND date <= @EndDate
                     GROUP BY process_name;";
 
                 using (var cmd = new SqliteCommand(sql, connection))
                 {
+                    cmd.Parameters.AddWithValue("@MaxVisitDurationMs", (long)AppUsageRecord.MaxVisitDuration.TotalMilliseconds);
                     cmd.Parameters.AddWithValue("@StartDate", startDateString);
                     cmd.Parameters.AddWithValue("@EndDate",   endDateString);
 
@@ -1032,6 +1035,7 @@ namespace ScreenTimeTracker.Services
             var dbRecords = dbReport.Select(pair => new AppUsageRecord
             {
                 ProcessName = pair.ProcessName,
+                IsAggregate = true,
                 _accumulatedDuration = pair.TotalDuration,
                 Date = startDate,
                 StartTime = startDate
@@ -1161,6 +1165,7 @@ namespace ScreenTimeTracker.Services
                     var newRecord = new AppUsageRecord
                     {
                         ProcessName = processName,
+                        IsAggregate = true,
                         ApplicationName = processName,
                         _accumulatedDuration = liveRec.Duration,
                         Date = liveRec.Date,
@@ -1207,6 +1212,7 @@ namespace ScreenTimeTracker.Services
                     var newRecord = new AppUsageRecord
                     {
                         ProcessName = processName,
+                        IsAggregate = true,
                         ApplicationName = processName,
                         _accumulatedDuration = rec.Duration,
                         Date = rec.Date != default ? rec.Date : (fallbackDate ?? DateTime.Today),
