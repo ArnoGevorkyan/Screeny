@@ -46,15 +46,24 @@ namespace ScreenTimeTracker.Services
 
                 Debug.WriteLine($"Database path: {_dbPath}");
 
-                // Check integrity BEFORE opening connection
-                if (File.Exists(_dbPath) && !CheckDatabaseIntegrity(_dbPath))
+                var databaseExists = DatabaseFileExists(_dbPath);
+                var hadSidecars = HasDatabaseSidecars();
+                var createDatabase = !databaseExists || IsDatabaseCorrupt();
+                if (createDatabase)
                 {
-                    // Handle corruption (e.g., backup and create new)
-                    HandleCorruptedDatabase(_dbPath);
-                    // After handling, initialization will create a new DB file
+                    if (hadSidecars || HasDatabaseSidecars())
+                        throw new IOException("Cannot replace or create a database while its journal files are present.");
+
+                    if (databaseExists)
+                    {
+                        var backupPath = _dbPath + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmss");
+                        File.Move(_dbPath, backupPath);
+                        Debug.WriteLine($"Moved corrupted database to: {backupPath}");
+                    }
                 }
 
-                var connectionString = CreateConnectionString(_dbPath);
+                var mode = createDatabase ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite;
+                var connectionString = CreateConnectionString(_dbPath, mode);
                 Debug.WriteLine($"Using connection string: {connectionString}");
 
                 _connection = new SqliteConnection(connectionString);
@@ -71,16 +80,15 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        // Helper to create connection string
-        private string CreateConnectionString(string dataSource)
+        private static string CreateConnectionString(string dataSource, SqliteOpenMode mode, bool pooling = true)
         {
-             return new SqliteConnectionStringBuilder
-             {
-                 DataSource = dataSource,
-                 Mode = SqliteOpenMode.ReadWriteCreate,
-                 Cache = SqliteCacheMode.Shared,
-                 Pooling = true // Pooling can be beneficial
-             }.ToString();
+            return new SqliteConnectionStringBuilder
+            {
+                DataSource = dataSource,
+                Mode = mode,
+                Cache = SqliteCacheMode.Shared,
+                Pooling = pooling
+            }.ToString();
         }
 
         private SqliteConnection CreateConnection()
@@ -96,72 +104,53 @@ namespace ScreenTimeTracker.Services
             command.ExecuteNonQuery();
         }
 
-        // New method to check DB integrity using PRAGMA
-        private bool CheckDatabaseIntegrity(string dbPath)
+        private static bool DatabaseFileExists(string path)
         {
-            Debug.WriteLine($"Checking database integrity for: {dbPath}");
-            if (!File.Exists(dbPath)) return true; // No file, considered intact
-
-            // Use a temporary connection for the check
-            var checkConnectionString = new SqliteConnectionStringBuilder(CreateConnectionString(dbPath))
+            try
             {
-                Pooling = false
-            }.ToString();
-            using (var checkConnection = new SqliteConnection(checkConnectionString))
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
             {
-                try
-                {
-                    OpenConnection(checkConnection);
-                    using (var command = checkConnection.CreateCommand())
-                    {
-                        command.CommandText = "PRAGMA integrity_check;";
-                        var result = command.ExecuteScalar()?.ToString();
-                        Debug.WriteLine($"PRAGMA integrity_check result: {result}");
-                        // Integrity check returns "ok" if the database is valid
-                        return result != null && result.Equals("ok", StringComparison.OrdinalIgnoreCase);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Error during integrity check: {ex.Message}");
-                    SqliteConnection.ClearPool(checkConnection);
-                    return false; // Assume corruption if check fails
-                }
-                // No need for finally block, 'using' handles disposal/closing
+                return false;
             }
         }
 
-        // New method to handle corrupted database
-        private void HandleCorruptedDatabase(string dbPath)
+        private bool HasDatabaseSidecars() =>
+            DatabaseFileExists(_dbPath + "-wal") ||
+            DatabaseFileExists(_dbPath + "-shm") ||
+            DatabaseFileExists(_dbPath + "-journal");
+
+        private bool IsDatabaseCorrupt()
         {
-            string backupPath = dbPath + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmss");
-            Debug.WriteLine($"Database integrity check failed! Moving corrupted file to: {backupPath}");
             try
             {
-                SqliteConnection.ClearAllPools();
-                File.Move(dbPath, backupPath);
-                Debug.WriteLine("Successfully moved corrupted database file.");
-                // Optionally: Notify user about the corruption and reset
+                return IntegrityCheckReportsCorruption(SqliteOpenMode.ReadOnly);
             }
-            catch (IOException ioEx)
+            catch (SqliteException ex) when (ex.SqliteExtendedErrorCode == raw.SQLITE_READONLY_ROLLBACK)
             {
-                 Debug.WriteLine($"Error moving corrupted database file (IOException): {ioEx.Message}");
-                 // Attempt to delete if move failed (e.g., file locked)
-                 try
-                 {
-                     File.Delete(dbPath);
-                     Debug.WriteLine("Successfully deleted corrupted database file after move failed.");
-                 }
-                 catch (Exception delEx)
-                 {
-                     Debug.WriteLine($"CRITICAL ERROR: Failed to move AND delete corrupted database file: {delEx.Message}");
-                     // At this point, initialization will fail into degraded mode.
-                 }
+                return IntegrityCheckReportsCorruption(SqliteOpenMode.ReadWrite);
             }
-            catch (Exception ex)
+        }
+
+        private bool IntegrityCheckReportsCorruption(SqliteOpenMode mode)
+        {
+            using var checkConnection = new SqliteConnection(CreateConnectionString(_dbPath, mode, pooling: false));
+            try
             {
-                Debug.WriteLine($"CRITICAL ERROR: Failed to move corrupted database file: {ex.Message}");
-                // Initialization might fail into degraded mode.
+                OpenConnection(checkConnection);
+                using var command = checkConnection.CreateCommand();
+                command.CommandText = "PRAGMA integrity_check(1);";
+                var result = command.ExecuteScalar() as string
+                    ?? throw new InvalidDataException("Database integrity check returned no result.");
+                Debug.WriteLine($"PRAGMA integrity_check result: {result}");
+                return !result.Equals("ok", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode is raw.SQLITE_CORRUPT or raw.SQLITE_NOTADB)
+            {
+                Debug.WriteLine($"Database integrity check confirmed corruption: {ex.Message}");
+                return true;
             }
         }
 

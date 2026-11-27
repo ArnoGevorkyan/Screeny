@@ -148,11 +148,9 @@ namespace ScreenTimeTracker
 
             // Initialize services
             _databaseService = new DatabaseService();
-            // Pass DatabaseService to WindowTrackingService
-            if (_databaseService == null) 
+            if (!_databaseService.IsDatabaseInitialized())
             {
-                // Handle the case where database service failed to initialize (optional)
-                 throw new InvalidOperationException("DatabaseService could not be initialized.");
+                _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
             }
             _trackingService = new WindowTrackingService();
 
