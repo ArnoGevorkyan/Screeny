@@ -28,6 +28,7 @@ namespace ScreenTimeTracker
         private readonly UsageSliceWriter _sliceWriter;
         private ObservableCollection<AppUsageRecord> _usageRecords;
         private bool _disposed;
+        private bool _exitCommitted;
         private bool _startupInitialized = false;
         private bool _iconsRefreshedOnce = false;
         
@@ -90,6 +91,9 @@ namespace ScreenTimeTracker
         // Add Win32 DPI helper – returns the DPI for the window (96 = 100 %)
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetDpiForWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         private const int GWLP_WNDPROC = -4;
 
@@ -818,6 +822,23 @@ namespace ScreenTimeTracker
             }
         }
         
+        internal void ShowFromRelaunch()
+        {
+            if (_disposed || _exitCommitted)
+            {
+                return;
+            }
+
+            if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
+            {
+                presenter.Restore();
+            }
+
+            _appWindow.Show();
+            Activate();
+            SetForegroundWindow(_hWnd);
+        }
+
         // Event Handlers for Tray Icon Clicks
         private void TrayIcon_ShowClicked(object? sender, EventArgs e)
         {
@@ -877,6 +898,7 @@ namespace ScreenTimeTracker
                         if (choice != ContentDialogResult.Primary || _disposed) return;
                     }
 
+                    _exitCommitted = true;
                     Dispose();
                     Application.Current.Exit();
                 }
@@ -888,6 +910,7 @@ namespace ScreenTimeTracker
                 {
                     if (!_disposed)
                     {
+                        _exitCommitted = false;
                         SetTrackingPauseReason(TrackingPauseReason.Exiting, false);
                         if (!_viewModel.IsTracking) DoChartRefresh();
                     }

@@ -34,7 +34,7 @@ namespace ScreenTimeTracker.Services
                 """)
         ];
         private readonly string _dbPath;
-        private static string DefaultDatabasePath => Path.Combine(
+        internal static string DefaultDatabasePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ScreenTimeTracker", "screentime.db");
         private readonly SqliteConnection _connection;
