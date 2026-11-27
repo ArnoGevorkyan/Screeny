@@ -1,7 +1,5 @@
 using System;
-using System.Linq;
 using System.Runtime.InteropServices;
-using Windows.Automation;
 
 public static class DiagnosticsProbe
 {
@@ -25,29 +23,5 @@ public static class DiagnosticsProbe
             return (int)pid;
         }
         finally { Marshal.ReleaseComObject(manager); }
-    }
-
-    public static AutomationElement Error(int pid)
-    {
-        return AutomationElement.RootElement.FindFirst(TreeScope.Children,
-            new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid),
-                new PropertyCondition(AutomationElement.NameProperty, "Critical Application Error")));
-    }
-
-    public static string Contents(AutomationElement error)
-    {
-        return string.Join("\n", error.FindAll(TreeScope.Descendants, Condition.TrueCondition)
-            .Cast<AutomationElement>().Select(item => item.Current.Name));
-    }
-
-    public static bool Dismiss(AutomationElement error)
-    {
-        var ok = error.FindFirst(TreeScope.Descendants,
-            new AndCondition(new PropertyCondition(AutomationElement.NameProperty, "OK"),
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)));
-        object invoke;
-        if (ok == null || !ok.TryGetCurrentPattern(InvokePattern.Pattern, out invoke)) return false;
-        ((InvokePattern)invoke).Invoke();
-        return true;
     }
 }

@@ -7,7 +7,8 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or !$env:RUNNER_TEMP -or ![Environment]::Is6
 }
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,WindowsBase
 Add-Type -Path "$PSScriptRoot/WindowProbe.cs"
-Add-Type -Path "$PSScriptRoot/Native.cs" -ReferencedAssemblies ('System.Core', [Windows.Automation.AutomationElement].Assembly.Location, [Windows.Automation.ControlType].Assembly.Location, [Windows.Point].Assembly.Location)
+Add-Type -Path "$PSScriptRoot/Native.cs"
+
 $marker = 'ARN94_SYNTHETIC_812f678dbca14b5fad357a994f68d6d0'
 $local = [Environment]::GetFolderPath('LocalApplicationData')
 $scratch = Join-Path $env:RUNNER_TEMP $marker
@@ -87,14 +88,24 @@ function Check-Safe([string]$text) {
 function Check-Fault([string]$target, [bool]$logged) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $app = Launch $target $marker
-    $dialog = Wait-For { [DiagnosticsProbe]::Error($app.Id) } 'one fatal error dialog'
-    $text = [DiagnosticsProbe]::Contents($dialog)
+    $ae = [Windows.Automation.AutomationElement]
+    $dialog = Wait-For {
+        $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new(
+            [Windows.Automation.PropertyCondition]::new($ae::ProcessIdProperty, $app.Id),
+            [Windows.Automation.PropertyCondition]::new($ae::NameProperty, 'Critical Application Error')))
+    } 'one fatal error dialog'
+    $items = $dialog.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+    $text = ($items | ForEach-Object { $_.Current.Name }) -join "`n"
     Check-Safe $text
     Check ($text -match 'The application failed to start properly\.' -and $text -match 'Error code: (0x[0-9A-F]{8})') 'Fatal dialog lost its English headline or HRESULT'
     $code = $Matches[1]
     $status = if ($logged) { 'See app_log.txt in local app data for details.' } else { 'No diagnostic entry was saved.' }
     Check ($text.Contains($status)) 'Fatal dialog misstated file logging result'
-    Check ([DiagnosticsProbe]::Dismiss($dialog)) 'Unable to dismiss the fatal dialog'
+    $ok = $dialog.FindFirst([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.AndCondition]::new(
+        [Windows.Automation.PropertyCondition]::new($ae::NameProperty, 'OK'),
+        [Windows.Automation.PropertyCondition]::new($ae::ControlTypeProperty, [Windows.Automation.ControlType]::Button)))
+    Check $ok 'No OK button in fatal dialog'
+    $ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
     Check ($app.WaitForExit(5000) -and $app.ExitCode -eq 1) 'Fatal dialog did not exit once with code 1'
     if ($logged) {
         $log = Log-Text

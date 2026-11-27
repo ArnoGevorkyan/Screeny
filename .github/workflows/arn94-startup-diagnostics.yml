@@ -64,4 +64,4 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $exe = (Resolve-Path 'product/bin/x64/Release/net10.0-windows10.0.22621.0/win-x64/Screeny.exe').Path
-          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Sta -File verify/.github/arn94/run.ps1 -Case $env:CASE -Mode $env:MODE -Exe $exe
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Mta -File verify/.github/arn94/run.ps1 -Case $env:CASE -Mode $env:MODE -Exe $exe
