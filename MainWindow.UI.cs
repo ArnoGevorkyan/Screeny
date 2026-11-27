@@ -827,31 +827,45 @@ namespace ScreenTimeTracker
         // Service boundary handler: persists finalized immutable slices from tracking service.
         private void TrackingService_UsageSliceFinalized(object? sender, UsageSlice slice)
         {
+            if (_databaseService == null || slice == null) return;
+
+            PersistenceResult result;
             try
             {
-                if (_databaseService != null && slice != null)
-                {
-                    var result = _databaseService.SaveSliceWithResult(slice);
-                    if (result == PersistenceResult.Saved || result == PersistenceResult.DuplicateIgnored)
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.Healthy;
-                    }
-                    else if (result == PersistenceResult.RetryableFailure)
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.RetryableIssue;
-                        System.Diagnostics.Debug.WriteLine("Usage slice persistence was delayed by a retryable database error.");
-                    }
-                    else
-                    {
-                        _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
-                        System.Diagnostics.Debug.WriteLine("Usage slice persistence failed with a fatal database error.");
-                    }
-                }
+                result = _databaseService.SaveSliceWithResult(slice);
             }
             catch (Exception ex)
             {
-                _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
+                result = PersistenceResult.FatalFailure;
                 System.Diagnostics.Debug.WriteLine($"Error saving usage slice from service: {ex.Message}");
+            }
+
+            var health = result switch
+            {
+                PersistenceResult.Saved or PersistenceResult.DuplicateIgnored => PersistenceHealthStatus.Healthy,
+                PersistenceResult.RetryableFailure => PersistenceHealthStatus.RetryableIssue,
+                _ => PersistenceHealthStatus.FatalIssue
+            };
+
+            try
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (_disposed) return;
+
+                    try
+                    {
+                        _viewModel.PersistenceHealth = health;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error notifying persistence health: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error queuing persistence health: {ex.Message}");
             }
         }
     }
