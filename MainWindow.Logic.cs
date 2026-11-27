@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using ScreenTimeTracker.Models;
 using System.Linq;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using System.Collections.Generic;
 using ScreenTimeTracker.Services;
@@ -233,7 +234,16 @@ namespace ScreenTimeTracker
 
         private void UpdateTrackingState()
         {
-            bool shouldTrack = _trackingRequested && _trackingPauseReasons == TrackingPauseReason.None;
+            bool trackingBlocked = _trackingPauseReasons != TrackingPauseReason.None;
+            AutomationProperties.SetName(TrackingStatusButton, (_trackingRequested, trackingBlocked) switch
+            {
+                (true, false) => "Pause tracking",
+                (false, false) => "Resume tracking",
+                (true, true) => "Cancel pending tracking resume",
+                (false, true) => "Resume tracking when available"
+            });
+
+            bool shouldTrack = _trackingRequested && !trackingBlocked;
             if (shouldTrack == _trackingService.IsTracking) return;
 
             try
