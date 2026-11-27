@@ -17,7 +17,7 @@
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
   </ItemGroup>
   <Target Name="IncludePortableSources" BeforeTargets="CoreCompile">
-    <Exec Command="$(PythonCommand) &quot;$(MSBuildProjectDirectory)/extract.py&quot; &quot;$(Screeny)&quot; &quot;$(IntermediateOutputPath)&quot;" />
+    <Exec Command="$(PythonCommand) &quot;$(MSBuildProjectDirectory)/extract.py&quot; &quot;$(Screeny)&quot; &quot;$(IntermediateOutputPath).&quot;" />
     <ItemGroup>
       <Compile Include="$(IntermediateOutputPath)/DatabaseService.cs;$(IntermediateOutputPath)/MainWindowChart.cs" />
     </ItemGroup>
