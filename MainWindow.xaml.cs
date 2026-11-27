@@ -28,6 +28,7 @@ namespace ScreenTimeTracker
         private readonly UsageSliceWriter _sliceWriter;
         private ObservableCollection<AppUsageRecord> _usageRecords;
         private bool _disposed;
+        private bool _exitCommitted;
         private bool _startupInitialized = false;
         private bool _iconsRefreshedOnce = false;
         
@@ -823,7 +824,7 @@ namespace ScreenTimeTracker
         
         internal void ShowFromRelaunch()
         {
-            if (_disposed || (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0)
+            if (_disposed || _exitCommitted)
             {
                 return;
             }
@@ -897,6 +898,7 @@ namespace ScreenTimeTracker
                         if (choice != ContentDialogResult.Primary || _disposed) return;
                     }
 
+                    _exitCommitted = true;
                     Dispose();
                     Application.Current.Exit();
                 }
@@ -908,6 +910,7 @@ namespace ScreenTimeTracker
                 {
                     if (!_disposed)
                     {
+                        _exitCommitted = false;
                         SetTrackingPauseReason(TrackingPauseReason.Exiting, false);
                         if (!_viewModel.IsTracking) DoChartRefresh();
                     }
