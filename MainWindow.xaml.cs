@@ -919,11 +919,14 @@ namespace ScreenTimeTracker
                 _trackingService?.StopTracking();
                 bool ok = _databaseService?.WipeDatabase() ?? false;
 
-                // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
-                _usageRecords?.Clear();
-                _viewModel?.AggregatedRecords?.Clear();
-                UpdateUsageChart();
-                UpdateSummaryTab();
+                if (ok)
+                {
+                    _usageGeneration++;
+                    _usageRecords?.Clear();
+                    _viewModel?.AggregatedRecords?.Clear();
+                    UpdateUsageChart();
+                    UpdateSummaryTab();
+                }
 
                 _trackingService?.StartTracking();
 

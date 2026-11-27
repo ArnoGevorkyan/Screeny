@@ -677,14 +677,17 @@ namespace ScreenTimeTracker
             }
         }
 
+        private volatile int _usageGeneration;
+
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
             if (_disposed) return;
+            var generation = _usageGeneration;
             try
             {
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    if (_disposed) return;
+                    if (_disposed || generation != _usageGeneration) return;
 
                     try
                     {
