@@ -521,14 +521,14 @@ namespace ScreenTimeTracker
             if (_disposed) return;
 
             var revision = InvalidateUsageView();
-            SetUsageViewLoading(true);
             try
             {
+                SetUsageViewLoading(true);
                 _viewModel.SelectedDate = start;
                 _viewModel.SelectedEndDate = end;
                 _viewModel.IsDateRangeSelected = end.HasValue;
-                _viewModel.CurrentTimePeriod = end.HasValue ? TimePeriod.Weekly : TimePeriod.Daily;
                 UpdateDatePickerButtonText();
+                _viewModel.CurrentTimePeriod = end.HasValue ? TimePeriod.Weekly : TimePeriod.Daily;
 
                 await Task.Delay(50);
                 if (!IsCurrentUsageView(revision)) return;

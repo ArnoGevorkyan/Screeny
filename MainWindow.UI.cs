@@ -484,35 +484,36 @@ namespace ScreenTimeTracker
 
         private async void DoLiveUpdates()
         {
-            var (start, end) = GetCurrentViewDateRange();
-            var today = DateTime.Today;
-            if (today < start || today > end) return;
-
-            var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
-            activeRec?.RaiseDurationChanged();
-            if (_tickCount % 15 == 0) _isChartDirty = true;
-
-            if ((DateTime.Now - _lastFullRefresh).TotalSeconds < 10)
-            {
-                if (activeRec != null)
-                {
-                    _cachedTotalTime = _cachedTotalTime.Add(TimeSpan.FromSeconds(1));
-                    if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
-                }
-
-                return;
-            }
-            if (_liveTotalRead != null) return;
-
-            var revision = _usageViewRevision;
-            var read = Task.Run(() =>
-            {
-                var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
-                return TimeUtil.CalculateUniqueTotalTime(agg);
-            });
-            _liveTotalRead = read;
+            Task<TimeSpan>? read = null;
             try
             {
+                var (start, end) = GetCurrentViewDateRange();
+                var today = DateTime.Today;
+                if (today < start || today > end) return;
+
+                var activeRec = _usageRecords.FirstOrDefault(r => r.IsFocused);
+                activeRec?.RaiseDurationChanged();
+                if (_tickCount % 15 == 0) _isChartDirty = true;
+
+                if ((DateTime.Now - _lastFullRefresh).TotalSeconds < 10)
+                {
+                    if (activeRec != null)
+                    {
+                        _cachedTotalTime = _cachedTotalTime.Add(TimeSpan.FromSeconds(1));
+                        if (ChartTimeValue != null) ChartTimeValue.Text = TimeUtil.FormatTimeSpan(_cachedTotalTime);
+                    }
+
+                    return;
+                }
+                if (_liveTotalRead != null) return;
+
+                var revision = _usageViewRevision;
+                read = Task.Run(() =>
+                {
+                    var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
+                    return TimeUtil.CalculateUniqueTotalTime(agg);
+                });
+                _liveTotalRead = read;
                 var totalTime = await read;
                 if (!IsCurrentUsageView(revision) || _liveTotalRead != read) return;
 
@@ -526,7 +527,7 @@ namespace ScreenTimeTracker
             }
             finally
             {
-                if (_liveTotalRead == read) _liveTotalRead = null;
+                if (read != null && _liveTotalRead == read) _liveTotalRead = null;
             }
         }
 
