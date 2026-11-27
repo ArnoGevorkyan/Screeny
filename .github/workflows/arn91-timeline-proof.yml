@@ -48,7 +48,7 @@ jobs:
           "Audit SQLite pins: $($appPins -join ', ')"
           python "$verify/generate.py" $src
           dotnet build "$verify/Audit.csproj" -c Release -r win-x64 --self-contained false "-p:Screeny=$src"
-          dotnet "$verify/bin/Release/net10.0/win-x64/Audit.dll"
+          dotnet "$verify/bin/Release/net10.0/win-x64/Audit.dll" T01-rollover T02-crossing-before-tick T03-idle-crossing L01-switch-and-duplicate L02-null-and-filtered-foreground L03-idle-overlap L04-generation-and-reverse-completion L05-stale-idle-jitter L06-power-reasons L07-close-drain-and-reopen T07-switch-at-and-after-midnight T08-pause-and-power-crossing T09-submillisecond-boundary T10-unobserved-gap-is-bounded T11-observed-multiple-days
           dotnet test "$verify/chart/ScreenTimeTracker.Tests.csproj" -r win-x64 "-p:Screeny=$src" --filter "FullyQualifiedName~ExactMidnightBoundary|FullyQualifiedName~ArbitraryOvernightRows" --logger "console;verbosity=normal"
       - name: Build pinned WinUI solution x64
         if: success() || failure()
@@ -66,6 +66,8 @@ jobs:
           $sql = (Resolve-Path verification/.github/arn91/bin/Release/net10.0/win-x64/Audit.dll).Path
           $app = (Resolve-Path source/bin/x64/Debug/net10.0-windows10.0.22621.0/win-x64/Screeny.exe).Path
           $csc = "$env:SystemRoot/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-          & $csc /nologo /target:winexe /platform:x64 "/out:$env:RUNNER_TEMP/ScreenyTimelineAlpha.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$native/Synthetic.cs"
+          Push-Location $native
+          & $csc /nologo /target:winexe /platform:x64 "/out:$env:RUNNER_TEMP\ScreenyTimelineAlpha.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll Synthetic.cs
+          Pop-Location
           Copy-Item "$env:RUNNER_TEMP/ScreenyTimelineAlpha.exe" "$env:RUNNER_TEMP/ScreenyTimelineBravo.exe"
-          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Mta -File "$native/run.ps1" -Exe $app -SqlApp $sql
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Mta -File (Join-Path $native run.ps1) -Exe $app -SqlApp $sql
