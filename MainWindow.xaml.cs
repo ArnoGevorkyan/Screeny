@@ -157,7 +157,6 @@ namespace ScreenTimeTracker
             _trackingService = new WindowTrackingService();
 
             // Set up tracking service events
-            _trackingService.WindowChanged += TrackingService_WindowChanged;
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
             _trackingService.UsageSliceFinalized += TrackingService_UsageSliceFinalized;
             
@@ -552,8 +551,6 @@ namespace ScreenTimeTracker
             // Welcome message has been removed as requested
             System.Diagnostics.Debug.WriteLine("First run check - welcome message disabled");
         }
-
-        // TrackingService_WindowChanged implementation moved to MainWindow.UI.cs
 
         // Event handlers for DatePickerPopup events
         private void DatePickerPopup_SingleDateSelected(object? sender, DateTime selectedDate)
