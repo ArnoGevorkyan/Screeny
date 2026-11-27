@@ -8,10 +8,10 @@ permissions:
 jobs:
   proof:
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 18
     env:
-      SOURCE: ac6b16b43ce6a1e4eb83f28460c791d15c2478a1
-      TREE: 75b65fa37731737a88621bc856f970c09ec4940b
+      SOURCE: 9ec0502de7d367f3026fbede6b4ff997659b7aa4
+      TREE: 7661a0313286953b9f769e09a9695f0d5e89ba65
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ac6b16b43ce6a1e4eb83f28460c791d15c2478a1
+          ref: 9ec0502de7d367f3026fbede6b4ff997659b7aa4
           path: source
           persist-credentials: false
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
@@ -35,7 +35,8 @@ jobs:
           $src = (Resolve-Path source).Path
           $verify = (Resolve-Path verification/.github/arn91).Path
           if ((git -C $src rev-parse HEAD) -cne $env:SOURCE -or (git -C $src rev-parse 'HEAD^{tree}') -cne $env:TREE -or (git -C $src status --porcelain)) { throw 'Product tree mismatch' }
-          if ((git -C verification diff --name-only "${env:SOURCE}..HEAD" -- . ':(exclude).github/arn91/**' ':(exclude).github/workflows/arn91-timeline-proof.yml')) { throw 'Verifier includes product edits' }
+          if ((git -C verification diff --name-only ac6b16b HEAD -- . ':(exclude).github/arn91/**' ':(exclude).github/workflows/arn91-timeline-proof.yml')) { throw 'Verifier includes product edits' }
+          if ((git -C $src diff --name-only ac6b16b HEAD) -cne 'Services/WindowTrackingService.cs') { throw 'Unexpected product change' }
           "Verified source=$env:SOURCE tree=$env:TREE; Windows=$([Environment]::OSVersion.Version); image=$env:ImageVersion"
           dotnet new globaljson --sdk-version 10.0.404 --roll-forward disable
           [xml]$app = Get-Content -Raw "$src/ScreenTimeTracker.csproj"
@@ -55,3 +56,14 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           Set-Location source
           dotnet build ScreenTimeTracker.sln -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false
+      - name: Exercise real Windows input idle and programmatic foreground
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $native = (Resolve-Path verification/.github/arn91/native).Path
+          $sql = (Resolve-Path verification/.github/arn91/bin/Release/net10.0/win-x64/Audit.dll).Path
+          $app = (Resolve-Path source/bin/x64/Debug/net10.0-windows10.0.22621.0/win-x64/Screeny.exe).Path
+          $csc = "$env:SystemRoot/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+          & $csc /nologo /target:winexe /platform:x64 "/out:$env:RUNNER_TEMP/ScreenyTimelineAlpha.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$native/Synthetic.cs"
+          Copy-Item "$env:RUNNER_TEMP/ScreenyTimelineAlpha.exe" "$env:RUNNER_TEMP/ScreenyTimelineBravo.exe"
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Mta -File "$native/run.ps1" -Exe $app -SqlApp $sql

@@ -14,6 +14,25 @@ var broad = new DateTime(2000, 1, 1);
 var day = new DateTime(2024, 2, 29);
 const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
+if (args.FirstOrDefault() == "--native-rows")
+{
+    using var conn = new SqliteConnection(new SqliteConnectionStringBuilder {
+        DataSource=args[1], Mode=SqliteOpenMode.ReadOnly, DefaultTimeout=2, Pooling=false }.ToString());
+    conn.Open();
+    using var command = conn.CreateCommand();
+    command.CommandText = """
+        SELECT lower(process_name),start_time,end_time,duration FROM app_usage
+        WHERE end_time IS NOT NULL AND lower(process_name) IN
+          ('screenytimelinealpha','screenytimelinebravo','idle / away')
+        ORDER BY start_time
+        """;
+    using var rows = command.ExecuteReader();
+    while (rows.Read())
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {
+            process=rows.GetString(0), start=rows.GetString(1), end=rows.GetString(2), duration=rows.GetInt64(3)
+        }));
+    return 0;
+}
 if (args.FirstOrDefault() == "--child")
 {
     var kind = args[1];
@@ -76,40 +95,59 @@ Case("T01-rollover", f => {
     {
         using var t = new WindowTrackingService();
         var slices = Observe(t, f);
-        Seed(t, "Visit" + name, midnight.AddSeconds(-5));
-        t.UpdateFocusedRecordForTest(midnight.AddSeconds(-1));
-        Need(slices.Count == 0 && t.CurrentRecord?.ProcessName == "Visit" + name, "before midnight control");
-        t.UpdateFocusedRecordForTest(midnight.AddSeconds(3));
+        var process = "Visit" + name;
+        var start = midnight.AddSeconds(-5);
+        Seed(t, process, start);
+        t.UpdateFocusedRecordForTest(midnight.AddTicks(-1));
+        Need(slices.Count == 0 && t.CurrentRecord?.StartTime == start, "before midnight: live only");
+        t.UpdateFocusedRecordForTest(name == "ordinary" ? midnight : midnight.AddSeconds(3));
         t.UpdateFocusedRecordForTest(midnight.AddSeconds(20));
-        var d1 = f.Db.Total(midnight.AddDays(-1), midnight.AddDays(-1), "Visit" + name);
-        var d2 = f.Db.Total(midnight, midnight, "Visit" + name);
-        Console.WriteLine($"T01 {name}: expected previous=5000ms, next live continuation; actual previous={d1}ms next persisted={d2}ms end={slices.Single().EndTime:HH:mm:ss.fff} current={t.CurrentRecord?.ProcessName ?? "<none>"}");
-        Need(d1 == 4000 && d2 == 0 && t.CurrentRecord == null, "rollover changed; check whether fixed");
+        Need(t.GetRecords().Single() is { } open && open.ProcessName == process &&
+             open.StartTime == midnight && open.Date == midnight && open.EndTime == null &&
+             open.WindowHandle == (nint)1 && open.ProcessId == 1 && open.IsFocused, "same eligible HWND continued at midnight");
+        Need(slices.Count == 1 && f.Db.Total(midnight, midnight, process) == 0, "continuation stays live until stop");
+        t.ClockForTest = () => midnight.AddSeconds(21);
+        t.StopTracking();
+        t.StopTracking();
+        ExactRows(f, slices, (process, start, midnight), (process, midnight, midnight.AddSeconds(21)));
+        Need(f.Db.Total(midnight.AddDays(-1), midnight.AddDays(-1), process) == 5000 &&
+             f.Db.Total(midnight, midnight, process) == 21000, "per-day stored totals");
+        Console.WriteLine($"T01 {name}: previous=5000ms next=21000ms, unchanged HWND continued at 00:00:00.000; continued record was not written before stop");
     }
 });
 Case("T02-crossing-before-tick", f => {
     using var t = new WindowTrackingService();
     var rows = Observe(t, f);
     var midnight = day.AddDays(1);
-    Seed(t, "Alpha", midnight.AddSeconds(-5));
-    t.ApplyIdleStateForTest(true, midnight.AddSeconds(3));
-    t.ApplyIdleStateForTest(false, midnight.AddSeconds(11));
-    var prev = f.Db.Total(day, day, "Alpha");
-    var cur = f.Db.Total(midnight, midnight, "Alpha");
-    Need(prev == 8000 && cur == 0 && rows.Count == 2, "crossing behavior changed; check expected 5000+3000");
-    Console.WriteLine($"T02 expected prev=5000 today=3000ms; actual {prev}+{cur}; combined={f.Db.Total(day,midnight,"Alpha")}ms, Idle={rows[1].Duration.TotalSeconds}s");
+    var start = midnight.AddSeconds(-5);
+    var idle = midnight.AddSeconds(3);
+    var resume = midnight.AddSeconds(11);
+    Seed(t, "Alpha", start);
+    t.ApplyIdleStateForTest(true, idle);
+    Need(t.GetRecords().Single().ProcessName == "Idle / Away", "idle replaces foreground");
+    t.ApplyIdleStateForTest(false, resume);
+    ExactRows(f, rows, ("Alpha", start, midnight), ("Alpha", midnight, idle), ("Idle / Away", idle, resume));
+    Need(f.Db.Total(day, day, "Alpha") == 5000 && f.Db.Total(midnight, midnight, "Alpha") == 3000 &&
+         f.Db.Total(day, midnight, "Alpha") == 8000 && f.Db.Total(midnight, midnight, "Idle / Away") == 8000, "exact range and date totals");
+    Console.WriteLine("T02 idle edge before tick: Alpha=5000+3000ms, idle=8000ms; adjacent, no overlap");
 });
 Case("T03-idle-crossing", f => {
     using var t = new WindowTrackingService();
     var rows = Observe(t, f);
     t.SetOpenRecordsForTest(null, null);
     var midnight = day.AddDays(1);
-    t.ApplyIdleStateForTest(true, midnight.AddSeconds(-10));
-    t.ApplyIdleStateForTest(true, midnight.AddSeconds(120));
-    Need(t.GetRecords().Single().StartTime.Date == day && rows.Count == 0, "stale idle date");
-    t.ApplyIdleStateForTest(false, midnight.AddSeconds(120));
-    Need(rows.Single().Duration.TotalSeconds == 130 && f.Db.Total(midnight,midnight,"Idle / Away") == 0, "idle date result");
-    Console.WriteLine("T03 expected idle seconds 10+120; actual 130+0");
+    var idle = midnight.AddSeconds(-10);
+    var resume = midnight.AddSeconds(120);
+    t.ApplyIdleStateForTest(true, idle);
+    t.ApplyIdleStateForTest(true, midnight.AddSeconds(110));
+    t.ApplyIdleStateForTest(true, midnight.AddSeconds(115));
+    Need(t.GetRecords().Single().StartTime == midnight && rows.Count == 1 &&
+         f.Db.Total(midnight, midnight, "Idle / Away") == 0, "idle continuation waits for resume before saving");
+    Need(t.ApplyIdleStateForTest(false, resume), "fresh foreground requested");
+    Need(!t.ApplyIdleStateForTest(false, resume) && !t.GetRecords().Any(), "duplicate resume emits nothing");
+    ExactRows(f, rows, ("Idle / Away", idle, midnight), ("Idle / Away", midnight, resume));
+    Need(f.Db.Total(day, day, "Idle / Away") == 10000 && f.Db.Total(midnight, midnight, "Idle / Away") == 120000, "idle per-day totals");
+    Console.WriteLine("T03 idle=10000+120000ms; open continuation never persisted; repeat tick/resume adds no rows");
 });
 Case("T04-wall-clock-gap-fold-rollback", f => {
     var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
@@ -199,7 +237,7 @@ Case("L02-null-and-filtered-foreground", f => {
     using var t = new WindowTrackingService();
     var rows = Observe(t, f);
     Seed(t, "Alpha", DateTime.Now.AddSeconds(-10));
-    typeof(WindowTrackingService).GetMethod("CheckActiveWindow", Private)!.Invoke(t, new object[]{Gen(t), IntPtr.Zero});
+    typeof(WindowTrackingService).GetMethod("CheckActiveWindow", Private)!.Invoke(t, new object[]{Gen(t), IntPtr.Zero, null!});
     Need(t.CurrentRecord?.ProcessName == "Alpha" && rows.Count == 0, "null foreground behavior");
     Focus(t, 22, 0, "explorer", "shell");
     Thread.Sleep(15);
@@ -211,20 +249,32 @@ Case("L02-null-and-filtered-foreground", f => {
 Case("L03-idle-overlap", f => {
     using var t = new WindowTrackingService();
     var rows = Observe(t, f);
-    var now = DateTime.Now;
-    Seed(t, "Alpha", now.AddSeconds(-12));
-    Need(!t.ApplyIdleStateForTest(true,now.AddSeconds(-10)) && t.CurrentRecord == null, "idle-entry control");
+    var midnight = day.AddDays(1);
+    var now = midnight.AddSeconds(-12);
+    var start = now;
+    t.ClockForTest = () => now;
+    Seed(t, "Alpha", now);
+    int beforeIdle = Gen(t);
+    now = midnight.AddSeconds(-10);
+    Need(!t.ApplyIdleStateForTest(true, now) && t.CurrentRecord == null, "idle-entry control");
+    int duringIdle = Gen(t);
+    var queuedDuringIdle = Order(t);
+    now = midnight.AddSeconds(-5);
     Focus(t, 22, 222, "Bravo", "focus changed without input");
-    Thread.Sleep(15);
-    Need(t.GetRecords().Select(x => x.ProcessName).SequenceEqual(new[]{"Bravo","Idle / Away"}), "foreground during idle behavior");
-    Need(t.ApplyIdleStateForTest(false, DateTime.Now), "resume should request fresh foreground probe");
+    Need(t.GetRecords().Single().ProcessName == "Idle / Away", "foreground event must not become live while idle");
+    now = midnight.AddSeconds(5);
+    Need(t.ApplyIdleStateForTest(false, now), "resume requests fresh foreground");
+    var resumed = now;
+    Apply(t, "PreIdleCallback", beforeIdle, Order(t));
+    Apply(t, "QueuedIdleCallback", duringIdle, queuedDuringIdle);
+    Need(!t.GetRecords().Any(), "old foreground work may not open after resume");
     Focus(t, 22, 222, "Bravo", "focus changed without input");
-    Thread.Sleep(15);
+    Focus(t, 22, 222, "Bravo", "focus changed without input");
+    now = midnight.AddSeconds(10);
     t.StopTracking();
-    var idle = rows.Single(r => r.ProcessName == "Idle / Away");
-    var bravo = rows.Single(r => r.ProcessName == "Bravo");
-    Need(idle.StartTime < bravo.StartTime && bravo.StartTime < idle.EndTime, "interval overlap");
-    Console.WriteLine("L03 expected no app opened before resumed input; idle plus Bravo were simultaneously open and their persisted intervals overlap");
+    ExactRows(f, rows, ("Alpha", start, midnight.AddSeconds(-10)),
+        ("Idle / Away", midnight.AddSeconds(-10), midnight), ("Idle / Away", midnight, resumed), ("Bravo", resumed, now));
+    Console.WriteLine("L03 app/idle/app nonoverlap; pre-idle and queued-while-idle callbacks rejected; Bravo starts on actual resume");
 });
 Case("L04-generation-and-reverse-completion", f => {
     using var t = new WindowTrackingService();
@@ -232,34 +282,107 @@ Case("L04-generation-and-reverse-completion", f => {
     Seed(t, "Old", DateTime.Now.AddSeconds(-20));
     var cancelled = Gen(t);
     t.StopTracking();
-    Apply(t, "RejectedWhileStopped", cancelled);
+    Apply(t, "RejectedWhileStopped", cancelled, Order(t));
     t.SetOpenRecordsForTest(null, null);
-    Need(Gen(t) != cancelled, "generation changed on stop");
-    Apply(t, "RejectedAfterRestart", cancelled);
+    Apply(t, "RejectedAfterRestart", cancelled, Order(t));
     Need(t.CurrentRecord == null && rows.Count == 1, "old queued focus after stop/restart");
     var active = Gen(t);
-    Apply(t, "NewestA", active);
-    Thread.Sleep(15);
-    Apply(t, "DelayedB", active);
-    Need(t.CurrentRecord?.ProcessName == "DelayedB", "reverse completion behavior");
-    Console.WriteLine("L04 old generation callbacks dropped. Same-generation B completing after newest A becomes current even when B was the earlier foreground observation");
+    var delayed = Order(t);
+    Apply(t, "NewestA", active, Order(t));
+    Apply(t, "DelayedB", active, delayed);
+    Need(t.CurrentRecord?.ProcessName == "NewestA" && rows.Count == 1, "reverse completion changed foreground or finalized prematurely");
+    Console.WriteLine("L04 foreground from an old generation or an older completed observation did not supersede the current app");
 });
 Case("L05-stale-idle-jitter", f => {
     using var t = new WindowTrackingService();
     var rows = Observe(t, f);
     var now = DateTime.Now;
     Seed(t, "Alpha", now.AddSeconds(-30));
-    Need(!t.ApplyIdleStateForTest(false, now.AddSeconds(-3)) && rows.Count == 0, "non-idle tick retains foreground");
     t.ApplyIdleStateForTest(true, now.AddSeconds(-2));
     t.ApplyIdleStateForTest(true, now.AddSeconds(-1));
     Need(rows.Count == 1 && t.GetRecords().Count() == 1, "repeated idle should not duplicate");
+    var idleGeneration = Gen(t);
+    long preResume = Order(t);
     t.ApplyIdleStateForTest(false, now);
+    var active = Gen(t);
+    long delayed = Order(t);
     t.ApplyIdleStateForTest(false, now.AddMilliseconds(100));
-    Need(rows.Count == 2 && t.GetRecords().Count() == 0, "repeat resume should not duplicate");
-    // Submit a previously sampled idle bit last, at the time its slower media query completes.
-    t.ApplyIdleStateForTest(true, now.AddMilliseconds(200));
-    Need(t.GetRecords().Any(r => r.ProcessName == "Idle / Away"), "stale idle no longer reapplied");
-    Console.WriteLine("L05 ordered duplicate idle/resume emits 1 idle slice; later completion of old idle bit falsely reopens idle");
+    IdleObservation(t, true, now.AddMilliseconds(200), active, delayed);
+    IdleObservation(t, true, now.AddMilliseconds(200), idleGeneration, preResume);
+    Need(rows.Count == 2 && !t.GetRecords().Any(), "stale idle work did not reopen idle");
+    Console.WriteLine("L05 repeated idle/resume emits one idle slice; late idle observations in the same and previous generation are rejected");
+});
+Case("T07-switch-at-and-after-midnight", f => {
+    using var t = new WindowTrackingService();
+    var rows = Observe(t, f);
+    var midnight = day.AddDays(1);
+    var now = midnight;
+    t.ClockForTest = () => now;
+    Seed(t, "Before", midnight.AddSeconds(-5));
+    Focus(t, 22, 222, "At", "Midnight");
+    t.UpdateFocusedRecordForTest(now);
+    now = midnight.AddSeconds(5);
+    Focus(t, 33, 333, "BeforeSecond", "Second midnight approaches");
+    var dayTwo = midnight.AddDays(1);
+    now = dayTwo.AddSeconds(-5);
+    Focus(t, 55, 555, "Crossing", "Crossing before a tick");
+    now = dayTwo.AddSeconds(3);
+    Focus(t, 66, 666, "After", "After midnight");
+    now = dayTwo.AddSeconds(10);
+    t.StopTracking();
+    ExactRows(f, rows, ("Before", midnight.AddSeconds(-5), midnight),
+        ("At", midnight, midnight.AddSeconds(5)), ("BeforeSecond", midnight.AddSeconds(5), dayTwo.AddSeconds(-5)),
+        ("Crossing", dayTwo.AddSeconds(-5), dayTwo), ("Crossing", dayTwo, dayTwo.AddSeconds(3)), ("After", dayTwo.AddSeconds(3), now));
+    Console.WriteLine("T07 switch at boundary emits no empty segment; delayed-tick crossing uses shared split and old/new visit bounds touch");
+});
+Case("T08-pause-and-power-crossing", f => {
+    var midnight = day.AddDays(1);
+    var now = midnight.AddSeconds(-5);
+    var host = new WindowHost(f.Db);
+    var t = host._trackingService;
+    t.ClockForTest = () => now;
+    var rows = new List<UsageSlice>();
+    t.UsageSliceFinalized += (_, slice) => rows.Add(slice);
+    Seed(t, "Power", now);
+    host.SetTrackingRequested(true);
+    var old = Gen(t);
+    now = midnight.AddSeconds(3);
+    host.Suspend();
+    host.Suspend();
+    host.Display(0);
+    Apply(t, "Stopped", old, Order(t));
+    Need(!t.IsTracking && !t.GetRecords().Any(), "power gate closes once");
+    now = midnight.AddHours(3);
+    host.SetTrackingRequested(false);
+    host.Display(1);
+    host.Resume();
+    Need(!t.IsTracking && !t.GetRecords().Any(), "power clear cannot cancel manual pause");
+    host.SetTrackingRequested(true);
+    Apply(t, "OldGeneration", old, Order(t));
+    Need(t.IsTracking, "explicit resume only");
+    t.SetOpenRecordsForTest(null, null);
+    Focus(t, 79, 797, "Resumed", "After the gap");
+    var next = midnight.AddDays(1);
+    now = next;
+    host.SetTrackingRequested(false);
+    host.Dispose();
+    host.Dispose();
+    ExactRows(f, rows, ("Power", midnight.AddSeconds(-5), midnight),
+        ("Power", midnight, midnight.AddSeconds(3)), ("Resumed", midnight.AddHours(3), next));
+    Need(f.Db.Total(midnight, midnight, "Power") == 3000 && f.Db.Total(next,next,"Resumed") == 0 &&
+         f.Db.Total(midnight,midnight,"Resumed") == 21 * 60 * 60 * 1000, "exact pause/offline totals");
+    Console.WriteLine("T08 power and manual-pause boundaries: 5000+3000ms before suspend, no 3h gap, 21h after explicit resume, no empty next-day row");
+});
+Case("T09-submillisecond-boundary", f => {
+    using var t = new WindowTrackingService();
+    var rows = Observe(t, f);
+    var midnight = day.AddDays(1);
+    Seed(t, "Fraction", midnight.AddTicks(-1));
+    t.UpdateFocusedRecordForTest(midnight);
+    t.ClockForTest = () => midnight.AddMilliseconds(1);
+    t.StopTracking();
+    ExactRows(f, rows, ("Fraction", midnight, midnight.AddMilliseconds(1)));
+    Console.WriteLine("T09 an interval below the SQLite ledger's 1ms resolution does not generate a zero-duration row");
 });
 Case("L06-power-reasons", f => {
     int k = 0;
@@ -688,8 +811,34 @@ List<UsageSlice> Observe(WindowTrackingService t, DbCase f)
     return list;
 }
 int Gen(WindowTrackingService t) => (int)typeof(WindowTrackingService).GetMethod("GetTrackingGeneration", Private)!.Invoke(t,null)!;
-void Apply(WindowTrackingService t, string name, int generation)
-    => typeof(WindowTrackingService).GetMethod("ProcessWindowChange", Private)!.Invoke(t, new object[]{ (nint)name.Length, 0, name, name, generation });
+long Order(WindowTrackingService t) => (long)typeof(WindowTrackingService).GetMethod("NextObservation", Private)!.Invoke(t,null)!;
+void Apply(WindowTrackingService t, string name, int generation, long order)
+    => typeof(WindowTrackingService).GetMethod("ProcessWindowChange", Private)!.Invoke(t, new object[]{ (nint)name.Length, 0, name, name, generation, order });
+void IdleObservation(WindowTrackingService t, bool idle, DateTime now, int generation, long order)
+    => typeof(WindowTrackingService).GetMethod("ApplyIdleObservation", Private)!.Invoke(t, new object[]{ idle, now, generation, order });
+void ExactRows(DbCase f, List<UsageSlice> slices, params (string Process, DateTime Start, DateTime End)[] expected)
+{
+    var names = expected.Select(x => x.Process).ToHashSet();
+    Need(slices.Where(x => names.Contains(x.ProcessName)).Select(x => (x.ProcessName, x.StartTime, x.EndTime)).SequenceEqual(expected), "unexpected finalized event order/endpoints");
+    using var db = f.Open();
+    using var q = db.CreateCommand();
+    q.CommandText = "SELECT date,process_name,start_time,end_time,duration,is_focused FROM app_usage ORDER BY id";
+    using var r = q.ExecuteReader();
+    var persisted = new List<(string Process, DateTime Start, DateTime End)>();
+    while (r.Read())
+    {
+        if (!names.Contains(r.GetString(1))) continue;
+        Need(!r.IsDBNull(3) && r.GetInt64(4) > 0 && r.GetInt64(5) == 0, "only positive finalized rows");
+        var start = DateTime.Parse(r.GetString(2), null, DateTimeStyles.RoundtripKind);
+        var end = DateTime.Parse(r.GetString(3), null, DateTimeStyles.RoundtripKind);
+        Need(r.GetString(0) == start.Date.ToString("yyyy-MM-dd") && end > start &&
+             end <= start.Date.AddDays(1) && r.GetInt64(4) == (long)(end-start).TotalMilliseconds,
+             "bucket, duration, or exact timestamp");
+        persisted.Add((r.GetString(1), start, end));
+    }
+    Need(persisted.SequenceEqual(expected) && persisted.Zip(persisted.Skip(1)).All(p => p.First.End <= p.Second.Start),
+         "stored endpoints/order, nonoverlap, or duplicate");
+}
 static void Focus(WindowTrackingService t, int hwnd, int pid, string name, string title) => t.ProcessWindowChangeForTest((nint)hwnd,pid,name,title);
 static UsageSlice? Slice(string name, DateTime a, DateTime b)
     => UsageSlice.TryCreate(name,name,"synthetic",a,b,out var s) ? s : null;
