@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <DefineConstants>UNIT_TEST</DefineConstants>
+    <DefaultItemExcludes>$(DefaultItemExcludes);chart/**;native/**</DefaultItemExcludes>
     <NoWarn>CS8618;CS0067;CS0169;CS0414;CS8602;CS8625;CS8604</NoWarn>
   </PropertyGroup>
   <ItemGroup>

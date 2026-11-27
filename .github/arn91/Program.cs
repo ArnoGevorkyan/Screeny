@@ -384,6 +384,41 @@ Case("T09-submillisecond-boundary", f => {
     ExactRows(f, rows, ("Fraction", midnight, midnight.AddMilliseconds(1)));
     Console.WriteLine("T09 an interval below the SQLite ledger's 1ms resolution does not generate a zero-duration row");
 });
+Case("T10-unobserved-gap-is-bounded", f => {
+    using var t = new WindowTrackingService();
+    var rows = Observe(t, f);
+    var midnight = day.AddDays(1);
+    var start = midnight.AddSeconds(-6);
+    var last = midnight.AddSeconds(-5);
+    var jumped = midnight.AddDays(2).AddHours(3);
+    Seed(t, "Gap", start);
+    t.UpdateFocusedRecordForTest(last);
+    t.UpdateFocusedRecordForTest(jumped);
+    Need(t.CurrentRecord?.StartTime == jumped && rows.Count == 1 &&
+        f.Db.Total(midnight, jumped, "Gap") == 0, "no backfill of unobserved days");
+    t.ClockForTest = () => jumped.AddSeconds(2);
+    t.StopTracking();
+    ExactRows(f, rows, ("Gap", start, last), ("Gap", jumped, jumped.AddSeconds(2)));
+    Console.WriteLine("T10 large unobserved gap: only the last observed second and the two freshly observed seconds persist");
+});
+Case("T11-observed-multiple-days", f => {
+    using var t = new WindowTrackingService();
+    var rows = Observe(t, f);
+    var midnight = day.AddDays(1);
+    Seed(t, "Continuous", midnight.AddSeconds(-5));
+    for (int days = 0; days < 3; days++)
+    {
+        t.UpdateFocusedRecordForTest(midnight.AddDays(days).AddSeconds(3));
+        t.UpdateFocusedRecordForTest(midnight.AddDays(days).AddHours(12));
+    }
+    t.ClockForTest = () => midnight.AddDays(2).AddHours(12).AddSeconds(5);
+    t.StopTracking();
+    ExactRows(f, rows, ("Continuous", midnight.AddSeconds(-5), midnight),
+        ("Continuous", midnight, midnight.AddDays(1)),
+        ("Continuous", midnight.AddDays(1), midnight.AddDays(2)),
+        ("Continuous", midnight.AddDays(2), midnight.AddDays(2).AddHours(12).AddSeconds(5)));
+    Console.WriteLine("T11 continuous observations across multiple dates conserve each half-open civil day even when every rollover tick is delayed");
+});
 Case("L06-power-reasons", f => {
     int k = 0;
     foreach (var protect in new[] { false, true })

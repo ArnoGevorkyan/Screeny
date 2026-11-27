@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DefineConstants>UNIT_TEST</DefineConstants>
+    <PythonCommand Condition="'$(PythonCommand)' == ''">python</PythonCommand>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="4.0.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.4" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageReference Include="SQLite" Version="3.54.1" />
+    <Compile Include="$(Screeny)/Helpers/ChartHelper.cs;$(Screeny)/Helpers/TimeUtil.cs;$(Screeny)/Helpers/TimeFormatter.cs;$(Screeny)/Helpers/ApplicationNameNormalizer.cs;$(Screeny)/Helpers/ApplicationProcessingHelper.cs" />
+    <Compile Include="$(Screeny)/Models/AppUsageRecord.cs;$(Screeny)/Models/ScreenyObservableObject.cs;$(Screeny)/Models/ProcessFilter.cs;$(Screeny)/Models/ChartViewMode.cs;$(Screeny)/Models/TimePeriod.cs;$(Screeny)/Models/UsageSlice.cs" />
+    <Compile Include="$(Screeny)/Services/WindowTrackingService.cs;$(Screeny)/Services/PersistenceResult.cs" />
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+  <Target Name="IncludePortableSources" BeforeTargets="CoreCompile">
+    <Exec Command="$(PythonCommand) &quot;$(MSBuildProjectDirectory)/extract.py&quot; &quot;$(Screeny)&quot; &quot;$(IntermediateOutputPath)&quot;" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)/DatabaseService.cs;$(IntermediateOutputPath)/MainWindowChart.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

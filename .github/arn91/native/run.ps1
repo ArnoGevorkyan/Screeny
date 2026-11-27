@@ -46,7 +46,9 @@ try {
 
     $alpha = Synthetic Alpha
     [void](Wait-For { [WindowProbe]::ForegroundPid() -eq $alpha.Id } 'synthetic Alpha foreground')
+    $priorInputTick = [IdleNative]::Tick()
     if (![WindowProbe]::RefreshSyntheticInput($alpha.Id)) { throw 'Alpha synthetic input not sent' }
+    [void](Wait-For { [IdleNative]::Tick() -ne $priorInputTick } 'fresh Alpha input stamp')
     $inputTick = [IdleNative]::Tick()
     if ([IdleNative]::Seconds() -gt 3) { throw 'Expected a fresh native input sample' }
     Write-Host 'Native Alpha foreground established; waiting for actual Windows input-idle threshold without changing clock, policy, or power.'

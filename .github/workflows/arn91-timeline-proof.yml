@@ -10,8 +10,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 18
     env:
-      SOURCE: 9ec0502de7d367f3026fbede6b4ff997659b7aa4
-      TREE: 7661a0313286953b9f769e09a9695f0d5e89ba65
+      SOURCE: 2c861b253728120045762580b5af812d218c2bac
+      TREE: 243c4d2602914b7651e684fa16863f66f06039f8
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -21,8 +21,9 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 9ec0502de7d367f3026fbede6b4ff997659b7aa4
+          ref: 2c861b253728120045762580b5af812d218c2bac
           path: source
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
@@ -36,7 +37,7 @@ jobs:
           $verify = (Resolve-Path verification/.github/arn91).Path
           if ((git -C $src rev-parse HEAD) -cne $env:SOURCE -or (git -C $src rev-parse 'HEAD^{tree}') -cne $env:TREE -or (git -C $src status --porcelain)) { throw 'Product tree mismatch' }
           if ((git -C verification diff --name-only ac6b16b HEAD -- . ':(exclude).github/arn91/**' ':(exclude).github/workflows/arn91-timeline-proof.yml')) { throw 'Verifier includes product edits' }
-          if ((git -C $src diff --name-only ac6b16b HEAD) -cne 'Services/WindowTrackingService.cs') { throw 'Unexpected product change' }
+          if (((git -C $src diff --name-only ac6b16b HEAD) -join ',') -cne 'Helpers/ChartHelper.cs,Services/WindowTrackingService.cs') { throw 'Unexpected product change' }
           "Verified source=$env:SOURCE tree=$env:TREE; Windows=$([Environment]::OSVersion.Version); image=$env:ImageVersion"
           dotnet new globaljson --sdk-version 10.0.404 --roll-forward disable
           [xml]$app = Get-Content -Raw "$src/ScreenTimeTracker.csproj"
@@ -48,6 +49,7 @@ jobs:
           python "$verify/generate.py" $src
           dotnet build "$verify/Audit.csproj" -c Release -r win-x64 --self-contained false "-p:Screeny=$src"
           dotnet "$verify/bin/Release/net10.0/win-x64/Audit.dll"
+          dotnet test "$verify/chart/ScreenTimeTracker.Tests.csproj" -r win-x64 "-p:Screeny=$src" --filter "FullyQualifiedName~ExactMidnightBoundary|FullyQualifiedName~ArbitraryOvernightRows" --logger "console;verbosity=normal"
       - name: Build pinned WinUI solution x64
         if: success() || failure()
         shell: pwsh
