@@ -1,0 +1,95 @@
+name: Verification only - ARN-94 local diagnostics
+
+on:
+  push:
+    branches: [verify/arn94-current]
+    paths: ['.github/workflows/arn94-startup-diagnostics.yml', '.github/arn94/**', '.github/arn87/**', '.github/arn82/**']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    name: ${{ matrix.source.case }} / ${{ matrix.mode }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [loose, msix]
+        source:
+          - case: baseline
+            sha: d14b6b299e5247d9adf369bf6215b727eac97755
+            tree: 415256863ecac46569fcc3d6cb7dbd67a2353685
+          - case: fixed
+            sha: 8ac7de2ecf76c0f9d0ff9818d64641c3fe45a755
+            tree: e20a85d23925db4c267ef601f8e5f75192ae5af6
+          - case: ownership
+            sha: 8ac7de2ecf76c0f9d0ff9818d64641c3fe45a755
+            tree: e20a85d23925db4c267ef601f8e5f75192ae5af6
+    env:
+      CASE: ${{ matrix.source.case }}
+      MODE: ${{ matrix.mode }}
+      SOURCE: ${{ matrix.source.sha }}
+      TREE: ${{ matrix.source.tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verify
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: product
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.404'
+      - name: Verify exact source and build
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git -C product rev-parse HEAD) -ne $env:SOURCE -or (git -C product rev-parse 'HEAD^{tree}') -ne $env:TREE -or (git -C product status --porcelain)) { throw 'Product pin or clean checkout mismatch' }
+          if ((git -C verify rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Verification pin mismatch' }
+          dotnet new globaljson --sdk-version 10.0.404 --roll-forward disable
+          if (![Environment]::Is64BitProcess -or ![Environment]::UserInteractive) { throw 'Requires x64 interactive runner' }
+          "Source=$env:SOURCE tree=$env:TREE SDK=$(dotnet --version) Windows=$([Environment]::OSVersion.Version)"
+          if ($env:MODE -eq 'loose') {
+            dotnet build product/ScreenTimeTracker.sln -c Release -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false
+          } else {
+            & verify/.github/arn94/package.ps1
+          }
+      - name: Probe real local logs, WinUI launch, and fatal dialog
+        if: matrix.source.case != 'ownership'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $exe = (Resolve-Path 'product/bin/x64/Release/net10.0-windows10.0.22621.0/win-x64/Screeny.exe').Path
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Mta -File verify/.github/arn94/run.ps1 -Case $env:CASE -Mode $env:MODE -Exe $exe
+      - name: Verify original owner and contenders on the real Windows UI
+        if: matrix.source.case == 'ownership'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $probe = 'verify/.github/arn82'
+          dotnet build "$probe/Sqlite/Sqlite.csproj" -o "$env:RUNNER_TEMP/arn87-sqlite"
+          $csc = "$env:SystemRoot/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+          & $csc /nologo /target:winexe /platform:x64 "/out:$env:RUNNER_TEMP/ScreenyAuditAlpha.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll (Resolve-Path "$probe/Synthetic.cs").Path
+          foreach ($name in 'Bravo','ActiveOne','ActiveTwo','PausedOne','PausedTwo') {
+            Copy-Item "$env:RUNNER_TEMP/ScreenyAuditAlpha.exe" "$env:RUNNER_TEMP/ScreenyAudit$name.exe"
+          }
+          & $csc /nologo /target:winexe /platform:x64 "/out:$env:RUNNER_TEMP/ScreenyAuditLauncher.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll (Resolve-Path 'verify/.github/arn87/Launcher.cs').Path
+          $ps = "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe"
+          if ($env:MODE -eq 'msix') {
+            $family = & $ps -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; if (Get-AppxPackage -Name ArnoGevorkyan.ScreenyScreenTime) { throw "Requires a disposable profile" }; Add-AppxPackage -Path $env:ARN94_NORMAL_PACKAGE -AllowUnsigned; (Get-AppxPackage -Name Screeny.Verification.ARN94).PackageFamilyName'
+            if ($family -notlike 'Screeny.Verification.ARN94_*') { throw 'Unexpected disposable package family' }
+            $env:ARN87_AUMID = "$family!App"
+            $env:ARN87_PROFILE = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Packages/$family/LocalCache/Local"
+          }
+          $exe = (Resolve-Path 'product/bin/x64/Release/net10.0-windows10.0.22621.0/win-x64/Screeny.exe').Path
+          try { & $ps -NoProfile -NonInteractive -Mta -File verify/.github/arn87/run.ps1 -Exe $exe }
+          finally {
+            if ($env:MODE -eq 'msix') {
+              & $ps -NoProfile -NonInteractive -Command 'Get-AppxPackage -Name Screeny.Verification.ARN94 | Remove-AppxPackage'
+            }
+          }
