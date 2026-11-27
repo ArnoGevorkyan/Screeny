@@ -110,7 +110,7 @@ function Check-Fault([string]$target, [bool]$logged) {
     if ($logged) {
         $log = Log-Text
         Check-Safe $log
-        Check (@([regex]::Matches($log, "Application launch failed: [A-Za-z]+Exception \($code\)")).Count -eq 1) 'Expected one safe fatal log entry matching the dialog HRESULT'
+        Check (@([regex]::Matches($log, "Application launch failed: TypeInitializationException \($code\); caused by InvalidOperationException \(0x80131509\)")).Count -eq 1) 'Expected one safe fatal log entry matching the dialog HRESULT'
     }
     "PASS $Case $Mode fault logged=$logged exit=1 dialog-to-exit-total-ms=$($clock.ElapsedMilliseconds)"
 }
@@ -149,9 +149,12 @@ try {
         $faultDir = Join-Path $scratch fault
         Copy-Item -LiteralPath (Split-Path -Parent $Exe) -Destination $faultDir -Recurse
         $faultTarget = Join-Path $faultDir Screeny.exe
-        $xbf = @(Get-ChildItem -LiteralPath $faultDir -Recurse -File -Filter MainWindow.xbf)
-        Check ($xbf.Count -eq 1) 'Expected one loose MainWindow.xbf resource'
-        [IO.File]::WriteAllText($xbf[0].FullName, $marker)
+        $chart = Join-Path $faultDir LiveChartsCore.dll
+        Check (Test-Path -LiteralPath $chart -PathType Leaf) 'Missing managed chart dependency'
+        $productDll = Join-Path $faultDir Screeny.dll
+        $hash = (Get-FileHash $productDll).Hash
+        dotnet run --project "$PSScriptRoot/fault/Fault.csproj" -- $chart $marker
+        Check ($LASTEXITCODE -eq 0 -and (Get-FileHash $productDll).Hash -eq $hash) 'Fault fixture changed the product binary or failed'
         $faultLog = Join-Path $looseData app_log.txt
         $legacyPath = Join-Path $faultDir Screeny_ErrorLog.txt
         [IO.File]::WriteAllText($legacyPath, $legacy)

@@ -60,9 +60,13 @@ if ($env:CASE -ne 'baseline') {
     $faultPackage = Join-Path $scratch Screeny.Verification.ARN94Fault.msix
     $manifest.Package.Identity.Name = 'Screeny.Verification.ARN94Fault'
     $manifest.Save($manifestPath)
-    $xbf = @(Get-ChildItem -LiteralPath $layout -Recurse -File -Filter MainWindow.xbf)
-    if ($xbf.Count -ne 1) { throw 'Expected exactly one packaged MainWindow.xbf resource' }
-    [IO.File]::WriteAllText($xbf[0].FullName, 'ARN94_SYNTHETIC_812f678dbca14b5fad357a994f68d6d0')
+    $chart = @(Get-ChildItem -LiteralPath $layout -Recurse -File -Filter LiveChartsCore.dll)
+    if ($chart.Count -ne 1) { throw 'Expected one packaged managed chart dependency' }
+    $app = @(Get-ChildItem -LiteralPath $layout -Recurse -File -Filter Screeny.dll)
+    if ($app.Count -ne 1) { throw 'Expected one product DLL' }
+    $hash = (Get-FileHash $app[0].FullName).Hash
+    dotnet run --project verify/.github/arn94/fault/Fault.csproj -- $chart[0].FullName ARN94_SYNTHETIC_812f678dbca14b5fad357a994f68d6d0
+    if ((Get-FileHash $app[0].FullName).Hash -ne $hash) { throw 'Fault helper altered the product DLL' }
     & $packer pack /d $layout /p $faultPackage /o | Select-Object -Last 2
     "ARN94_FAULT_PACKAGE=$faultPackage" >> $env:GITHUB_ENV
 }
