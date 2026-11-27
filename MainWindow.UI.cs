@@ -471,16 +471,17 @@ namespace ScreenTimeTracker
                     if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(mostUsedApp.Duration);
 
                     mostUsedApp.LoadAppIconIfNeeded();
+
+                    if (MostUsedAppIcon != null) MostUsedAppIcon.DataContext = mostUsedApp;
+                    if (MostUsedPlaceholderIcon != null) MostUsedPlaceholderIcon.Visibility = Visibility.Collapsed;
                 }
                 else
                 {
                     if (MostUsedApp != null)       MostUsedApp.Text = "None";
                     if (MostUsedAppTime != null)   MostUsedAppTime.Text = TimeUtil.FormatTimeSpan(TimeSpan.Zero);
+                    if (MostUsedAppIcon != null) MostUsedAppIcon.DataContext = null;
+                    if (MostUsedPlaceholderIcon != null) MostUsedPlaceholderIcon.Visibility = Visibility.Visible;
                 }
-
-                if (MostUsedAppIcon != null) MostUsedAppIcon.DataContext = mostUsedApp;
-                if (MostUsedPlaceholderIcon != null)
-                    MostUsedPlaceholderIcon.Visibility = mostUsedApp == null ? Visibility.Visible : Visibility.Collapsed;
             }
             catch (Exception ex)
             {
