@@ -1,13 +1,15 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.AppLifecycle;
 using Microsoft.Win32.SafeHandles;
 using ScreenTimeTracker.Services;
+using Windows.ApplicationModel.Activation;
 
 namespace ScreenTimeTracker;
 
@@ -36,7 +38,7 @@ internal static class Program
             string family = GetPackageFamily();
             WinRT.ComWrappersSupport.InitializeComWrappers();
             bool startupTask = family.Length != 0 &&
-                AppInstance.GetCurrent().GetActivatedEventArgs()?.Kind == ExtendedActivationKind.StartupTask;
+                Windows.ApplicationModel.AppInstance.GetActivatedEventArgs()?.Kind == ActivationKind.StartupTask;
             using var process = Process.GetCurrentProcess();
             string identity = $"{process.SessionId}|{family}|{databasePath.ToUpperInvariant()}";
             string pipeName = "Screeny.Activate." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
@@ -63,8 +65,13 @@ internal static class Program
                 return 0;
             }
 
-            using var server = new NamedPipeServerStream(pipeName, PipeDirection.In, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            using var user = WindowsIdentity.GetCurrent();
+            var security = new PipeSecurity();
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
+                PipeAccessRights.FullControl, AccessControlType.Deny));
+            security.AddAccessRule(new PipeAccessRule(user.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
+            using var server = NamedPipeServerStreamAcl.Create(pipeName, PipeDirection.In, 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security);
             using var stopping = new CancellationTokenSource();
             try
             {

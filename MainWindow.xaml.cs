@@ -825,8 +825,7 @@ namespace ScreenTimeTracker
                 return;
             }
 
-            if (_appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter
-                { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized } presenter)
+            if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
             {
                 presenter.Restore();
             }
