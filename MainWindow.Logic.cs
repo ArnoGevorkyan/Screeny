@@ -407,8 +407,7 @@ namespace ScreenTimeTracker
                 // Update UI helpers
                 CleanupSystemProcesses();
                 UpdateAveragePanel(aggregated, startDate, endDate);
-                UpdateChartViewMode();
-                UpdateSummaryTab(aggregated);
+                UpdateViewModeAndChartForDateRange(startDate, endDate, aggregated);
                 // Publish aggregated list to ViewModel
                 _viewModel.AggregatedRecords.Clear();
                 foreach (var rec in aggregated) _viewModel.AggregatedRecords.Add(rec);

@@ -534,7 +534,11 @@ namespace ScreenTimeTracker
                 if (!IsCurrentUsageView(revision)) return;
 
                 if (end is DateTime endDate)
+                {
+                    if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
+                    if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
                     LoadRecordsForDateRange(start, endDate);
+                }
                 else
                     LoadRecordsForDate(start);
             }

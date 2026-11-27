@@ -106,6 +106,15 @@ namespace ScreenTimeTracker
             AveragePanel.Visibility = Visibility.Visible;
         }
 
+        private void UpdateViewModeAndChartForDateRange(DateTime startDate, DateTime endDate, List<AppUsageRecord> aggregatedRecords)
+        {
+            // Minimal version: force weekly period & daily chart view then refresh
+            _viewModel.CurrentTimePeriod = TimePeriod.Weekly;
+            _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
+            UpdateUsageChart();
+            UpdateSummaryTab(aggregatedRecords);
+        }
+
         private void ShowNoDataDialog(DateTime startDate, DateTime endDate)
         {
             if (Content == null) return;
