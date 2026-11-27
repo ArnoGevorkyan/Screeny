@@ -8,6 +8,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or !$env:RUNNER_TEMP -or ![Environment]::Is6
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,WindowsBase
 Add-Type -Path "$PSScriptRoot/WindowProbe.cs"
 Add-Type -Path "$PSScriptRoot/Native.cs"
+[void][DiagnosticsProbe]::SetProcessDPIAware()
 
 $marker = 'ARN94_SYNTHETIC_812f678dbca14b5fad357a994f68d6d0'
 $local = [Environment]::GetFolderPath('LocalApplicationData')
@@ -109,11 +110,10 @@ function Check-Fault([string]$target, [bool]$logged) {
     $root = [Windows.Automation.AutomationElement]::FromHandle($dialog)
     $ok = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, 'OK'))
-    if ($ok) {
-        $ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
-    } else {
-        Check ([DiagnosticsProbe]::Dismiss($dialog)) 'Unable to dismiss the fatal dialog'
-    }
+    Check ($ok -and !$ok.Current.BoundingRectangle.IsEmpty) 'Native OK control not found'
+    $bounds = $ok.Current.BoundingRectangle
+    Check ([DiagnosticsProbe]::Click($dialog, [int]($bounds.X + $bounds.Width / 2),
+        [int]($bounds.Y + $bounds.Height / 2))) 'Native OK control not clickable'
     Check ($app.WaitForExit(5000) -and $app.ExitCode -eq 1) 'Fatal dialog did not exit once with code 1'
     if ($logged) {
         $log = Log-Text

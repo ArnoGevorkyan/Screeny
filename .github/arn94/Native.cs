@@ -40,8 +40,23 @@ public static class DiagnosticsProbe
     [DllImport("user32.dll")]
     private static extern IntPtr GetDlgItem(IntPtr dialog, int id);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X; public int Y; }
+
     [DllImport("user32.dll")]
-    private static extern bool PostMessage(IntPtr window, uint msg, UIntPtr wp, IntPtr lp);
+    private static extern IntPtr WindowFromPoint(Point point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flag);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessageTimeout(IntPtr window, uint msg, UIntPtr wp,
@@ -74,9 +89,12 @@ public static class DiagnosticsProbe
         return buffer.ToString();
     }
 
-    public static bool Dismiss(IntPtr dialog)
+    public static bool Click(IntPtr dialog, int x, int y)
     {
-        var ok = GetDlgItem(dialog, 1);
-        return ok != IntPtr.Zero && PostMessage(ok, 0x00f5, UIntPtr.Zero, IntPtr.Zero);
+        var point = new Point { X = x, Y = y };
+        if (GetAncestor(WindowFromPoint(point), 2) != dialog || !SetCursorPos(x, y)) return false;
+        mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+        return true;
     }
 }
