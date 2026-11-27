@@ -30,7 +30,6 @@ namespace ScreenTimeTracker
         private bool _disposed;
         private bool _exitCommitted;
         private bool _startupInitialized = false;
-        private bool _iconsRefreshedOnce = false;
         
         // Static constructor to configure LiveCharts
         static MainWindow()
@@ -462,26 +461,6 @@ namespace ScreenTimeTracker
                 }
                 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded completed");
-
-                // Schedule a one-time icon refresh so updated pipeline can replace old cached icons
-                if (!_iconsRefreshedOnce)
-                {
-                    _iconsRefreshedOnce = true;
-                    // Delay slightly to let initial icons finish binding and avoid UI jank
-                    await Task.Delay(2000);
-                    try
-                    {
-                        foreach (var rec in _usageRecords)
-                        {
-                            rec.ClearIcon();
-                            rec.LoadAppIconIfNeeded();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Icon auto-refresh error: {ex.Message}");
-                    }
-                }
 
                 // Indicator bound via ViewModel; no imperative call needed
             }

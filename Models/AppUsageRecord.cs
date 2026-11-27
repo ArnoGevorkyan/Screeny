@@ -242,32 +242,21 @@ namespace ScreenTimeTracker.Models
                 _accumulatedDuration = TimeSpan.Zero
             };
             
-#if !UNIT_TEST
-            // Initialize icon loading in the background
-            record.LoadAppIconIfNeeded();
-#endif
-            
             return record;
         }
 
 #if !UNIT_TEST
-        public async void LoadAppIconIfNeeded()
+        public async void LoadAppIconIfNeeded(AppUsageRecord? liveRecord = null)
         {
-            if (AppIcon != null || _loadingIcon) return;
+            if (_hasResolvedIcon || _loadingIcon) return;
 
             _loadingIcon = true;
             try
             {
-                var icon = await ScreenTimeTracker.Services.IconLoader.Instance.GetIconAsync(this);
-                if (icon != null)
-                {
-                    // Ensure assignment takes place on UI thread
-                    if (!DispatcherHelper.EnqueueOnUIThread(() => AppIcon = icon))
-                    {
-                        // If we are already on UI thread or dispatcher not ready
-                        AppIcon = icon;
-                    }
-                }
+                var loader = Services.IconLoader.Instance;
+                var icon = await loader.GetIconAsync(liveRecord ?? this);
+                _hasResolvedIcon = icon != null;
+                AppIcon = icon ?? AppIcon ?? await loader.GetFallbackIconAsync();
             }
             catch { /* ignore icon failures */ }
             finally
@@ -276,18 +265,10 @@ namespace ScreenTimeTracker.Models
             }
         }
 
-        private bool _loadingIcon = false;
-
-        public void ClearIcon()
-        {
-            AppIcon = null;
-        }
+        private bool _loadingIcon;
+        private bool _hasResolvedIcon;
 #else
-        public void LoadAppIconIfNeeded()
-        {
-        }
-
-        public void ClearIcon()
+        public void LoadAppIconIfNeeded(AppUsageRecord? liveRecord = null)
         {
         }
 #endif

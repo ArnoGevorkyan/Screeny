@@ -298,7 +298,7 @@
                                               FontSize="16"
                                               HorizontalAlignment="Center"
                                               VerticalAlignment="Center"/>
-                                    <Image x:Name="MostUsedAppIcon"
+                                    <Image x:Name="MostUsedAppIcon" Source="{Binding AppIcon}"
                                            Width="20" Height="20" Stretch="Uniform"/>
                                 </Grid>
                                 <TextBlock x:Name="MostUsedApp" 
