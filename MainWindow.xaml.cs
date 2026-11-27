@@ -50,6 +50,8 @@ namespace ScreenTimeTracker
 
         // P/Invoke constants and structures for power notifications
         private const int WM_POWERBROADCAST = 0x0218;
+        private const int PBT_APMSUSPEND = 0x0004;
+        private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
         private const int PBT_POWERSETTINGCHANGE = 0x8013;
         private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
 
@@ -192,12 +194,9 @@ namespace ScreenTimeTracker
             _updateTimer.Tick += UpdateTimer_Tick;
 
             // Hook ViewModel command events
-            _viewModel.OnStartTrackingRequested    += (_, __) => StartTracking();
-            _viewModel.OnStopTrackingRequested     += (_, __) => StopTracking();
-            _viewModel.OnToggleTrackingRequested   += (_, __) =>
-            {
-                if (_trackingService.IsTracking) StopTracking(); else StartTracking();
-            };
+            _viewModel.OnStartTrackingRequested    += (_, __) => SetTrackingRequested(true);
+            _viewModel.OnStopTrackingRequested     += (_, __) => SetTrackingRequested(false);
+            _viewModel.OnToggleTrackingRequested   += (_, __) => SetTrackingRequested(!_trackingRequested);
             _viewModel.OnPickDateRequested         += (_, __) =>
             {
                 _datePickerPopup?.ShowDatePicker(DatePickerButton, _viewModel.SelectedDate, _viewModel.SelectedEndDate, _viewModel.IsDateRangeSelected);
@@ -264,16 +263,19 @@ namespace ScreenTimeTracker
             // Then handle Power Notifications
             if (msg == WM_POWERBROADCAST)
             {
-                if (wParam.ToInt32() == PBT_POWERSETTINGCHANGE)
+                switch (wParam.ToInt32())
                 {
-                    // Marshal lParam to our structure
-                    POWERBROADCAST_SETTING setting = Marshal.PtrToStructure<POWERBROADCAST_SETTING>(lParam);
-
-                    // Check the GUID and Data
-                    HandlePowerSettingChange(setting.PowerSetting, setting.Data);
+                    case PBT_POWERSETTINGCHANGE:
+                        POWERBROADCAST_SETTING setting = Marshal.PtrToStructure<POWERBROADCAST_SETTING>(lParam);
+                        HandlePowerSettingChange(setting.PowerSetting, setting.Data);
+                        break;
+                    case PBT_APMSUSPEND:
+                        SetTrackingPauseReason(TrackingPauseReason.Suspended, true);
+                        break;
+                    case PBT_APMRESUMEAUTOMATIC:
+                        SetTrackingPauseReason(TrackingPauseReason.Suspended, false);
+                        break;
                 }
-                // Note: Other PBT_ events exist (like PBT_APMSUSPEND, PBT_APMRESUMEAUTOMATIC) 
-                // but PBT_POWERSETTINGCHANGE is generally preferred for modern apps.
             }
 
             // Enforce minimum window size
@@ -305,37 +307,15 @@ namespace ScreenTimeTracker
 
         private void HandlePowerSettingChange(Guid settingGuid, byte data)
         {
+            if (data is not (0 or 1)) return;
+
             if (settingGuid == GuidConsoleDisplayState)
             {
-                // 0 = Off, 1 = On, 2 = Dimmed
-                if (data == 0) // Display turning off (potential sleep)
-                {
-                    Debug.WriteLine("Power Event: Console Display State - OFF");
-                    _trackingService?.PauseTrackingForSuspend();
-                }
-                else if (data == 1) // Display turning on (potential resume)
-                {
-                     Debug.WriteLine("Power Event: Console Display State - ON");
-                     _trackingService?.ResumeTrackingAfterSuspend();
-                }
-                 else
-                 {
-                      Debug.WriteLine($"Power Event: Console Display State - DIMMED ({data})");
-                 }
+                SetTrackingPauseReason(TrackingPauseReason.DisplayOff, data == 0);
             }
             else if (settingGuid == GuidSystemAwayMode)
             {
-                // 1 = Entering Away Mode, 0 = Exiting Away Mode
-                if (data == 1) // Entering away mode (sleep)
-                {
-                     Debug.WriteLine("Power Event: System Away Mode - ENTERING");
-                     _trackingService?.PauseTrackingForSuspend();
-                }
-                else if (data == 0) // Exiting away mode (resume)
-                {
-                    Debug.WriteLine("Power Event: System Away Mode - EXITING");
-                    _trackingService?.ResumeTrackingAfterSuspend();
-                }
+                SetTrackingPauseReason(TrackingPauseReason.AwayMode, data == 1);
             }
         }
 
@@ -442,7 +422,7 @@ namespace ScreenTimeTracker
                 "Screeny - Tracking";
             _trayIconHelper?.AddIcon(trayTooltip);
 
-            StartTracking();
+            SetTrackingRequested(true);
 
             if (App.StartedFromWindowsStartup)
             {
@@ -454,7 +434,7 @@ namespace ScreenTimeTracker
             }
         }
 
-        // Methods moved to MainWindow.Logic.cs (Dispose, PrepareForSuspend, AutoSaveTimer_Tick)
+        // Methods moved to MainWindow.Logic.cs (Dispose, AutoSaveTimer_Tick)
 
         // New method to handle initialization after window is loaded - Made async void
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -876,11 +856,11 @@ namespace ScreenTimeTracker
             // Persist current session before exiting.
             try
             {
-                PrepareForSuspend();
+                SetTrackingPauseReason(TrackingPauseReason.Exiting, true);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error preparing for suspend on exit: {ex.Message}");
+                Debug.WriteLine($"Error stopping tracking on exit: {ex.Message}");
             }
 
             // Ensure proper cleanup and exit on the UI thread
@@ -904,7 +884,7 @@ namespace ScreenTimeTracker
             var confirm = new ContentDialog
             {
                 Title             = "Erase all screen-time data?",
-                Content           = "This permanently deletes every recorded session. Tracking will restart from zero.",
+                Content           = "This permanently deletes every recorded session.",
                 PrimaryButtonText = "Delete",
                 CloseButtonText   = "Cancel",
                 DefaultButton     = ContentDialogButton.Close,
@@ -912,23 +892,30 @@ namespace ScreenTimeTracker
             };
 
             var res = await confirm.ShowAsync();
-            if (res != ContentDialogResult.Primary) return;
+            if (res != ContentDialogResult.Primary || _disposed ||
+                (_trackingPauseReasons & TrackingPauseReason.Exiting) != 0) return;
 
             try
             {
-                _trackingService?.StopTracking();
-                bool ok = _databaseService?.WipeDatabase() ?? false;
-
-                if (ok)
+                bool ok;
+                try
                 {
-                    _usageGeneration++;
-                    _usageRecords?.Clear();
-                    _viewModel?.AggregatedRecords?.Clear();
-                    UpdateUsageChart();
-                    UpdateSummaryTab();
-                }
+                    SetTrackingPauseReason(TrackingPauseReason.Resetting, true);
+                    ok = _databaseService?.WipeDatabase() ?? false;
 
-                _trackingService?.StartTracking();
+                    if (ok)
+                    {
+                        _usageGeneration++;
+                        _usageRecords?.Clear();
+                        _viewModel?.AggregatedRecords?.Clear();
+                        UpdateUsageChart();
+                        UpdateSummaryTab();
+                    }
+                }
+                finally
+                {
+                    SetTrackingPauseReason(TrackingPauseReason.Resetting, false);
+                }
 
                 await new ContentDialog
                 {

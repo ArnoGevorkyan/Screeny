@@ -161,35 +161,6 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        public void PauseTrackingForSuspend()
-        {
-            lock (_lockObject)
-            {
-                ThrowIfDisposed();
-                if (!IsTracking) return;
-
-                _timer.Stop();
-                IsTracking = false;
-
-                FinalizeOpenRecords(DateTime.Now);
-            }
-        }
-
-        public void ResumeTrackingAfterSuspend()
-        {
-            lock (_lockObject)
-            {
-                ThrowIfDisposed();
-                if (IsTracking) return;
-
-                IsTracking = true;
-                _timer.Start();
-            }
-            
-            // Call CheckActiveWindow outside of lock to avoid deadlock
-            CheckActiveWindow();
-        }
-
         private void Timer_Elapsed(object? sender, ElapsedEventArgs e)
         {
             // Lightweight tick: idle detection, active-window check, live duration update, day rollover.
