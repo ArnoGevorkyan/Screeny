@@ -96,11 +96,11 @@ namespace ScreenTimeTracker.Services
             return new SqliteConnection(_connection.ConnectionString);
         }
 
-        private static void OpenConnection(SqliteConnection connection)
+        private static void OpenConnection(SqliteConnection connection, int busyTimeoutMilliseconds = BusyTimeoutMilliseconds)
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMilliseconds};";
+            command.CommandText = $"PRAGMA busy_timeout = {busyTimeoutMilliseconds};";
             command.ExecuteNonQuery();
         }
 
@@ -568,35 +568,14 @@ namespace ScreenTimeTracker.Services
             try
             {
                 using var connection = CreateConnection();
-                OpenConnection(connection);
-                using var transaction = connection.BeginTransaction();
-
-                const string duplicateSql = @"SELECT 1
-                                   FROM app_usage
-                                   WHERE date = @Date
-                                     AND process_name = @ProcessName
-                                     AND start_time = @StartTime
-                                     AND end_time = @EndTime
-                                   LIMIT 1;";
-
-                using (var duplicateCommand = new SqliteCommand(duplicateSql, connection, transaction))
-                {
-                    duplicateCommand.Parameters.AddWithValue("@Date", slice.Date.ToString("yyyy-MM-dd"));
-                    duplicateCommand.Parameters.AddWithValue("@ProcessName", slice.ProcessName);
-                    duplicateCommand.Parameters.AddWithValue("@StartTime", slice.StartTime.ToString("o"));
-                    duplicateCommand.Parameters.AddWithValue("@EndTime", slice.EndTime.ToString("o"));
-
-                    if (duplicateCommand.ExecuteScalar() != null)
-                    {
-                        transaction.Commit();
-                        return PersistenceResult.DuplicateIgnored;
-                    }
-                }
+                connection.DefaultTimeout = 1;
+                OpenConnection(connection, busyTimeoutMilliseconds: 0);
 
                 const string insertSql = @"INSERT INTO app_usage (date, process_name, app_name, start_time, end_time, duration, is_focused, last_updated)
-                                   VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated);";
+                                   VALUES (@Date, @ProcessName, @ApplicationName, @StartTime, @EndTime, @Duration, @IsFocused, @LastUpdated)
+                                   ON CONFLICT(date, process_name, start_time, end_time) WHERE end_time IS NOT NULL DO NOTHING;";
 
-                using var command = new SqliteCommand(insertSql, connection, transaction);
+                using var command = new SqliteCommand(insertSql, connection);
                 command.Parameters.AddWithValue("@Date", slice.Date.ToString("yyyy-MM-dd"));
                 command.Parameters.AddWithValue("@ProcessName", slice.ProcessName);
                 command.Parameters.AddWithValue("@ApplicationName", slice.ApplicationName);
@@ -606,14 +585,7 @@ namespace ScreenTimeTracker.Services
                 command.Parameters.AddWithValue("@IsFocused", 0);
                 command.Parameters.AddWithValue("@LastUpdated", DateTime.UtcNow.ToString("o"));
 
-                command.ExecuteNonQuery();
-                transaction.Commit();
-                return PersistenceResult.Saved;
-            }
-            catch (SqliteException ex) when (IsConstraintSqliteException(ex))
-            {
-                Debug.WriteLine($"Duplicate usage slice ignored: {ex.Message}");
-                return PersistenceResult.DuplicateIgnored;
+                return command.ExecuteNonQuery() == 0 ? PersistenceResult.DuplicateIgnored : PersistenceResult.Saved;
             }
             catch (SqliteException ex) when (IsRetryableSqliteException(ex))
             {
@@ -630,11 +602,6 @@ namespace ScreenTimeTracker.Services
         private static bool IsRetryableSqliteException(SqliteException ex)
         {
             return ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6;
-        }
-
-        private static bool IsConstraintSqliteException(SqliteException ex)
-        {
-            return ex.SqliteErrorCode == 19;
         }
 
         /// <summary>

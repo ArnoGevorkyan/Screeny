@@ -4,6 +4,7 @@ namespace ScreenTimeTracker.Models
     {
         Healthy,
         RetryableIssue,
-        FatalIssue
+        FatalIssue,
+        HistoryIncomplete
     }
 }

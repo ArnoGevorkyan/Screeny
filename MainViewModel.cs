@@ -97,6 +97,7 @@ namespace ScreenTimeTracker
                 {
                     PersistenceHealthStatus.FatalIssue => $"{status} · Data issue",
                     PersistenceHealthStatus.RetryableIssue => $"{status} · Saving delayed",
+                    PersistenceHealthStatus.HistoryIncomplete => $"{status} · Some usage not saved",
                     _ => status
                 };
             }

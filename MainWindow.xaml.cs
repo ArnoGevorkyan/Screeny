@@ -25,6 +25,7 @@ namespace ScreenTimeTracker
     {
         private readonly WindowTrackingService _trackingService;
         private readonly DatabaseService? _databaseService;
+        private readonly UsageSliceWriter _sliceWriter;
         private ObservableCollection<AppUsageRecord> _usageRecords;
         private bool _disposed;
         private bool _startupInitialized = false;
@@ -150,6 +151,7 @@ namespace ScreenTimeTracker
 
             // Initialize services
             _databaseService = new DatabaseService();
+            _sliceWriter = new UsageSliceWriter(_databaseService, ReportPersistenceHealth);
             if (!_databaseService.IsDatabaseInitialized())
             {
                 _viewModel.PersistenceHealth = PersistenceHealthStatus.FatalIssue;
@@ -849,27 +851,46 @@ namespace ScreenTimeTracker
 
         private void TrayIcon_ExitClicked(object? sender, EventArgs e)
         {
-            Debug.WriteLine("Tray Icon Exit Clicked");
-            // Persist current session before exiting.
-            try
+            DispatcherQueue.TryEnqueue(async () =>
             {
-                SetTrackingPauseReason(TrackingPauseReason.Exiting, true);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error stopping tracking on exit: {ex.Message}");
-            }
+                if (_disposed || (_trackingPauseReasons & (TrackingPauseReason.Exiting | TrackingPauseReason.Resetting)) != 0)
+                    return;
 
-            // Ensure proper cleanup and exit on the UI thread
-            DispatcherQueue?.TryEnqueue(() =>
-            {
                 try
                 {
+                    SetTrackingPauseReason(TrackingPauseReason.Exiting, true);
+                    bool saved = await _sliceWriter.WaitForDrainAsync();
+                    if (_disposed) return;
+                    if (!saved)
+                    {
+                        _appWindow.Show();
+                        Activate();
+                        var choice = await new ContentDialog
+                        {
+                            Title = "Usage hasn’t been saved yet",
+                            Content = "Screeny is still waiting for the database. Exiting now can lose unsaved usage.",
+                            PrimaryButtonText = "Exit without saving",
+                            CloseButtonText = "Keep Screeny open",
+                            DefaultButton = ContentDialogButton.Close,
+                            XamlRoot = Content.XamlRoot
+                        }.ShowAsync();
+                        if (choice != ContentDialogResult.Primary || _disposed) return;
+                    }
+
+                    Dispose();
                     Application.Current.Exit();
                 }
                 catch (Exception ex)
-                {                    
+                {
                     Debug.WriteLine($"Error exiting application from tray: {ex.Message}");
+                }
+                finally
+                {
+                    if (!_disposed)
+                    {
+                        SetTrackingPauseReason(TrackingPauseReason.Exiting, false);
+                        if (!_viewModel.IsTracking) DoChartRefresh();
+                    }
                 }
             });
         }
@@ -898,7 +919,7 @@ namespace ScreenTimeTracker
                 try
                 {
                     SetTrackingPauseReason(TrackingPauseReason.Resetting, true);
-                    ok = _databaseService?.WipeDatabase() ?? false;
+                    ok = _sliceWriter.Reset();
 
                     if (ok)
                     {
@@ -955,5 +976,3 @@ namespace ScreenTimeTracker
 
     }
 }
-
-
