@@ -32,7 +32,7 @@ Screeny is a lightweight desktop application that helps you monitor how much tim
 
 ### Prerequisites
 - Windows 11
-- [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0) or newer
+- [.NET SDK 10.0](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Windows App SDK](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/set-up-your-development-environment)
 
 ### Build Steps

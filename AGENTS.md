@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Screeny is a privacy-focused WinUI 3 desktop app targeting `.NET 8` and Windows App SDK. Core files live at the repository root:
+Screeny is a privacy-focused WinUI 3 desktop app targeting `.NET 10` and Windows App SDK. Core files live at the repository root:
 
 - `App.xaml` / `App.xaml.cs`: application startup, logging, startup-mode detection, and global exception handling.
 - `MainWindow.xaml`, `MainWindow.xaml.cs`, `MainWindow.Logic.cs`, `MainWindow.UI.cs`: UI, lifecycle, tracking coordination, charts, tray behavior, and power notifications.
