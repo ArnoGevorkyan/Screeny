@@ -108,7 +108,13 @@ namespace ScreenTimeTracker
                 // Stop services
                 _trackingService?.StopTracking();
                 _updateTimer?.Stop();
-
+                if ((_trackingPauseReasons & TrackingPauseReason.Exiting) == 0)
+                    _sliceWriter.WaitForDrainAsync().GetAwaiter().GetResult();
+                var (unsaved, lost) = _sliceWriter.Stop();
+                if (unsaved > 0)
+                    App.WriteToLog($"Screeny closed with {unsaved} unsaved finalized usage slices.");
+                if (lost && _viewModel.PersistenceHealth != PersistenceHealthStatus.HistoryIncomplete)
+                    App.WriteToLog("One or more finalized usage slices could not be saved.");
 
                 // Clear collections
                 _usageRecords?.Clear();

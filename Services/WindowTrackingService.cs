@@ -19,6 +19,7 @@ namespace ScreenTimeTracker.Services
         private AppUsageRecord? _currentRecord;
         private bool _disposed;
         private readonly object _lockObject = new object();
+        private int _trackingGeneration;
         private bool _isIdle = false;
         private AppUsageRecord? _idleRecord;
 
@@ -134,6 +135,7 @@ namespace ScreenTimeTracker.Services
 
         public void StartTracking()
         {
+            int generation;
             lock (_lockObject)
             {
                 ThrowIfDisposed();
@@ -141,10 +143,11 @@ namespace ScreenTimeTracker.Services
 
                 _timer.Start();
                 IsTracking = true;
+                generation = _trackingGeneration;
             }
             
             // Call CheckActiveWindow outside of lock to avoid deadlock
-            CheckActiveWindow();
+            CheckActiveWindow(generation);
         }
 
         public void StopTracking()
@@ -156,6 +159,7 @@ namespace ScreenTimeTracker.Services
 
                 _timer.Stop();
                 IsTracking = false;
+                _trackingGeneration++;
 
                 FinalizeOpenRecords(DateTime.Now);
             }
@@ -166,6 +170,8 @@ namespace ScreenTimeTracker.Services
             // Lightweight tick: idle detection, active-window check, live duration update, day rollover.
             try
             {
+                if (GetTrackingGeneration() is not int generation) return;
+
                 // ----- Idle detection -----
                 int idleSec = GetIdleSeconds();
                 bool mediaPlaying = IsAnyMediaPlaying();
@@ -174,7 +180,7 @@ namespace ScreenTimeTracker.Services
 
                 lock (_lockObject)
                 {
-                    if (!IsTracking || _disposed) return;
+                    if (!IsTracking || generation != _trackingGeneration) return;
 
                     shouldRefreshActiveWindow = ApplyIdleState(currentlyIdle, DateTime.Now);
                 }
@@ -183,7 +189,7 @@ namespace ScreenTimeTracker.Services
 
                 if (shouldRefreshActiveWindow)
                 {
-                    CheckActiveWindow();
+                    CheckActiveWindow(generation);
                 }
 
                 // ----- Active-window tracking -----
@@ -192,6 +198,7 @@ namespace ScreenTimeTracker.Services
                 // ----- Live-duration update & day rollover -----
                 lock (_lockObject)
                 {
+                    if (!IsTracking || generation != _trackingGeneration) return;
                     UpdateFocusedRecord(DateTime.Now);
 
                     if (_idleRecord is { } idleRecord)
@@ -207,19 +214,17 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        private void CheckActiveWindow()
+        private int? GetTrackingGeneration()
         {
             lock (_lockObject)
-            {
-                if (!IsTracking || _disposed)
-                {
-                    return;
-                }
-            }
+                return IsTracking ? _trackingGeneration : null;
+        }
 
+        private void CheckActiveWindow(int generation, IntPtr? window = null)
+        {
             try
             {
-                var foregroundWindow = GetForegroundWindow();
+                var foregroundWindow = window ?? GetForegroundWindow();
                 if (foregroundWindow == IntPtr.Zero || !IsWindow(foregroundWindow)) return;
                 uint processId;
                 GetWindowThreadProcessId(foregroundWindow, out processId);
@@ -227,7 +232,7 @@ namespace ScreenTimeTracker.Services
                 var windowTitle = GetActiveWindowTitle(foregroundWindow);
                 var processName = GetProcessName(foregroundWindow);
 
-                ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle);
+                ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle, generation);
             }
             catch (Exception ex)
             {
@@ -437,7 +442,8 @@ namespace ScreenTimeTracker.Services
 
         internal void ProcessWindowChangeForTest(IntPtr foregroundWindow, int processId, string processName, string windowTitle)
         {
-            ProcessWindowChange(foregroundWindow, processId, processName, windowTitle);
+            if (GetTrackingGeneration() is int generation)
+                ProcessWindowChange(foregroundWindow, processId, processName, windowTitle, generation);
         }
 
         internal bool ApplyIdleStateForTest(bool currentlyIdle, DateTime now)
@@ -506,49 +512,21 @@ namespace ScreenTimeTracker.Services
         // ---------- WinEvent hook callback ----------
         private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
         {
-            if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
+            if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero && GetTrackingGeneration() is int generation)
             {
                 // Process on thread-pool to avoid blocking WinEvent thread
-                Task.Run(() => CheckActiveWindow(hwnd));
-            }
-        }
-
-        // Overload that skips GetForegroundWindow and uses supplied handle
-        private void CheckActiveWindow(IntPtr foregroundWindow)
-        {
-            if (foregroundWindow == IntPtr.Zero) return;
-            // Reuse main logic by moving body to shared method if possible; for now duplicate minimal parts
-            lock (_lockObject)
-            {
-                if (!IsTracking || _disposed) return;
-            }
-
-            try
-            {
-                if (!IsWindow(foregroundWindow)) return;
-
-                uint processId;
-                GetWindowThreadProcessId(foregroundWindow, out processId);
-                if (processId == 0) return;
-
-                var windowTitle = GetActiveWindowTitle(foregroundWindow);
-                var processName = GetProcessName(foregroundWindow);
-
-                // Rest of logic identical to existing method -> call helper to reduce duplication
-                ProcessWindowChange(foregroundWindow, (int)processId, processName, windowTitle);
-            }
-            catch (Exception ex) 
-            { 
-                System.Diagnostics.Debug.WriteLine($"Error in window tracking callback: {ex.Message}");
+                Task.Run(() => CheckActiveWindow(generation, hwnd));
             }
         }
 #endif
 
         // Extracted shared logic from original CheckActiveWindow body starting after obtaining names
-        private void ProcessWindowChange(IntPtr foregroundWindow, int processId, string processName, string windowTitle)
+        private void ProcessWindowChange(IntPtr foregroundWindow, int processId, string processName, string windowTitle, int generation)
         {
             lock (_lockObject)
             {
+                if (!IsTracking || generation != _trackingGeneration) return;
+
                 // If the same window remains focused, nothing to do
                 if (_currentRecord != null &&
                     _currentRecord.WindowHandle == foregroundWindow &&

@@ -804,29 +804,13 @@ namespace ScreenTimeTracker
             }
         }
 
-        // Service boundary handler: persists finalized immutable slices from tracking service.
         private void TrackingService_UsageSliceFinalized(object? sender, UsageSlice slice)
         {
-            if (_databaseService == null || slice == null) return;
+            _sliceWriter.Enqueue(slice);
+        }
 
-            PersistenceResult result;
-            try
-            {
-                result = _databaseService.SaveSliceWithResult(slice);
-            }
-            catch (Exception ex)
-            {
-                result = PersistenceResult.FatalFailure;
-                System.Diagnostics.Debug.WriteLine($"Error saving usage slice from service: {ex.Message}");
-            }
-
-            var health = result switch
-            {
-                PersistenceResult.Saved or PersistenceResult.DuplicateIgnored => PersistenceHealthStatus.Healthy,
-                PersistenceResult.RetryableFailure => PersistenceHealthStatus.RetryableIssue,
-                _ => PersistenceHealthStatus.FatalIssue
-            };
-
+        private void ReportPersistenceHealth(PersistenceHealthStatus health, bool drained)
+        {
             try
             {
                 DispatcherQueue.TryEnqueue(() =>
@@ -835,7 +819,16 @@ namespace ScreenTimeTracker
 
                     try
                     {
-                        _viewModel.PersistenceHealth = health;
+                        if (_viewModel.PersistenceHealth != health)
+                        {
+                            if (health == PersistenceHealthStatus.HistoryIncomplete)
+                                App.WriteToLog("One or more finalized usage slices could not be saved.");
+                            _viewModel.PersistenceHealth = health;
+                        }
+
+                        if (drained && !_viewModel.IsTracking &&
+                            (_trackingPauseReasons & (TrackingPauseReason.Resetting | TrackingPauseReason.Exiting)) == 0)
+                            DoChartRefresh();
                     }
                     catch (Exception ex)
                     {

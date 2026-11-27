@@ -395,7 +395,7 @@ public partial class App : Application
        MessageBox(IntPtr.Zero, message, "Application Error", MB_OK | MB_ICONERROR);
     }
 
-    private static void WriteToLog(string message)
+    internal static void WriteToLog(string message)
     {
         try
         {
