@@ -1,0 +1,67 @@
+name: Verification only - ARN-94 local diagnostics
+
+on:
+  push:
+    branches: [verify/arn94-startup-diagnostics]
+    paths: ['.github/workflows/arn94-startup-diagnostics.yml', '.github/arn94/**']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    name: ${{ matrix.source.case }} / ${{ matrix.mode }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [loose, msix]
+        source:
+          - case: baseline
+            sha: ac6b16b43ce6a1e4eb83f28460c791d15c2478a1
+            tree: 75b65fa37731737a88621bc856f970c09ec4940b
+          - case: fixed
+            sha: d530f404558f5415aac03252b71b53af8adf891c
+            tree: 2cb10a29beed3ebf306f09dc447e8bd87e10f6f5
+          - case: composed
+            sha: fa7caa42adc61895d38f756dfc8a0ceae9b1cf45
+            tree: 63ac39e5260d73142311849c8c13d2c4402da72d
+    env:
+      CASE: ${{ matrix.source.case }}
+      MODE: ${{ matrix.mode }}
+      SOURCE: ${{ matrix.source.sha }}
+      TREE: ${{ matrix.source.tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verify
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: product
+          ref: ${{ env.SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.404'
+      - name: Verify exact source and build
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git -C product rev-parse HEAD) -ne $env:SOURCE -or (git -C product rev-parse 'HEAD^{tree}') -ne $env:TREE -or (git -C product status --porcelain)) { throw 'Product pin or clean checkout mismatch' }
+          if ((git -C verify rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Verification pin mismatch' }
+          dotnet new globaljson --sdk-version 10.0.404 --roll-forward disable
+          if (![Environment]::Is64BitProcess -or ![Environment]::UserInteractive) { throw 'Requires x64 interactive runner' }
+          "Source=$env:SOURCE tree=$env:TREE SDK=$(dotnet --version) Windows=$([Environment]::OSVersion.Version)"
+          if ($env:MODE -eq 'loose') {
+            dotnet build product/ScreenTimeTracker.sln -c Release -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false
+          } else {
+            & verify/.github/arn94/package.ps1
+          }
+      - name: Probe real local logs, WinUI launch, and fatal dialog
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $exe = (Resolve-Path 'product/bin/x64/Release/net10.0-windows10.0.22621.0/win-x64/Screeny.exe').Path
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Sta -File verify/.github/arn94/run.ps1 -Case $env:CASE -Mode $env:MODE -Exe $exe
