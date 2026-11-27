@@ -96,7 +96,8 @@ function Check-Fault([string]$target, [bool]$logged) {
     } catch {
         $app.Refresh()
         $safe = Log-Text
-        "Fault trace: exited=$($app.HasExited) app-launch-error=$($safe -match 'Application launch failed:') app-init-error=$($safe -match 'App initialization failed:') ui-error=$($safe -match 'Unhandled UI exception:') window-created=$(@([regex]::Matches($safe, 'MainWindow created successfully')).Count)"
+        $exit = if ($app.HasExited) { '0x{0:X8}' -f $app.ExitCode } else { 'still-running' }
+        "Fault trace: exit=$exit app-launch-error=$($safe -match 'Application launch failed:') app-init-error=$($safe -match 'App initialization failed:') ui-error=$($safe -match 'Unhandled UI exception:') window-created=$(@([regex]::Matches($safe, 'MainWindow created successfully')).Count)"
         throw
     }
     $text = [DiagnosticsProbe]::Text($dialog)
@@ -105,7 +106,14 @@ function Check-Fault([string]$target, [bool]$logged) {
     $code = $Matches[1]
     $status = if ($logged) { 'See app_log.txt in local app data for details.' } else { 'No diagnostic entry was saved.' }
     Check ($text.Contains($status)) 'Fatal dialog misstated file logging result'
-    Check ([DiagnosticsProbe]::Dismiss($dialog)) 'Unable to dismiss the fatal dialog'
+    $root = [Windows.Automation.AutomationElement]::FromHandle($dialog)
+    $ok = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, 'OK'))
+    if ($ok) {
+        $ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    } else {
+        Check ([DiagnosticsProbe]::Dismiss($dialog)) 'Unable to dismiss the fatal dialog'
+    }
     Check ($app.WaitForExit(5000) -and $app.ExitCode -eq 1) 'Fatal dialog did not exit once with code 1'
     if ($logged) {
         $log = Log-Text
@@ -159,8 +167,9 @@ try {
         $legacyPath = Join-Path $faultDir Screeny_ErrorLog.txt
         [IO.File]::WriteAllText($legacyPath, $legacy)
         $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        & icacls.exe $faultDir /deny "*${sid}:(W)" | Out-Null
+        & icacls.exe $faultDir /deny "*${sid}:(WD,AD,WEA,WA)" | Out-Null
         Check ($LASTEXITCODE -eq 0) 'Could not deny writes in disposable exe directory'
+        Check ([IO.File]::Exists($faultTarget) -and (Get-FileHash $productDll).Hash -eq $hash) 'Fixture no longer readable'
     }
     $writeAttempt = Join-Path $faultDir "$marker.txt"
     try {

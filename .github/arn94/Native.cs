@@ -77,6 +77,6 @@ public static class DiagnosticsProbe
     public static bool Dismiss(IntPtr dialog)
     {
         var ok = GetDlgItem(dialog, 1);
-        return ok != IntPtr.Zero && PostMessage(dialog, 0x0111, (UIntPtr)1, ok);
+        return ok != IntPtr.Zero && PostMessage(ok, 0x00f5, UIntPtr.Zero, IntPtr.Zero);
     }
 }
