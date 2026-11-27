@@ -80,6 +80,11 @@ namespace ScreenTimeTracker.Models
         internal TimeSpan _accumulatedDuration = TimeSpan.Zero;
         private DateTime _lastFocusTime;
         private bool _durationIsSnapshot;
+        internal bool IsAggregate { get; init; }
+        internal static readonly TimeSpan MaxVisitDuration = TimeSpan.FromHours(16);
+
+        internal static TimeSpan BoundVisitDuration(TimeSpan duration) =>
+            duration > MaxVisitDuration ? MaxVisitDuration : duration;
 
         public TimeSpan Duration
         {
@@ -100,13 +105,7 @@ namespace ScreenTimeTracker.Models
                     baseDuration += focusedDuration;
                 }
                 
-                // Final safety check - cap total duration at 16 hours (allowing for multiple sessions)
-                if (baseDuration.TotalHours > 16)
-                {
-                    baseDuration = TimeSpan.FromHours(16);
-                }
-                
-                return baseDuration;
+                return IsAggregate ? baseDuration : BoundVisitDuration(baseDuration);
             }
         }
 
@@ -200,6 +199,7 @@ namespace ScreenTimeTracker.Models
                 StartTime = StartTime,
                 EndTime = EndTime,
                 _accumulatedDuration = Duration,
+                IsAggregate = IsAggregate,
                 _lastFocusTime = DateTime.Now,
                 _durationIsSnapshot = true
             };
@@ -233,6 +233,7 @@ namespace ScreenTimeTracker.Models
             var record = new AppUsageRecord
             {
                 ProcessName = processName,
+                IsAggregate = true,
                 ApplicationName = processName, // Default to process name
                 Date = date,
                 // Use noon instead of midnight to ensure it's visible on charts

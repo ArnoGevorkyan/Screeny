@@ -171,7 +171,7 @@ namespace ScreenTimeTracker
                 else
                 {
                     UpdateUsageChart();
-                    UpdateSummaryTab(_usageRecords.ToList());
+                    UpdateSummaryTab(_viewModel.IsDateRangeSelected ? _viewModel.AggregatedRecords : _usageRecords);
                 }
             }
             catch (Exception ex)
@@ -435,16 +435,6 @@ namespace ScreenTimeTracker
             }
 
             DispatcherQueue?.TryEnqueue(() => { _isReloading = false; });
-        }
-
-        // ---------------- Date-period helpers migrated from MainWindow.xaml.cs ----------------
-        private int GetDayCountForTimePeriod(TimePeriod period, DateTime date)
-        {
-            return period switch
-            {
-                TimePeriod.Weekly => 7,
-                _ => 1,
-            };
         }
 
         /// <summary>

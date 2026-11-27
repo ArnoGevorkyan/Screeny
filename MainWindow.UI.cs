@@ -70,10 +70,7 @@ namespace ScreenTimeTracker
             int dayCount = (endDate.Date - startDate.Date).Days + 1;
             if (dayCount <= 0) dayCount = 1;
 
-            // Sum total duration across all aggregated records.
-            TimeSpan total = TimeSpan.Zero;
-            foreach (var rec in aggregatedRecords)
-                total += rec.Duration;
+            var total = TimeUtil.CalculateUniqueTotalTime(aggregatedRecords);
 
             // Determine how many days actually have usage
             int activeDayCount = _usageRecords
@@ -411,24 +408,11 @@ namespace ScreenTimeTracker
             return (_viewModel?.SelectedDate.Date ?? DateTime.Today, _viewModel?.SelectedDate.Date ?? DateTime.Today);
         }
 
-        private void UpdateSummaryTab(List<AppUsageRecord> recordsToSummarize)
+        private void UpdateSummaryTab(IEnumerable<AppUsageRecord> recordsToSummarize)
         {
             try
             {
-                // With records already aggregated (unique per process), the total screen
-                // time is simply the sum of their durations. This removes the odd double-
-                // counting we saw when we tried to rebuild intervals for every tick.
-
-                TimeSpan totalTime = recordsToSummarize.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration);
-
-                // Cap to a realistic maximum: 24 h per day * days in period
-                int totalMaxDays = GetDayCountForTimePeriod(_viewModel?.CurrentTimePeriod ?? TimePeriod.Daily, _viewModel?.SelectedDate ?? DateTime.Today);
-                TimeSpan absoluteMaxDuration = TimeSpan.FromHours(24 * totalMaxDays);
-                if (totalTime > absoluteMaxDuration)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Capping total time from {totalTime.TotalHours:F1}h to {absoluteMaxDuration.TotalHours:F1}h");
-                    totalTime = absoluteMaxDuration;
-                }
+                var totalTime = TimeUtil.CalculateUniqueTotalTime(recordsToSummarize);
 
                 // Update summary UI – total screen time block
                 if (TotalScreenTime != null)
@@ -460,8 +444,7 @@ namespace ScreenTimeTracker
                 foreach (var record in recordsToSummarize)
                 {
                     if (Models.ProcessFilter.ShouldIgnoreProcess(record.ProcessName)) continue;
-                    var capped = record.Duration > absoluteMaxDuration ? absoluteMaxDuration : record.Duration;
-                    if (mostUsedApp == null || capped > mostUsedApp.Duration)
+                    if (mostUsedApp == null || record.Duration > mostUsedApp.Duration)
                         mostUsedApp = record;
                 }
 
@@ -609,7 +592,7 @@ namespace ScreenTimeTracker
                     {
                         var (start,end) = GetCurrentViewDateRange();
                         var agg = _databaseService?.GetAggregatedRecordsWithLive(start, end, _trackingService) ?? new List<AppUsageRecord>();
-                        var totalTime = agg.Aggregate(TimeSpan.Zero,(sum,r)=>sum+r.Duration);
+                        var totalTime = TimeUtil.CalculateUniqueTotalTime(agg);
                         
                         // Update UI on UI thread
                         DispatcherQueue.TryEnqueue(() =>
@@ -670,7 +653,7 @@ namespace ScreenTimeTracker
                         return;
 
                     UpdateUsageChart(hourlyRecords);
-                    UpdateSummaryTab(_usageRecords.ToList());
+                    UpdateSummaryTab(_viewModel.IsDateRangeSelected ? _viewModel.AggregatedRecords : _usageRecords);
                 }
                 catch (Exception ex)
                 {
