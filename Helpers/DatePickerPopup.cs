@@ -10,6 +10,7 @@ namespace ScreenTimeTracker.Helpers
     public class DatePickerPopup
     {
         private const double PopupWidth = 510;
+        private const double CalendarDayMinHeight = 46;
 
         private readonly Window _owner;
         private readonly List<(Button Button, Func<DateTime, Selection> GetSelection)> _presets = new();
@@ -58,6 +59,8 @@ namespace ScreenTimeTracker.Helpers
                 .TransformPoint(new Windows.Foundation.Point(0, anchor.ActualHeight));
             popup.HorizontalOffset = Math.Min(belowAnchor.X, _owner.Bounds.Width - PopupWidth - 20);
             popup.VerticalOffset = belowAnchor.Y + 12;
+            var scroll = (ScrollViewer)popup.Child;
+            scroll.MaxHeight = Math.Max(0, popup.XamlRoot.Size.Height - popup.VerticalOffset);
             popup.IsOpen = true;
         }
 
@@ -91,6 +94,7 @@ namespace ScreenTimeTracker.Helpers
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto
                 }
             };
+            popup.Opened += (_, _) => ((ScrollViewer)popup.Child).ChangeView(null, 0, null, true);
             popup.Closed += (_, _) => PopupClosed?.Invoke(this, EventArgs.Empty);
 
             var presets = new StackPanel { Spacing = 4 };
@@ -109,6 +113,10 @@ namespace ScreenTimeTracker.Helpers
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 MinHeight = 320,
+                CalendarViewDayItemStyle = new Style(typeof(CalendarViewDayItem))
+                {
+                    Setters = { new Setter(FrameworkElement.MinHeightProperty, CalendarDayMinHeight) }
+                },
                 CalendarIdentifier = "GregorianCalendar",
                 IsGroupLabelVisible = true,
                 IsTodayHighlighted = true
