@@ -209,7 +209,7 @@ namespace ScreenTimeTracker
                     _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
                 else
                     _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
-                UpdateUsageChart();
+                DoChartRefresh();
             };
 
         }
@@ -924,7 +924,7 @@ namespace ScreenTimeTracker
                 // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
                 _usageRecords?.Clear();
                 _viewModel?.AggregatedRecords?.Clear();
-                UpdateUsageChart();
+                UpdateUsageChart(new List<AppUsageRecord>());
                 UpdateSummaryTab();
 
                 _trackingService?.StartTracking();

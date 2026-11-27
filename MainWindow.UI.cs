@@ -17,6 +17,8 @@ namespace ScreenTimeTracker
     {
         private int _chartRevision;
         private bool _chartRefreshPending;
+        private bool _chartRefreshRequested;
+        private (DateTime Date, List<AppUsageRecord> Records)? _loadedHourlyChart;
 
         // ---------------- Chart update helper ----------------
         private void UpdateUsageChart(List<AppUsageRecord>? hourlyRecords = null)
@@ -24,11 +26,18 @@ namespace ScreenTimeTracker
             // Safety checks
             if (UsageChartLive == null || _usageRecords == null) return;
 
-            _chartRevision++;
+            var date = _viewModel.SelectedDate.Date;
+            if (hourlyRecords != null)
+            {
+                _chartRevision++;
+                _loadedHourlyChart = (date, hourlyRecords);
+            }
+
             ICollection<AppUsageRecord> chartRecords = _usageRecords;
             if (_viewModel.CurrentChartViewMode == ChartViewMode.Hourly)
-                chartRecords = hourlyRecords ?? _databaseService?.GetHourlyRecordsWithLive(_viewModel.SelectedDate, _trackingService)
-                    ?? new List<AppUsageRecord>();
+                chartRecords = _loadedHourlyChart is { } loaded && loaded.Date == date
+                    ? loaded.Records
+                    : Array.Empty<AppUsageRecord>();
 
             var totalTime = Helpers.ChartHelper.UpdateUsageChart(
                 UsageChartLive,
@@ -632,10 +641,15 @@ namespace ScreenTimeTracker
 
         private void DoChartRefresh()
         {
-            if (_chartRefreshPending) return;
-
             _isChartDirty = false;
+            if (_chartRefreshPending)
+            {
+                _chartRefreshRequested = true;
+                return;
+            }
+
             _chartRefreshPending = true;
+            _chartRefreshRequested = false;
             var revision = _chartRevision;
 
             // Run heavy chart work at idle priority to keep UI responsive
@@ -643,7 +657,7 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    if (_disposed || _chartRevision != revision) return;
+                    if (_disposed || _chartRefreshRequested || _chartRevision != revision) return;
 
                     var date = _viewModel.SelectedDate;
                     var mode = _viewModel.CurrentChartViewMode;
@@ -651,7 +665,7 @@ namespace ScreenTimeTracker
                         ? await Task.Run(() => database.GetHourlyRecordsWithLive(date, _trackingService))
                         : null;
 
-                    if (_disposed || _isReloading || _chartRevision != revision ||
+                    if (_disposed || _isReloading || _chartRefreshRequested || _chartRevision != revision ||
                         _viewModel.SelectedDate != date || _viewModel.CurrentChartViewMode != mode)
                         return;
 
@@ -665,6 +679,8 @@ namespace ScreenTimeTracker
                 finally
                 {
                     _chartRefreshPending = false;
+                    if (_chartRefreshRequested && !_disposed)
+                        DoChartRefresh();
                 }
             }) != true)
                 _chartRefreshPending = false;

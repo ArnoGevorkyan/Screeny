@@ -140,28 +140,9 @@ namespace ScreenTimeTracker.Helpers
                     hourlyUsage[hr] = totalHr;
                 }
 
-                // Check if all values are zero
-                bool allZero = true;
-                double maxValue = 0;
-                foreach (var value in hourlyUsage.Values)
-                {
-                    if (value > 0.0001)
-                    {
-                        allZero = false;
-                    }
-                    maxValue = Math.Max(maxValue, value);
-                }
-                
-                // If all values are zero, add a tiny value to the current hour to make the chart visible
-                if (allZero || maxValue < 0.001)
-                {
-                    int currentHour = DateTime.Now.Hour;
-                    hourlyUsage[currentHour] = 0.001; // Add a tiny value
-                }
-
                 // MODIFICATION: Filter to only include hours with usage
                 var nonZeroHours = hourlyUsage
-                    .Where(h => h.Value > 0.0001)
+                    .Where(h => h.Value > 0)
                     .Select(h => h.Key)
                     .OrderBy(h => h)
                     .ToList();
@@ -169,7 +150,9 @@ namespace ScreenTimeTracker.Helpers
                 // If we have no non-zero hours, include the current hour
                 if (nonZeroHours.Count == 0)
                 {
-                    nonZeroHours.Add(DateTime.Now.Hour);
+                    int currentHour = DateTime.Now.Hour;
+                    hourlyUsage[currentHour] = 0.001;
+                    nonZeroHours.Add(currentHour);
                 }
                 
                 // Determine if we should show a compact view (no empty bars)
@@ -245,7 +228,7 @@ namespace ScreenTimeTracker.Helpers
                     labels.Add(label);
                 }
 
-                maxValue = values.Count > 0 ? values.Max() : 0;
+                double maxValue = values.Count > 0 ? values.Max() : 0;
                 
                 // Determine a good Y-axis maximum based on the actual data
                 double yAxisMax = maxValue;

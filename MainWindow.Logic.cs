@@ -211,10 +211,8 @@ namespace ScreenTimeTracker
 
                 // Start unified timer
                 _updateTimer.Start();
-                _isChartDirty = true; // force initial chart render
 
-                UpdateUsageChart();
-                UpdateSummaryTab(_usageRecords.ToList());
+                DoChartRefresh();
 
                 // Sync ViewModel state
                 _viewModel.IsTracking = true;
@@ -255,9 +253,7 @@ namespace ScreenTimeTracker
 
             CleanupSystemProcesses();
 
-            // Update summary and chart
-            UpdateSummaryTab(_usageRecords.ToList());
-            UpdateUsageChart();
+            DoChartRefresh();
             // Tracking indicator handled via binding; no imperative call.
         }
 
@@ -491,7 +487,10 @@ namespace ScreenTimeTracker
             {
                 System.Diagnostics.Debug.WriteLine($"Loading records for specific day: {date:yyyy-MM-dd}");
 
-                var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService));
+                var hourlyRecords = updateUI && _viewModel.CurrentChartViewMode == ChartViewMode.Hourly
+                    ? new List<AppUsageRecord>()
+                    : null;
+                var records = BuildRecords(() => _databaseService.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords));
 
                 if (!updateUI)
                     return records;
@@ -521,7 +520,7 @@ namespace ScreenTimeTracker
                         UsageListView.ItemsSource = _usageRecords;
                     }
 
-                    UpdateUsageChart();
+                    UpdateUsageChart(hourlyRecords);
                     UpdateSummaryTab(_usageRecords.ToList());
                     _isReloading = false;
                 });
