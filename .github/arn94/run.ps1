@@ -88,24 +88,24 @@ function Check-Safe([string]$text) {
 function Check-Fault([string]$target, [bool]$logged) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $app = Launch $target $marker
-    $ae = [Windows.Automation.AutomationElement]
-    $dialog = Wait-For {
-        $ae::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new(
-            [Windows.Automation.PropertyCondition]::new($ae::ProcessIdProperty, $app.Id),
-            [Windows.Automation.PropertyCondition]::new($ae::NameProperty, 'Critical Application Error')))
-    } 'one fatal error dialog'
-    $items = $dialog.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
-    $text = ($items | ForEach-Object { $_.Current.Name }) -join "`n"
+    try {
+        $dialog = Wait-For {
+            $handle = [DiagnosticsProbe]::Dialog($app.Id)
+            if ($handle -ne [IntPtr]::Zero) { $handle }
+        } 'one native error dialog'
+    } catch {
+        $app.Refresh()
+        $safe = Log-Text
+        "Fault trace: exited=$($app.HasExited) app-launch-error=$($safe -match 'Application launch failed:') app-init-error=$($safe -match 'App initialization failed:') ui-error=$($safe -match 'Unhandled UI exception:') window-created=$(@([regex]::Matches($safe, 'MainWindow created successfully')).Count)"
+        throw
+    }
+    $text = [DiagnosticsProbe]::Text($dialog)
     Check-Safe $text
     Check ($text -match 'The application failed to start properly\.' -and $text -match 'Error code: (0x[0-9A-F]{8})') 'Fatal dialog lost its English headline or HRESULT'
     $code = $Matches[1]
     $status = if ($logged) { 'See app_log.txt in local app data for details.' } else { 'No diagnostic entry was saved.' }
     Check ($text.Contains($status)) 'Fatal dialog misstated file logging result'
-    $ok = $dialog.FindFirst([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.AndCondition]::new(
-        [Windows.Automation.PropertyCondition]::new($ae::NameProperty, 'OK'),
-        [Windows.Automation.PropertyCondition]::new($ae::ControlTypeProperty, [Windows.Automation.ControlType]::Button)))
-    Check $ok 'No OK button in fatal dialog'
-    $ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Check ([DiagnosticsProbe]::Dismiss($dialog)) 'Unable to dismiss the fatal dialog'
     Check ($app.WaitForExit(5000) -and $app.ExitCode -eq 1) 'Fatal dialog did not exit once with code 1'
     if ($logged) {
         $log = Log-Text
@@ -149,9 +149,9 @@ try {
         $faultDir = Join-Path $scratch fault
         Copy-Item -LiteralPath (Split-Path -Parent $Exe) -Destination $faultDir -Recurse
         $faultTarget = Join-Path $faultDir Screeny.exe
-        $chart = Join-Path $faultDir LiveChartsCore.dll
-        Check (Test-Path -LiteralPath $chart -PathType Leaf) 'Missing chart dependency in fault copy'
-        [IO.File]::WriteAllText($chart, $marker)
+        $xbf = @(Get-ChildItem -LiteralPath $faultDir -Recurse -File -Filter MainWindow.xbf)
+        Check ($xbf.Count -eq 1) 'Expected one loose MainWindow.xbf resource'
+        [IO.File]::WriteAllText($xbf[0].FullName, $marker)
         $faultLog = Join-Path $looseData app_log.txt
         $legacyPath = Join-Path $faultDir Screeny_ErrorLog.txt
         [IO.File]::WriteAllText($legacyPath, $legacy)
