@@ -121,7 +121,6 @@ namespace ScreenTimeTracker
                 if (_updateTimer != null) _updateTimer.Tick -= UpdateTimer_Tick;
                 if (_trackingService != null)
                 {
-                    _trackingService.WindowChanged -= TrackingService_WindowChanged;
                     _trackingService.UsageRecordUpdated -= TrackingService_UsageRecordUpdated;
                     _trackingService.UsageSliceFinalized -= TrackingService_UsageSliceFinalized;
                 }

@@ -157,7 +157,6 @@ namespace ScreenTimeTracker
             _trackingService = new WindowTrackingService();
 
             // Set up tracking service events
-            _trackingService.WindowChanged += TrackingService_WindowChanged;
             _trackingService.UsageRecordUpdated += TrackingService_UsageRecordUpdated;
             _trackingService.UsageSliceFinalized += TrackingService_UsageSliceFinalized;
             
@@ -531,8 +530,6 @@ namespace ScreenTimeTracker
             System.Diagnostics.Debug.WriteLine("First run check - welcome message disabled");
         }
 
-        // TrackingService_WindowChanged implementation moved to MainWindow.UI.cs
-
         // Event handlers for DatePickerPopup events
         private void DatePickerPopup_SingleDateSelected(object? sender, DateTime selectedDate)
         {
@@ -904,11 +901,14 @@ namespace ScreenTimeTracker
                     SetTrackingPauseReason(TrackingPauseReason.Resetting, true);
                     ok = _databaseService?.WipeDatabase() ?? false;
 
-                    // Clear in-memory collections BEFORE restarting tracking so the first new slice repopulates immediately
-                    _usageRecords?.Clear();
-                    _viewModel?.AggregatedRecords?.Clear();
-                    UpdateUsageChart();
-                    UpdateSummaryTab();
+                    if (ok)
+                    {
+                        _usageGeneration++;
+                        _usageRecords?.Clear();
+                        _viewModel?.AggregatedRecords?.Clear();
+                        UpdateUsageChart();
+                        UpdateSummaryTab();
+                    }
                 }
                 finally
                 {

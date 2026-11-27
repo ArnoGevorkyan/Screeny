@@ -1014,40 +1014,39 @@ namespace ScreenTimeTracker.Services
 
         public bool WipeDatabase()
         {
+            if (!_initializedSuccessfully)
+            {
+                return false;
+            }
+
+            bool deleteCommitted = false;
             try
             {
-                if (!_initializedSuccessfully)
-                {
-                    return false;
-                }
-
                 using var connection = CreateConnection();
                 OpenConnection(connection);
 
-                // 1) Delete all rows inside an explicit transaction
                 using (var tx = connection.BeginTransaction())
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = tx;
                     cmd.CommandText = "DELETE FROM app_usage;";
                     cmd.ExecuteNonQuery();
-                    tx.Commit(); // Commit BEFORE running VACUUM – it cannot execute inside a transaction
+                    tx.Commit();
+                    deleteCommitted = true;
                 }
 
-                // 2) Reclaim file space – now that we are outside the transaction
-                using (var vacuumCmd = connection.CreateCommand())
-                {
-                    vacuumCmd.CommandText = "VACUUM;";
-                    vacuumCmd.ExecuteNonQuery();
-                }
-
-                return true;
+                using var vacuumCmd = connection.CreateCommand();
+                vacuumCmd.CommandText = "VACUUM;";
+                vacuumCmd.ExecuteNonQuery();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Swallow any exception – caller receives failure via 'false'
-                return false;
+                Debug.WriteLine(deleteCommitted
+                    ? $"Usage data deleted, but database compaction failed: {ex.Message}"
+                    : $"Error deleting usage data: {ex.Message}");
             }
+
+            return deleteCommitted;
         }
 
 #if !UNIT_TEST
