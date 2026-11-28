@@ -22,7 +22,7 @@ Treat the database, its companion files and backups, and the logs as private. Do
 
 You can view your history in Screeny. The tray menu's **Delete all data…** action clears usage records from the current database and discards queued sessions when deletion succeeds. It does not remove the database file, diagnostic logs, the file that marks the first launch, or backups. It is not a secure erase. If tracking resumes, Screeny can record new sessions.
 
-When you uninstall a packaged copy, Windows can remove files it redirected into package-managed storage. A packaged copy can also use preexisting files from an unpackaged copy in the same Windows account, such as a diagnostic log. Those files can remain after uninstall, as can other files and backups stored outside the package-managed location. See [how Windows handles files for packaged desktop apps](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes#appdata-operations-on-windows-10-version-1903-and-later).
+In tests with unsigned packages, Windows removed the package-managed history database on uninstall. When `%LOCALAPPDATA%\ScreenTimeTracker` already existed before Screeny first ran, Screeny created its database in that folder even though it was empty. Newly recorded visits can then remain after uninstall, just as older history, logs, and backups outside package-managed storage can. See [how Windows handles files for packaged desktop apps](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes#appdata-operations-on-windows-10-version-1903-and-later).
 
 ## Windows permissions
 
