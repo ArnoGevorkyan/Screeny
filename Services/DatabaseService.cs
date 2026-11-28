@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using SQLitePCL;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ScreenTimeTracker.Services
 {
@@ -15,8 +16,25 @@ namespace ScreenTimeTracker.Services
         private const int LatestSchemaVersion = 2;
         private const int BusyTimeoutMilliseconds = 5000;
         private const string JournalMode = "WAL";
+        private const string FinalizedSliceIndex = "idx_app_usage_finalized_slice_unique";
+        private static readonly (string Name, string Sql)[] LedgerObjects =
+        [
+            ("idx_app_usage_date", "CREATE INDEX idx_app_usage_date ON app_usage(date)"),
+            ("idx_app_usage_process_name", "CREATE INDEX idx_app_usage_process_name ON app_usage(process_name)"),
+            (FinalizedSliceIndex, """
+                CREATE UNIQUE INDEX idx_app_usage_finalized_slice_unique
+                ON app_usage(date, process_name, start_time, end_time)
+                WHERE end_time IS NOT NULL
+                """),
+            ("vw_daily_app_usage", """
+                CREATE VIEW vw_daily_app_usage AS
+                SELECT date, process_name, SUM(duration) AS total_duration_ms
+                FROM app_usage
+                GROUP BY date, process_name
+                """)
+        ];
         private readonly string _dbPath;
-        private static string DefaultDatabasePath => Path.Combine(
+        internal static string DefaultDatabasePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ScreenTimeTracker", "screentime.db");
         private readonly SqliteConnection _connection;
@@ -67,7 +85,7 @@ namespace ScreenTimeTracker.Services
                 Debug.WriteLine($"Using connection string: {connectionString}");
 
                 _connection = new SqliteConnection(connectionString);
-                InitializeDatabase(); // Includes Open, Schema, Migrations, Close
+                InitializeDatabase();
                 
                 Debug.WriteLine($"Database file exists after initialization: {File.Exists(_dbPath)}");
                 _initializedSuccessfully = true;
@@ -141,6 +159,7 @@ namespace ScreenTimeTracker.Services
             {
                 OpenConnection(checkConnection);
                 using var command = checkConnection.CreateCommand();
+                ReadSupportedSchemaVersion(command);
                 command.CommandText = "PRAGMA integrity_check(1);";
                 var result = command.ExecuteScalar() as string
                     ?? throw new InvalidDataException("Database integrity check returned no result.");
@@ -223,15 +242,51 @@ namespace ScreenTimeTracker.Services
         {
             try
             {
-                // Open connection
                 OpenConnection(_connection);
+                InitializeLedger();
                 ConfigureDatabasePragmas();
+                Debug.WriteLine("Database initialized successfully");
+            }
+            finally
+            {
+                _connection.Close();
+            }
+        }
 
-                // Create schema
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = @"
-                    CREATE TABLE IF NOT EXISTS app_usage (
+        private void InitializeLedger()
+        {
+            using var transaction = _connection.BeginTransaction(deferred: true);
+            using var command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            int version = ReadSupportedSchemaVersion(command);
+
+            command.CommandText = "SELECT name, sql FROM main.sqlite_schema WHERE name NOT GLOB 'sqlite_*';";
+            var objects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                    objects.Add(reader.GetString(0), NormalizeSchemaSql(reader.GetString(1)));
+            }
+
+            bool existingLedger = objects.Remove("app_usage", out var table);
+            if (!existingLedger && (version != 0 || objects.Count != 0))
+                throw new InvalidDataException("The database does not have a recognized Screeny ledger.");
+
+            foreach (var (name, sql) in LedgerObjects)
+            {
+                if (objects.TryGetValue(name, out var definition) && definition != NormalizeSchemaSql(sql))
+                    throw new InvalidDataException($"Unexpected definition for ledger object {name}.");
+            }
+
+            if (objects.Keys.Any(name => !LedgerObjects.Any(obj => name.Equals(obj.Name, StringComparison.OrdinalIgnoreCase))))
+                throw new InvalidDataException("The database contains unrecognized schema objects.");
+
+            bool backfilledDates = false;
+            bool originalV0 = false;
+            if (!existingLedger)
+            {
+                Execute("""
+                    CREATE TABLE app_usage (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         date TEXT NOT NULL,
                         process_name TEXT NOT NULL,
@@ -240,316 +295,125 @@ namespace ScreenTimeTracker.Services
                         end_time TEXT,
                         duration INTEGER,
                         is_focused INTEGER DEFAULT 0,
-                        last_updated TEXT 
-                    );";
-                    command.ExecuteNonQuery();
-                }
-
-                // Check if we need to perform any migrations
-                CheckAndPerformMigrations();
-
-                if (HasLatestSchema())
-                {
-                    SetDatabaseVersion(LatestSchemaVersion);
-                }
-
-                // Create indices for better performance after migrations have ensured date exists.
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage(date);";
-                    command.ExecuteNonQuery();
-                }
-
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_process_name ON app_usage(process_name);";
-                    command.ExecuteNonQuery();
-                }
-
-                CreateFinalizedSliceUniqueIndex();
-
-                // Create aggregated VIEW for per-day per-process totals after migrations have ensured date exists.
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = @"
-                        CREATE VIEW IF NOT EXISTS vw_daily_app_usage AS
-                        SELECT
-                            date,
-                            process_name,
-                            SUM(duration) AS total_duration_ms
-                        FROM app_usage
-                        GROUP BY date, process_name;";
-                    command.ExecuteNonQuery();
-                }
-
-                Debug.WriteLine("Database initialized successfully");
+                        last_updated TEXT
+                    );
+                    """);
             }
-            catch (Exception ex)
+            else
             {
-                Debug.WriteLine($"Error initializing database: {ex.Message}");
-                throw; // Rethrow to be caught in constructor
-            }
-            finally
-            {
-                // Make sure connection is closed
-                if (_connection.State != System.Data.ConnectionState.Closed)
+                var (hasDate, hasV2Columns) = ReadLedgerLayout(table!);
+                if ((version == 1 && !hasDate) || (version == LatestSchemaVersion && !hasV2Columns))
+                    throw new InvalidDataException($"Unrecognized ledger layout for schema version {version}.");
+
+                originalV0 = version == 0 && !hasDate && !hasV2Columns;
+                if (!hasDate)
+                    Execute("ALTER TABLE app_usage ADD COLUMN date TEXT;");
+
+                command.CommandText = "SELECT 1 FROM app_usage WHERE date IS NULL LIMIT 1;";
+                if (command.ExecuteScalar() != null)
                 {
-                    _connection.Close();
+                    command.CommandText = """
+                        SELECT 1 FROM app_usage
+                        WHERE date IS NULL
+                          AND (datetime(start_time) IS NULL
+                               OR substr(start_time, 1, 4) = '0000'
+                               OR date(substr(start_time, 1, 10), '+0 days') IS NOT substr(start_time, 1, 10))
+                        LIMIT 1;
+                        """;
+                    if (command.ExecuteScalar() != null)
+                        throw new InvalidDataException("A legacy ledger row has no usable start date.");
+
+                    Execute("UPDATE app_usage SET date = substr(start_time, 1, 10) WHERE date IS NULL;");
+                    backfilledDates = true;
                 }
+
+                command.CommandText = "SELECT 1 FROM app_usage WHERE date IS NULL OR date = '' LIMIT 1;";
+                if (command.ExecuteScalar() != null)
+                    throw new InvalidDataException("The ledger contains a missing date.");
+
+                if (!hasV2Columns)
+                {
+                    Execute("ALTER TABLE app_usage ADD COLUMN is_focused INTEGER DEFAULT 0;");
+                    Execute("ALTER TABLE app_usage ADD COLUMN last_updated TEXT;");
+                }
+            }
+
+            foreach (var (name, sql) in LedgerObjects)
+            {
+                if (objects.ContainsKey(name))
+                    continue;
+
+                if (name == FinalizedSliceIndex && existingLedger && (!backfilledDates || originalV0))
+                {
+                    Execute("""
+                        DELETE FROM app_usage
+                        WHERE end_time IS NOT NULL
+                          AND id NOT IN (
+                              SELECT MIN(id)
+                              FROM app_usage
+                              WHERE end_time IS NOT NULL
+                              GROUP BY date, process_name, start_time, end_time
+                          );
+                        """);
+                }
+
+                Execute(sql);
+            }
+
+            if (version != LatestSchemaVersion)
+                Execute($"PRAGMA user_version = {LatestSchemaVersion};");
+
+            transaction.Commit();
+
+            void Execute(string sql)
+            {
+                command.CommandText = sql;
+                command.ExecuteNonQuery();
             }
         }
 
-        /// <summary>
-        /// Checks for and performs any necessary database migrations
-        /// </summary>
-        private void CheckAndPerformMigrations()
+        private static (bool HasDate, bool HasV2Columns) ReadLedgerLayout(string table)
         {
-            try
-            {
-                // Get current database version or schema information
-                int currentVersion = GetDatabaseVersion();
-                Debug.WriteLine($"Current database version: {currentVersion}");
+            const string prefix = "CREATE TABLE APP_USAGE ( ";
+            const string suffix = " )";
+            if (!table.StartsWith(prefix, StringComparison.Ordinal) || !table.EndsWith(suffix, StringComparison.Ordinal))
+                throw new InvalidDataException("Unrecognized app_usage table definition.");
 
-                // Perform migrations based on version
-                if (currentVersion < 1)
-                {
-                    // Migration to version 1 - Add date column if needed
-                    MigrateToV1();
-                    currentVersion = GetDatabaseVersion(); // Re-fetch version after V1 migration
-                }
+            var columns = table[prefix.Length..^suffix.Length].Split(" , ").ToHashSet();
+            string[] required = ["PROCESS_NAME TEXT NOT NULL", "APP_NAME TEXT", "START_TIME TEXT NOT NULL", "END_TIME TEXT", "DURATION INTEGER"];
+            bool hasId = columns.Remove("ID INTEGER PRIMARY KEY") || columns.Remove("ID INTEGER PRIMARY KEY AUTOINCREMENT");
+            bool hasDate = columns.Remove("DATE TEXT") || columns.Remove("DATE TEXT NOT NULL");
+            bool hasFocus = columns.Remove("IS_FOCUSED INTEGER DEFAULT 0") || columns.Remove("IS_FOCUSED INTEGER");
+            bool hasLastUpdated = columns.Remove("LAST_UPDATED TEXT");
+            if (!hasId || !required.All(columns.Remove) || hasFocus != hasLastUpdated || columns.Count != 0)
+                throw new InvalidDataException("Unrecognized fields in the app_usage table.");
 
-                if (currentVersion < 2)
-                {
-                    MigrateToV2();
-                }
-
-                // Future migrations can be added here
-                // if (currentVersion < 2) { MigrateToV2(); }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error during database migration: {ex.Message}");
-                // We'll continue even if migration fails - the app can still work
-            }
+            return (hasDate, hasFocus);
         }
 
-        /// <summary>
-        /// Retrieves the current database version from the pragma
-        /// </summary>
-        private int GetDatabaseVersion()
-        {
-            try
-            {
-                // First try to get version from user_version pragma
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = "PRAGMA user_version;";
-                    var result = command.ExecuteScalar();
-                    return result != null ? Convert.ToInt32(result) : 0;
-                }
-            }
-            catch
-            {
-                // If there's any error, assume version 0
-                return 0;
-            }
-        }
+        private static string NormalizeSchemaSql(string sql) =>
+            string.Join(" ", Regex.Matches(sql, @"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[^ \t\r\n\f]")).ToUpperInvariant();
 
-        private void SetDatabaseVersion(int version)
+        private static int ReadSupportedSchemaVersion(SqliteCommand command)
         {
-            using var command = _connection.CreateCommand();
-            command.CommandText = $"PRAGMA user_version = {version};";
-            command.ExecuteNonQuery();
+            command.CommandText = "PRAGMA user_version;";
+            int version = (int)(long)(command.ExecuteScalar() ?? throw new InvalidDataException("Missing schema version."));
+            if (version < 0 || version > LatestSchemaVersion)
+                throw new InvalidDataException($"Unsupported database schema version {version}.");
+
+            return version;
         }
 
         private void ConfigureDatabasePragmas()
         {
             using var command = _connection.CreateCommand();
+            command.CommandText = "PRAGMA journal_mode;";
+            if (string.Equals(command.ExecuteScalar() as string, JournalMode, StringComparison.OrdinalIgnoreCase))
+                return;
+
             command.CommandText = $"PRAGMA journal_mode = {JournalMode};";
-            command.ExecuteScalar();
-        }
-
-        private void CreateFinalizedSliceUniqueIndex()
-        {
-            RemoveExactDuplicateFinalizedSlices();
-
-            using var command = _connection.CreateCommand();
-            command.CommandText = @"
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_app_usage_finalized_slice_unique
-                ON app_usage(date, process_name, start_time, end_time)
-                WHERE end_time IS NOT NULL;";
-            command.ExecuteNonQuery();
-        }
-
-        private void RemoveExactDuplicateFinalizedSlices()
-        {
-            using var command = _connection.CreateCommand();
-            command.CommandText = @"
-                DELETE FROM app_usage
-                WHERE end_time IS NOT NULL
-                  AND id NOT IN (
-                      SELECT MIN(id)
-                      FROM app_usage
-                      WHERE end_time IS NOT NULL
-                      GROUP BY date, process_name, start_time, end_time
-                  );";
-            command.ExecuteNonQuery();
-        }
-
-        private bool ColumnExists(string tableName, string columnName)
-        {
-            using var command = _connection.CreateCommand();
-            command.CommandText = $"PRAGMA table_info({tableName});";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                var currentColumnName = reader.GetString(1);
-                if (currentColumnName.Equals(columnName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool HasLatestSchema()
-        {
-            return ColumnExists("app_usage", "date")
-                && ColumnExists("app_usage", "is_focused")
-                && ColumnExists("app_usage", "last_updated");
-        }
-
-        /// <summary>
-        /// Migrates database to version 1 
-        /// Ensures date column exists and is populated
-        /// </summary>
-        private void MigrateToV1()
-        {
-            Debug.WriteLine("Performing migration to version 1");
-            
-            try
-            {
-                bool hasDateColumn = ColumnExists("app_usage", "date");
-
-                // If no date column, add it and populate from start_time
-                if (!hasDateColumn)
-                {
-                    Debug.WriteLine("Adding date column to app_usage table");
-                    
-                    // Begin transaction
-                    using (var transaction = _connection.BeginTransaction())
-                    {
-                        try
-                        {
-                            // Add date column
-                            using (var command = _connection.CreateCommand())
-                            {
-                                command.Transaction = transaction;
-                                command.CommandText = "ALTER TABLE app_usage ADD COLUMN date TEXT;";
-                                command.ExecuteNonQuery();
-                            }
-                            
-                            // Update existing records to extract date from start_time
-                            using (var command = _connection.CreateCommand())
-                            {
-                                command.Transaction = transaction;
-                                command.CommandText = @"
-                                    UPDATE app_usage 
-                                    SET date = substr(start_time, 1, 10) 
-                                    WHERE date IS NULL;";
-                                command.ExecuteNonQuery();
-                            }
-                            
-                            // Commit the transaction
-                            transaction.Commit();
-                            Debug.WriteLine("Migration completed successfully");
-                        }
-                        catch (Exception ex)
-                        {
-                            // Rollback on error
-                            transaction.Rollback();
-                            Debug.WriteLine($"Migration failed: {ex.Message}");
-                            throw;
-                        }
-                    }
-                    
-                    // Create index on the new column
-                    using (var command = _connection.CreateCommand())
-                    {
-                        command.CommandText = "CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage(date);";
-                        command.ExecuteNonQuery();
-                    }
-                }
-                
-                // Update version in database
-                SetDatabaseVersion(1);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error during migration to V1: {ex.Message}");
-                // We'll continue even if migration fails
-            }
-        }
-
-        /// <summary>
-        /// Migrates database to version 2
-        /// Adds is_focused and last_updated columns
-        /// </summary>
-        private void MigrateToV2()
-        {
-            Debug.WriteLine("Performing migration to version 2");
-            try
-            {
-                bool hasIsFocusedColumn = ColumnExists("app_usage", "is_focused");
-                bool hasLastUpdatedColumn = ColumnExists("app_usage", "last_updated");
-
-                // Begin transaction
-                using (var transaction = _connection.BeginTransaction())
-                {
-                    try
-                    {
-                        if (!hasIsFocusedColumn)
-                        {
-                            using var command = _connection.CreateCommand();
-                            command.Transaction = transaction;
-                            command.CommandText = "ALTER TABLE app_usage ADD COLUMN is_focused INTEGER DEFAULT 0;";
-                            command.ExecuteNonQuery();
-                            Debug.WriteLine("Added is_focused column to app_usage table.");
-                        }
-
-                        if (!hasLastUpdatedColumn)
-                        {
-                            using var command = _connection.CreateCommand();
-                            command.Transaction = transaction;
-                            command.CommandText = "ALTER TABLE app_usage ADD COLUMN last_updated TEXT;";
-                            command.ExecuteNonQuery();
-                            Debug.WriteLine("Added last_updated column to app_usage table.");
-                        }
-
-                        // Commit the transaction
-                        transaction.Commit();
-                        Debug.WriteLine("Migration to V2 (columns) completed successfully.");
-                    }
-                    catch (Exception ex)
-                    {
-                        // Rollback on error
-                        transaction.Rollback();
-                        Debug.WriteLine($"Migration to V2 (columns) failed: {ex.Message}");
-                        // Decide if to rethrow or not. For schema changes, it might be safer to inform and potentially stop.
-                        // For now, we log and continue, but this might leave the DB in an inconsistent state for V2.
-                        return; // Exit if column creation failed
-                    }
-                }
-
-                // Update version in database
-                SetDatabaseVersion(2);
-                Debug.WriteLine("Database user_version set to 2.");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error during migration to V2: {ex.Message}");
-            }
+            if (!string.Equals(command.ExecuteScalar() as string, JournalMode, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Could not enable WAL for the Screeny database.");
         }
 
         public bool SaveSlice(UsageSlice slice)
@@ -607,10 +471,11 @@ namespace ScreenTimeTracker.Services
         /// <summary>
         /// Retrieves all app usage records for a specific date
         /// </summary>
-        public List<AppUsageRecord> GetRecordsForDate(DateTime date, List<AppUsageRecord>? hourlyRecords = null)
+        public List<AppUsageRecord> GetRecordsForDate(DateTime date, List<AppUsageRecord>? hourlyRecords = null, bool requireHistory = false)
         {
             if (!_initializedSuccessfully)
             {
+                if (requireHistory) throw new InvalidOperationException("History storage is unavailable.");
                 Debug.WriteLine("Database not initialized, skipping get records operation");
                 return new List<AppUsageRecord>();
             }
@@ -644,7 +509,8 @@ namespace ScreenTimeTracker.Services
                                 string processName = reader.GetString(reader.GetOrdinal("process_name"));
                                 var dbStartTime = DateTime.Parse(reader.GetString(reader.GetOrdinal("start_time")));
                                 DateTime? dbEndTime = reader.IsDBNull(reader.GetOrdinal("end_time")) ? null : DateTime.Parse(reader.GetString(reader.GetOrdinal("end_time")));
-                                long durationMs = !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0;
+                                var duration = AppUsageRecord.BoundVisitDuration(TimeSpan.FromMilliseconds(
+                                    !reader.IsDBNull(reader.GetOrdinal("duration")) ? reader.GetInt64(reader.GetOrdinal("duration")) : 0));
                                 bool isFocused = !reader.IsDBNull(reader.GetOrdinal("is_focused")) && reader.GetInt32(reader.GetOrdinal("is_focused")) == 1;
                                 DateTime? lastUpdated = !reader.IsDBNull(reader.GetOrdinal("last_updated")) ? DateTime.Parse(reader.GetString(reader.GetOrdinal("last_updated"))) : null;
 
@@ -652,17 +518,19 @@ namespace ScreenTimeTracker.Services
                                 {
                                     hourlyRecords.Add(new AppUsageRecord
                                     {
+                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        Date = date.Date,
                                         ProcessName = processName,
                                         StartTime = dbStartTime,
                                         EndTime = dbEndTime,
-                                        _accumulatedDuration = TimeSpan.FromMilliseconds(durationMs)
+                                        _accumulatedDuration = duration
                                     });
                                 }
 
                                 if (processGroups.TryGetValue(processName, out var existingRecord))
                                 {
                                     // Add the duration to the existing record
-                                    existingRecord._accumulatedDuration += TimeSpan.FromMilliseconds(durationMs);
+                                    existingRecord._accumulatedDuration += duration;
                                     // How to handle IsFocused and LastUpdated for merged records? Take the latest?
                                     if (lastUpdated.HasValue && (!existingRecord.LastUpdated.HasValue || lastUpdated.Value > existingRecord.LastUpdated.Value))
                                     {
@@ -682,6 +550,7 @@ namespace ScreenTimeTracker.Services
                                     var record = new AppUsageRecord
                                     {
                                         Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        IsAggregate = true,
                                         ProcessName = processName,
                                         ApplicationName = !reader.IsDBNull(reader.GetOrdinal("app_name")) ? reader.GetString(reader.GetOrdinal("app_name")) : processName,
                                         Date = date, // Use date for the Date field
@@ -691,17 +560,16 @@ namespace ScreenTimeTracker.Services
                                         LastUpdated = lastUpdated
                                     };
                                     
-                                    record._accumulatedDuration = TimeSpan.FromMilliseconds(durationMs);
+                                    record._accumulatedDuration = duration;
                                     
                                     // Add to our dictionary
                                     processGroups[processName] = record;
                                     Debug.WriteLine($"Added new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}");
                                 }
                             }
-                            catch (Exception parseEx)
+                            catch (Exception parseEx) when (!requireHistory)
                             {
                                 Debug.WriteLine($"Error parsing record in GetRecordsForDate: {parseEx.Message}");
-                                // Continue to next record
                             }
                         }
                         
@@ -710,7 +578,7 @@ namespace ScreenTimeTracker.Services
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!requireHistory)
             {
                 Debug.WriteLine($"Error getting records for date: {ex.Message}");
                 return new List<AppUsageRecord>();
@@ -740,13 +608,14 @@ namespace ScreenTimeTracker.Services
                 const string sql = @"
                     SELECT
                         process_name,
-                        SUM(total_duration_ms) AS total_ms
-                    FROM vw_daily_app_usage
+                        SUM(MIN(duration, @MaxVisitDurationMs)) AS total_ms
+                    FROM app_usage
                     WHERE date >= @StartDate AND date <= @EndDate
                     GROUP BY process_name;";
 
                 using (var cmd = new SqliteCommand(sql, connection))
                 {
+                    cmd.Parameters.AddWithValue("@MaxVisitDurationMs", (long)AppUsageRecord.MaxVisitDuration.TotalMilliseconds);
                     cmd.Parameters.AddWithValue("@StartDate", startDateString);
                     cmd.Parameters.AddWithValue("@EndDate",   endDateString);
 
@@ -900,6 +769,9 @@ namespace ScreenTimeTracker.Services
         }
 
         public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
+            => ReadRawRecordsForDateRange(startDate, endDate) ?? throw new InvalidOperationException("History storage is unavailable.");
+
+        private List<AppUsageRecord>? ReadRawRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
             try
             {
@@ -907,7 +779,7 @@ namespace ScreenTimeTracker.Services
                 if (!IsDatabaseInitialized())
                 {
                     System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
-                    return new List<AppUsageRecord>();
+                    return null;
                 }
 
                 // Convert dates to the format stored in the database (YYYY-MM-DD)
@@ -956,7 +828,7 @@ namespace ScreenTimeTracker.Services
                                 catch (Exception ex)
                                 {
                                     System.Diagnostics.Debug.WriteLine($"Error parsing record in GetRawRecordsForDateRange: {ex.Message} on row ID {reader.GetInt32(reader.GetOrdinal("id"))}");
-                                    // Optionally skip this record and continue
+                                    throw;
                                 }
                             }
                         }
@@ -969,7 +841,7 @@ namespace ScreenTimeTracker.Services
             {
                 System.Diagnostics.Debug.WriteLine($"Error in GetRawRecordsForDateRange: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                return new List<AppUsageRecord>();
+                return null;
             }
         }
 
@@ -1032,6 +904,7 @@ namespace ScreenTimeTracker.Services
             var dbRecords = dbReport.Select(pair => new AppUsageRecord
             {
                 ProcessName = pair.ProcessName,
+                IsAggregate = true,
                 _accumulatedDuration = pair.TotalDuration,
                 Date = startDate,
                 StartTime = startDate
@@ -1061,10 +934,10 @@ namespace ScreenTimeTracker.Services
         /// Gets detailed records for a date, optionally including live data
         /// (Replaces UsageAggregationService.GetDetailRecordsForDate)
         /// </summary>
-        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService, List<AppUsageRecord>? hourlyRecords = null)
+        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService, List<AppUsageRecord>? hourlyRecords = null, bool requireHistory = false)
         {
             var liveRecords = hourlyRecords == null ? null : GetLiveRecordsForDay(date, trackingService);
-            var dbRecords = GetRecordsForDate(date, hourlyRecords);
+            var dbRecords = GetRecordsForDate(date, hourlyRecords, requireHistory);
             var aggregated = AggregateRecords(dbRecords, date);
 
             if (hourlyRecords == null)
@@ -1097,11 +970,17 @@ namespace ScreenTimeTracker.Services
             return aggregated.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
         }
 
-        public List<AppUsageRecord> GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        public List<AppUsageRecord>? GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+            => GetDashboardRecordsWithLive(date, date, trackingService);
+
+        public List<AppUsageRecord>? GetDashboardRecordsWithLive(DateTime start, DateTime end, WindowTrackingService? trackingService, bool includeAllStoredRows = false)
         {
-            var liveRecords = GetLiveRecordsForDay(date, trackingService);
-            var records = GetRawRecordsForDateRange(date, date);
-            records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
+            var today = DateTime.Today;
+            var liveRecords = start.Date <= today && today <= end.Date ? GetLiveRecordsForDay(today, trackingService) : null;
+            var records = ReadRawRecordsForDateRange(start, end);
+            if (records == null) return null;
+            if (!includeAllStoredRows)
+                records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
 
             if (liveRecords != null)
                 AddHourlyLiveRecords(records, liveRecords.Where(r => !HasFinalizedRecord(records, r)));
@@ -1115,7 +994,7 @@ namespace ScreenTimeTracker.Services
                 : null;
 
         private static bool HasFinalizedRecord(List<AppUsageRecord> records, AppUsageRecord liveRecord)
-            => records.Any(r => r.StartTime == liveRecord.StartTime &&
+            => records.Any(r => r.StartTime == liveRecord.StartTime && !r.IsFocused && r.EndTime > r.StartTime &&
                 string.Equals(r.ProcessName, liveRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
 
         private static void AddHourlyLiveRecords(List<AppUsageRecord> records, IEnumerable<AppUsageRecord> liveRecords)
@@ -1123,7 +1002,7 @@ namespace ScreenTimeTracker.Services
             foreach (var record in liveRecords)
             {
                 var duration = record.Duration;
-                if (duration.TotalSeconds < 5 || !IsHourlyProcess(record.ProcessName)) continue;
+                if ((record.EndTime == null && duration.TotalSeconds < 5) || !IsHourlyProcess(record.ProcessName)) continue;
 
                 record.EndTime ??= record.StartTime + duration;
                 records.Add(record);
@@ -1161,6 +1040,7 @@ namespace ScreenTimeTracker.Services
                     var newRecord = new AppUsageRecord
                     {
                         ProcessName = processName,
+                        IsAggregate = true,
                         ApplicationName = processName,
                         _accumulatedDuration = liveRec.Duration,
                         Date = liveRec.Date,
@@ -1207,6 +1087,7 @@ namespace ScreenTimeTracker.Services
                     var newRecord = new AppUsageRecord
                     {
                         ProcessName = processName,
+                        IsAggregate = true,
                         ApplicationName = processName,
                         _accumulatedDuration = rec.Duration,
                         Date = rec.Date != default ? rec.Date : (fallbackDate ?? DateTime.Today),

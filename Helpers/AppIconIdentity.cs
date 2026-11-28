@@ -11,10 +11,5 @@ namespace ScreenTimeTracker.Helpers
             var stableProcessName = ApplicationNameNormalizer.NormalizeProcessName(record.ProcessName);
             return stableProcessName.Trim().ToLowerInvariant();
         }
-
-        public static string CreateWindowHandleCacheKey(AppUsageRecord record)
-        {
-            return $"{CreateProcessCacheKey(record)}|{record.WindowHandle.ToInt64()}";
-        }
     }
 }

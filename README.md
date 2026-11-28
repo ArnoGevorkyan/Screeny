@@ -1,55 +1,43 @@
 # Screeny
 
-A privacy-focused screen time tracker for Windows, built with WinUI 3 and the Windows App SDK.
+<a name="about"></a>
+<a name="key-features"></a>
 
-![Screeny Screenshot](Assets/microsoft.png)
-
-## About
-
-Screeny is a lightweight desktop application that helps you monitor how much time you spend in different applications on your Windows computer. It runs silently in the background, tracking which applications are in focus and providing intuitive visualizations of your usage patterns.
-
-### Key Features
-
-- **Privacy First**: All data stays on your device - no internet connection required
-- **Native Windows 11 Experience**: Built with WinUI 3 and the Windows App SDK
-- **Minimal Resource Usage**: Designed for efficiency with minimal system impact
-- **Detailed Analytics**: View your screen time by hour, day, week, or month
-- **Modern UI**: Clean interface with system accent color support
+Screeny tracks how much time you spend in the apps you use on Windows 11. Tracking works offline and your usage history stays on your device.
 
 ## Installation
 
-### 🪟 [Microsoft Store Product Page](https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare)
+<a name="-microsoft-store-product-page"></a>
+
+[Install Screeny from the Microsoft Store](https://apps.microsoft.com/detail/9P2XX9PJM3SR?hl=en-us&gl=US&ocid=pdpshare) on Windows 11 x64.
 
 ## Usage
 
-1. Launch the application
-2. Screeny automatically starts tracking which applications are in focus
-3. View your usage data in real-time in the main dashboard
-4. Switch between hourly and daily views using the toggle buttons
-5. Select different date ranges to view historical data
-
-## Building from Source
-
-### Prerequisites
-- Windows 11
-- [.NET SDK 10.0](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Windows App SDK](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/set-up-your-development-environment)
-
-### Build Steps
-```
-git clone https://github.com/ArnoGevorkyan/Screeny.git
-cd Screeny
-dotnet build
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the Apache License - see the [LICENSE](LICENSE.md) file for details.
+- Open Screeny to start tracking time for the app in focus.
+- In the date picker, choose a day and select **Done**, or select a preset such as **Last 7 days**. The chart groups usage by hour for a single day and by day for a range.
+- Short visits count toward your screen time even when an app is omitted from the daily list.
+- An empty selection stays on the chosen dates. If Screeny can’t read that history, choose the same dates again to retry.
+- Select the tracking status button to pause or resume tracking.
+- Closing the window leaves Screeny running in the notification area. Right-click the Screeny icon and select **Show** to reopen the window or **Exit** to quit.
 
 ## Privacy
 
-Screeny is designed with privacy in mind. All tracking data is stored locally on your device and never transmitted over the internet. See the [PRIVACY](PRIVACY.md) file for our full privacy policy. 
+Screeny stores usage history in a local SQLite database and doesn't upload it.
+
+To clear that history, right-click the Screeny icon in the notification area and select **Delete all data…**. Screeny opens its window with **Cancel** as the default action. Only **Delete** clears history; your tracking setting stays the same.
+
+Read the [Screeny privacy policy](PRIVACY.md).
+
+<a name="building-from-source"></a>
+<a name="prerequisites"></a>
+<a name="build-steps"></a>
+
+## Contributing
+
+- [Build and test from source](docs/development.md)
+- [Find your way around the code](docs/architecture.md)
+- [Read the repository guidelines](AGENTS.md)
+
+## License
+
+Screeny is licensed under the [Apache License, Version 2.0](LICENSE.md).

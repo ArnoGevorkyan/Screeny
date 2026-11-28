@@ -80,6 +80,11 @@ namespace ScreenTimeTracker.Models
         internal TimeSpan _accumulatedDuration = TimeSpan.Zero;
         private DateTime _lastFocusTime;
         private bool _durationIsSnapshot;
+        internal bool IsAggregate { get; init; }
+        internal static readonly TimeSpan MaxVisitDuration = TimeSpan.FromHours(16);
+
+        internal static TimeSpan BoundVisitDuration(TimeSpan duration) =>
+            duration > MaxVisitDuration ? MaxVisitDuration : duration;
 
         public TimeSpan Duration
         {
@@ -100,13 +105,7 @@ namespace ScreenTimeTracker.Models
                     baseDuration += focusedDuration;
                 }
                 
-                // Final safety check - cap total duration at 16 hours (allowing for multiple sessions)
-                if (baseDuration.TotalHours > 16)
-                {
-                    baseDuration = TimeSpan.FromHours(16);
-                }
-                
-                return baseDuration;
+                return IsAggregate ? baseDuration : BoundVisitDuration(baseDuration);
             }
         }
 
@@ -200,6 +199,7 @@ namespace ScreenTimeTracker.Models
                 StartTime = StartTime,
                 EndTime = EndTime,
                 _accumulatedDuration = Duration,
+                IsAggregate = IsAggregate,
                 _lastFocusTime = DateTime.Now,
                 _durationIsSnapshot = true
             };
@@ -233,6 +233,7 @@ namespace ScreenTimeTracker.Models
             var record = new AppUsageRecord
             {
                 ProcessName = processName,
+                IsAggregate = true,
                 ApplicationName = processName, // Default to process name
                 Date = date,
                 // Use noon instead of midnight to ensure it's visible on charts
@@ -241,32 +242,21 @@ namespace ScreenTimeTracker.Models
                 _accumulatedDuration = TimeSpan.Zero
             };
             
-#if !UNIT_TEST
-            // Initialize icon loading in the background
-            record.LoadAppIconIfNeeded();
-#endif
-            
             return record;
         }
 
 #if !UNIT_TEST
-        public async void LoadAppIconIfNeeded()
+        public async void LoadAppIconIfNeeded(AppUsageRecord? liveRecord = null)
         {
-            if (AppIcon != null || _loadingIcon) return;
+            if (_hasResolvedIcon || _loadingIcon) return;
 
             _loadingIcon = true;
             try
             {
-                var icon = await ScreenTimeTracker.Services.IconLoader.Instance.GetIconAsync(this);
-                if (icon != null)
-                {
-                    // Ensure assignment takes place on UI thread
-                    if (!DispatcherHelper.EnqueueOnUIThread(() => AppIcon = icon))
-                    {
-                        // If we are already on UI thread or dispatcher not ready
-                        AppIcon = icon;
-                    }
-                }
+                var loader = Services.IconLoader.Instance;
+                var icon = await loader.GetIconAsync(liveRecord ?? this);
+                _hasResolvedIcon = icon != null;
+                AppIcon = icon ?? AppIcon ?? await loader.GetFallbackIconAsync();
             }
             catch { /* ignore icon failures */ }
             finally
@@ -275,18 +265,10 @@ namespace ScreenTimeTracker.Models
             }
         }
 
-        private bool _loadingIcon = false;
-
-        public void ClearIcon()
-        {
-            AppIcon = null;
-        }
+        private bool _loadingIcon;
+        private bool _hasResolvedIcon;
 #else
-        public void LoadAppIconIfNeeded()
-        {
-        }
-
-        public void ClearIcon()
+        public void LoadAppIconIfNeeded(AppUsageRecord? liveRecord = null)
         {
         }
 #endif

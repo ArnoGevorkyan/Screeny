@@ -122,7 +122,14 @@
         </Grid>
 
         <!-- SCROLLABLE CONTENT AREA -->
-        <ScrollViewer Grid.Row="3" 
+        <StackPanel x:Name="HistoryStatusPanel" Grid.Row="3" Spacing="8"
+                    Margin="16,24" VerticalAlignment="Top" Visibility="Collapsed">
+            <ProgressRing x:Name="LoadingIndicator" Width="24" Height="24"
+                          IsActive="False" Visibility="Collapsed"/>
+            <TextBlock x:Name="HistoryStatus" TextWrapping="Wrap" TextAlignment="Center"
+                       AutomationProperties.LiveSetting="Polite"/>
+        </StackPanel>
+        <ScrollViewer x:Name="HistoryDashboard" Grid.Row="3"
                       VerticalScrollBarVisibility="Hidden"
                       VerticalScrollMode="Enabled"
                       HorizontalScrollBarVisibility="Disabled"
@@ -196,17 +203,6 @@
                         </StackPanel>
                     </Grid>
                     
-                    <!-- Loading indicator overlay -->
-                    <ProgressRing x:Name="LoadingIndicator" 
-                                IsActive="True" 
-                                Grid.Row="1" 
-                                Width="50" 
-                                Height="50"
-                                Visibility="Collapsed"
-                                HorizontalAlignment="Center" 
-                                VerticalAlignment="Center" 
-                                Canvas.ZIndex="100"/>
-                                
                     <!-- LiveCharts Control -->
                     <lvc:CartesianChart 
                         x:Name="UsageChartLive"
@@ -298,7 +294,7 @@
                                               FontSize="16"
                                               HorizontalAlignment="Center"
                                               VerticalAlignment="Center"/>
-                                    <Image x:Name="MostUsedAppIcon"
+                                    <Image x:Name="MostUsedAppIcon" Source="{Binding AppIcon}"
                                            Width="20" Height="20" Stretch="Uniform"/>
                                 </Grid>
                                 <TextBlock x:Name="MostUsedApp" 
@@ -377,6 +373,11 @@
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
+                <ListView.Footer>
+                    <TextBlock x:Name="EmptyHistoryText" Margin="12,6,12,12"
+                               Text="No applications to list."
+                               Visibility="{x:Bind EmptyListVisibility(_viewModel.Records.Count), Mode=OneWay}"/>
+                </ListView.Footer>
                 <ListView.Header>
                     <Grid Margin="12,12,12,6">
                         <Grid.ColumnDefinitions>

@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml.Media.Imaging;
 using ScreenTimeTracker.Helpers;
 using ScreenTimeTracker.Models;
-using System.Linq;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace ScreenTimeTracker.Services
 {
@@ -33,7 +35,12 @@ namespace ScreenTimeTracker.Services
         public static IconLoader Instance { get; } = new IconLoader();
 
         // Cache resolved icons to avoid repeated disk I/O and Win32 calls.
-        private readonly ConcurrentDictionary<string, BitmapImage?> _iconCache = new();
+        private readonly ConcurrentDictionary<string, BitmapImage> _iconCache = new();
+        private readonly SemaphoreSlim _extractionSlots = new(4);
+        private readonly object _processSnapshotLock = new();
+        private Dictionary<string, List<int>> _runningProcesses = new(StringComparer.OrdinalIgnoreCase);
+        private long _processSnapshotExpires;
+        private Task<BitmapImage?>? _fallbackIcon;
 
         private IconLoader() { }
 
@@ -49,72 +56,51 @@ namespace ScreenTimeTracker.Services
                 return cached;
             }
 
-            // Secondary key that includes the window handle for shared-name edge cases.
-            string handleKey = AppIconIdentity.CreateWindowHandleCacheKey(record);
-            if (_iconCache.TryGetValue(handleKey, out cached))
-            {
-                return cached;
-            }
-
-            BitmapImage? resolved = null;
-
-            // 1) Window-handle extraction (fast, no disk I/O)
-            resolved = await TryLoadIconFromWindowHandleAsync(record, ct);
-
-            // 2) Executable-resource extraction via shell API
-            if (resolved == null)
-            {
-                string? exePath = ResolveExecutablePath(record);
-                if (!string.IsNullOrEmpty(exePath))
-                {
-                    resolved = await TryLoadIconWithSHGetFileInfoAsync(exePath, ct);
-                }
-            }
-
-            // 3) Ultimate fallback - create a simple app icon programmatically
-            if (resolved == null)
-            {
-                resolved = await CreateSimpleAppIconAsync(ct);
-            }
-
-            if (resolved != null)
-            {
-                _iconCache[cacheKey]  = resolved; // store by name
-                _iconCache[handleKey] = resolved; // store by name+handle for future lookups
-            }
-            return resolved;
-        }
-
-        #region  Window-handle icon extraction (first-line attempt)
-
-        private static async Task<BitmapImage?> TryLoadIconFromWindowHandleAsync(AppUsageRecord record, CancellationToken ct)
-        {
-            if (record.WindowHandle == IntPtr.Zero) return null;
-
+            var window = record.WindowHandle;
+            var processId = record.ProcessId;
+            await _extractionSlots.WaitAsync(ct);
             try
             {
-                IntPtr iconHandle = Helpers.Win32Interop.SendMessage(record.WindowHandle, Helpers.Win32Interop.WM_GETICON, (IntPtr)Helpers.Win32Interop.ICON_BIG, IntPtr.Zero);
-                if (iconHandle == IntPtr.Zero)
-                    iconHandle = Helpers.Win32Interop.SendMessage(record.WindowHandle, Helpers.Win32Interop.WM_GETICON, (IntPtr)Helpers.Win32Interop.ICON_SMALL, IntPtr.Zero);
-                if (iconHandle == IntPtr.Zero)
-                    iconHandle = Helpers.Win32Interop.SendMessage(record.WindowHandle, Helpers.Win32Interop.WM_GETICON, (IntPtr)Helpers.Win32Interop.ICON_SMALL2, IntPtr.Zero);
-                if (iconHandle == IntPtr.Zero)
-                    iconHandle = Helpers.Win32Interop.GetClassLongPtrSafe(record.WindowHandle, Helpers.Win32Interop.GCL_HICON);
-                if (iconHandle == IntPtr.Zero)
-                    iconHandle = Helpers.Win32Interop.GetClassLongPtrSafe(record.WindowHandle, Helpers.Win32Interop.GCL_HICONSM);
-
-                if (iconHandle != IntPtr.Zero)
-                {
-                    using var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(iconHandle).Clone();
-                    var bitmap = icon.ToBitmap();
-                    return await ConvertBitmapToBitmapImageAsync(bitmap, ct);
-                }
+                if (_iconCache.TryGetValue(cacheKey, out cached)) return cached;
+                using var bitmap = await Task.Run(() => ExtractIcon(window, processId, cacheKey), ct);
+                if (bitmap == null) return null;
+                var resolved = await ConvertBitmapToBitmapImageAsync(bitmap, ct);
+                return resolved == null ? null : _iconCache.GetOrAdd(cacheKey, resolved);
             }
-            catch (Exception ex)
+            finally
             {
-                System.Diagnostics.Debug.WriteLine($"IconLoader – window-handle extraction failed for {record.ProcessName}: {ex.Message}");
+                _extractionSlots.Release();
             }
+        }
 
+        internal Task<BitmapImage?> GetFallbackIconAsync()
+            => _fallbackIcon ??= CreateSimpleAppIconAsync(CancellationToken.None);
+
+        private Bitmap? ExtractIcon(IntPtr window, int processId, string processName)
+        {
+            try
+            {
+                if (processId != 0 && window != IntPtr.Zero)
+                    using (var owner = Process.GetProcessById(processId))
+                        if (Win32Interop.GetWindowThreadProcessId(window, out var ownerId) != 0 &&
+                            ownerId == processId && ApplicationNameNormalizer.NormalizeProcessName(owner.ProcessName)
+                                .Equals(processName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var handle = Win32Interop.GetWindowIcon(window);
+                            if (handle != IntPtr.Zero)
+                                return Icon.FromHandle(handle).ToBitmap();
+                        }
+            }
+            catch (Exception) { }
+
+            var bitmap = TryExtractExecutableIcon(processId, processName);
+            if (bitmap != null) return bitmap;
+            foreach (var pid in GetMatchingProcesses(processName))
+            {
+                if (pid == processId) continue;
+                bitmap = TryExtractExecutableIcon(pid, processName);
+                if (bitmap != null) return bitmap;
+            }
             return null;
         }
 
@@ -145,87 +131,59 @@ namespace ScreenTimeTracker.Services
             }
         }
 
-        #endregion
-
-        #region  Executable-resource extraction helpers
-
-        private static string? ResolveExecutablePath(AppUsageRecord record)
+        private List<int> GetMatchingProcesses(string processName)
         {
-            // 1) Direct process inspection
-            if (record.ProcessId != 0)
+            lock (_processSnapshotLock)
             {
-                try
+                if (Environment.TickCount64 >= _processSnapshotExpires)
                 {
-                    using var p = System.Diagnostics.Process.GetProcessById(record.ProcessId);
-                    if (p.MainModule != null && !string.IsNullOrWhiteSpace(p.MainModule.FileName))
-                        return p.MainModule.FileName;
-                }
-                catch { /* ignore */ }
-            }
-
-            // Fallback via Win32 QueryFullProcessImageName (limited-information) – more reliable for some sandboxed apps
-            try
-            {
-                var hProcess = Helpers.Win32Interop.OpenProcess(Helpers.Win32Interop.PROCESS_QUERY_LIMITED_INFORMATION, false, record.ProcessId);
-                if (hProcess != IntPtr.Zero)
-                {
-                    try
+                    var snapshot = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var process in Process.GetProcesses())
                     {
-                        var sb = new System.Text.StringBuilder(1024);
-                        int size = sb.Capacity;
-                        if (Helpers.Win32Interop.QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                        using (process)
                         {
-                            return sb.ToString();
+                            string name;
+                            try { name = ApplicationNameNormalizer.NormalizeProcessName(process.ProcessName); }
+                            catch (InvalidOperationException) { continue; }
+                            if (!snapshot.TryGetValue(name, out var ids)) snapshot[name] = ids = new();
+                            ids.Add(process.Id);
                         }
                     }
-                    finally
-                    {
-                        Helpers.Win32Interop.CloseHandle(hProcess);
-                    }
+                    _runningProcesses = snapshot;
+                    _processSnapshotExpires = Environment.TickCount64 + 1000;
                 }
+                return _runningProcesses.TryGetValue(processName, out var matches) ? matches : [];
             }
-            catch { /* ignore */ }
-
-            return null;
         }
 
-        private static async Task<BitmapImage?> TryLoadIconWithSHGetFileInfoAsync(string path, CancellationToken ct)
+        private static Bitmap? TryExtractExecutableIcon(int processId, string processName)
         {
-            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return null;
+            if (processId <= 0) return null;
+            var process = Win32Interop.OpenProcess(Win32Interop.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (process == IntPtr.Zero) return null;
 
-            var psfi = new Helpers.Win32Interop.SHFILEINFO();
-
-            // First try without the USEFILEATTRIBUTES flag – this forces SHGetFileInfo to
-            // load the actual file and extract its embedded icon (gives correct app icon
-            // for most .exe / .lnk files).
-            uint flags = Helpers.Win32Interop.SHGFI_ICON | Helpers.Win32Interop.SHGFI_LARGEICON;
-
-            if (Helpers.Win32Interop.SHGetFileInfo(path, 0, ref psfi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(psfi), flags) == IntPtr.Zero || psfi.hIcon == IntPtr.Zero)
+            try
             {
-                // Fallback – use file attributes only (avoids hitting disk for inaccessible paths)
-                flags |= Helpers.Win32Interop.SHGFI_USEFILEATTRIBUTES;
-                _ = Helpers.Win32Interop.SHGetFileInfo(path, Helpers.Win32Interop.FILE_ATTRIBUTE_NORMAL, ref psfi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(psfi), flags);
-            }
+                var buffer = new StringBuilder(32768);
+                int length = buffer.Capacity;
+                if (!Win32Interop.QueryFullProcessImageName(process, 0, buffer, ref length)) return null;
+                var path = buffer.ToString();
+                if (path.Length < 3 || path[1] != ':' || path[2] != '\\' ||
+                    new DriveInfo(path[..3]).DriveType == DriveType.Network ||
+                    !ApplicationNameNormalizer.NormalizeProcessName(Path.GetFileNameWithoutExtension(path))
+                        .Equals(processName, StringComparison.OrdinalIgnoreCase))
+                    return null;
 
-            if (psfi.hIcon != IntPtr.Zero)
-            {
-                try
-                {
-                    using var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(psfi.hIcon).Clone();
-                    var bitmap = icon.ToBitmap();
-                    return await ConvertBitmapToBitmapImageAsync(bitmap, ct);
-                }
-                catch { /* ignore */ }
-                finally
-                {
-                    Helpers.Win32Interop.DestroyIcon(psfi.hIcon);
-                }
+                if (Win32Interop.ExtractIconEx(path, 0, out var handle, IntPtr.Zero, 1) != 1 ||
+                    handle == IntPtr.Zero)
+                    return null;
+
+                try { return Icon.FromHandle(handle).ToBitmap(); }
+                finally { Win32Interop.DestroyIcon(handle); }
             }
-            return null;
+            catch (Exception) { return null; }
+            finally { Win32Interop.CloseHandle(process); }
         }
-
-
-        #endregion
 
         /// <summary>
         /// Creates a simple application icon when all other methods fail
