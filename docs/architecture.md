@@ -18,4 +18,6 @@ The database path in code is `%LOCALAPPDATA%\ScreenTimeTracker\screentime.db`. W
 
 [MainWindow.xaml](../MainWindow.xaml) defines the dashboard. [MainViewModel.cs](../MainViewModel.cs) holds the selected dates, tracking status, and commands. The [date picker](../Helpers/DatePickerPopup.cs) supplies a selected day or preset range. The window updates the summaries and charts with [ChartHelper](../Helpers/ChartHelper.cs). When a view includes live usage, Screeny combines it with stored history at read time.
 
+Hiding or minimizing the window suspends dashboard reads, redraws, and icon retries, not foreground tracking or queued history writes. Showing it again reloads the selected period once, even when tracking is paused. Short finalized visits count in the headline totals and active-day average even when the daily list filters out an app row.
+
 See the [repository guidelines](../AGENTS.md#reliability-rules) before changing tracking, storage, or aggregation.

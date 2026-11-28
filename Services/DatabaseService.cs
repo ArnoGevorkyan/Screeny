@@ -471,10 +471,11 @@ namespace ScreenTimeTracker.Services
         /// <summary>
         /// Retrieves all app usage records for a specific date
         /// </summary>
-        public List<AppUsageRecord> GetRecordsForDate(DateTime date, List<AppUsageRecord>? hourlyRecords = null)
+        public List<AppUsageRecord> GetRecordsForDate(DateTime date, List<AppUsageRecord>? hourlyRecords = null, bool requireHistory = false)
         {
             if (!_initializedSuccessfully)
             {
+                if (requireHistory) throw new InvalidOperationException("History storage is unavailable.");
                 Debug.WriteLine("Database not initialized, skipping get records operation");
                 return new List<AppUsageRecord>();
             }
@@ -517,6 +518,8 @@ namespace ScreenTimeTracker.Services
                                 {
                                     hourlyRecords.Add(new AppUsageRecord
                                     {
+                                        Id = reader.GetInt32(reader.GetOrdinal("id")),
+                                        Date = date.Date,
                                         ProcessName = processName,
                                         StartTime = dbStartTime,
                                         EndTime = dbEndTime,
@@ -576,7 +579,7 @@ namespace ScreenTimeTracker.Services
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!requireHistory)
             {
                 Debug.WriteLine($"Error getting records for date: {ex.Message}");
                 return new List<AppUsageRecord>();
@@ -767,6 +770,9 @@ namespace ScreenTimeTracker.Services
         }
 
         public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
+            => ReadRawRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
+
+        private List<AppUsageRecord>? ReadRawRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
             try
             {
@@ -774,7 +780,7 @@ namespace ScreenTimeTracker.Services
                 if (!IsDatabaseInitialized())
                 {
                     System.Diagnostics.Debug.WriteLine($"ERROR: Database not initialized in GetRawRecordsForDateRange");
-                    return new List<AppUsageRecord>();
+                    return null;
                 }
 
                 // Convert dates to the format stored in the database (YYYY-MM-DD)
@@ -836,7 +842,7 @@ namespace ScreenTimeTracker.Services
             {
                 System.Diagnostics.Debug.WriteLine($"Error in GetRawRecordsForDateRange: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine(ex.StackTrace);
-                return new List<AppUsageRecord>();
+                return null;
             }
         }
 
@@ -929,10 +935,10 @@ namespace ScreenTimeTracker.Services
         /// Gets detailed records for a date, optionally including live data
         /// (Replaces UsageAggregationService.GetDetailRecordsForDate)
         /// </summary>
-        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService, List<AppUsageRecord>? hourlyRecords = null)
+        public List<AppUsageRecord> GetDetailRecordsWithLive(DateTime date, WindowTrackingService? trackingService, List<AppUsageRecord>? hourlyRecords = null, bool requireHistory = false)
         {
             var liveRecords = hourlyRecords == null ? null : GetLiveRecordsForDay(date, trackingService);
-            var dbRecords = GetRecordsForDate(date, hourlyRecords);
+            var dbRecords = GetRecordsForDate(date, hourlyRecords, requireHistory);
             var aggregated = AggregateRecords(dbRecords, date);
 
             if (hourlyRecords == null)
@@ -965,11 +971,17 @@ namespace ScreenTimeTracker.Services
             return aggregated.Values.OrderByDescending(r => r.Duration.TotalSeconds).ToList();
         }
 
-        public List<AppUsageRecord> GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+        public List<AppUsageRecord>? GetHourlyRecordsWithLive(DateTime date, WindowTrackingService? trackingService)
+            => GetDashboardRecordsWithLive(date, date, trackingService);
+
+        public List<AppUsageRecord>? GetDashboardRecordsWithLive(DateTime start, DateTime end, WindowTrackingService? trackingService, bool includeAllStoredRows = false)
         {
-            var liveRecords = GetLiveRecordsForDay(date, trackingService);
-            var records = GetRawRecordsForDateRange(date, date);
-            records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
+            var today = DateTime.Today;
+            var liveRecords = start.Date <= today && today <= end.Date ? GetLiveRecordsForDay(today, trackingService) : null;
+            var records = ReadRawRecordsForDateRange(start, end);
+            if (records == null) return null;
+            if (!includeAllStoredRows)
+                records.RemoveAll(r => r.IsFocused || !(r.EndTime > r.StartTime) || !IsHourlyProcess(r.ProcessName));
 
             if (liveRecords != null)
                 AddHourlyLiveRecords(records, liveRecords.Where(r => !HasFinalizedRecord(records, r)));
@@ -983,7 +995,7 @@ namespace ScreenTimeTracker.Services
                 : null;
 
         private static bool HasFinalizedRecord(List<AppUsageRecord> records, AppUsageRecord liveRecord)
-            => records.Any(r => r.StartTime == liveRecord.StartTime &&
+            => records.Any(r => r.StartTime == liveRecord.StartTime && !r.IsFocused && r.EndTime > r.StartTime &&
                 string.Equals(r.ProcessName, liveRecord.ProcessName, StringComparison.OrdinalIgnoreCase));
 
         private static void AddHourlyLiveRecords(List<AppUsageRecord> records, IEnumerable<AppUsageRecord> liveRecords)
@@ -991,7 +1003,7 @@ namespace ScreenTimeTracker.Services
             foreach (var record in liveRecords)
             {
                 var duration = record.Duration;
-                if (duration.TotalSeconds < 5 || !IsHourlyProcess(record.ProcessName)) continue;
+                if ((record.EndTime == null && duration.TotalSeconds < 5) || !IsHourlyProcess(record.ProcessName)) continue;
 
                 record.EndTime ??= record.StartTime + duration;
                 records.Add(record);
