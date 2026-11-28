@@ -14,7 +14,7 @@ Screeny saves history in an ordinary SQLite database, `screentime.db`, without a
 
 ## Diagnostic logs
 
-Screeny appends to a separate app data file, `app_log.txt`, at launch. The log can contain timestamps, unredacted launch arguments, the computer name, the working folder and the app's folder, and Windows and .NET version details. Errors can add exception messages, stack traces, and other exception details. Screeny can also try to write `Screeny_ErrorLog.txt` next to its executable when an error occurs.
+Screeny tries to append to `app_log.txt` in its app data folder. New startup entries can include timestamps, launch mode, and Windows and .NET version details. New startup and fatal error entries include the event, exception type, and error code. Screeny skips an entry if it cannot write the log or if the entry would take it over 1 MiB. It does not remove or sanitize existing logs. Older logs can still contain unredacted launch arguments, computer and folder names, exception messages, stack traces, and other exception details. Older versions could also write `Screeny_ErrorLog.txt` next to the executable; that file may still be present.
 
 Treat the database, its companion files and backups, and the logs as private. Don't post raw files in a public support request.
 
