@@ -104,6 +104,7 @@ namespace ScreenTimeTracker
                 if (_appWindow != null)
                 {
                     _appWindow.Closing -= AppWindow_Closing;
+                    _appWindow.Changed -= AppWindow_Changed;
                 }
 
                 // Stop services
@@ -146,8 +147,6 @@ namespace ScreenTimeTracker
         {
             try
             {
-                CleanupSystemProcesses();
-
                 _autoSaveCycleCount++;
                 if (_autoSaveCycleCount >= 12 && _databaseService != null)
                 {
@@ -165,10 +164,13 @@ namespace ScreenTimeTracker
                     });
                 }
 
+                if (_isReloading || !IsDashboardVisible) return;
+                CleanupSystemProcesses();
+
                 if (_viewModel.SelectedDate.Date == DateTime.Now.Date && _viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
-                    InvalidateUsageView();
-                    LoadRecordsForDate(_viewModel.SelectedDate);
+                    ++_usageViewRevision;
+                    LoadRecordsForDate(_viewModel.SelectedDate, passive: true);
                 }
                 else
                 {
@@ -269,7 +271,7 @@ namespace ScreenTimeTracker
 
             if ((_trackingPauseReasons & (TrackingPauseReason.Resetting | TrackingPauseReason.Exiting)) != 0) return;
 
-            if (!_trackingService.IsTracking) CleanupSystemProcesses();
+            if (!_trackingService.IsTracking && IsDashboardVisible) CleanupSystemProcesses();
             DoChartRefresh();
         }
 
@@ -282,10 +284,10 @@ namespace ScreenTimeTracker
         }
 
         // ---------------- Data loading logic ----------------
-        private void LoadRecordsForDate(DateTime date)
+        private void LoadRecordsForDate(DateTime date, bool passive = false)
         {
             var revision = _usageViewRevision;
-            _usageRecords.Clear();
+            bool hasPreviousView = passive && _loadedDashboardVisits != null;
 
             // Update header text (Today/Yesterday/etc.)
             if (DateDisplay != null)
@@ -318,7 +320,7 @@ namespace ScreenTimeTracker
                     case TimePeriod.Daily:
                     default:
                         hourlyRecords = new List<AppUsageRecord>();
-                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords));
+                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords, requireHistory: passive));
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";
@@ -326,7 +328,8 @@ namespace ScreenTimeTracker
                         break;
                 }
 
-                if (records.Count == 0 && hourlyRecords is not { Count: > 0 } && date.Date != DateTime.Today)
+                _usageRecords.Clear();
+                if (!hasPreviousView && records.Count == 0 && hourlyRecords is not { Count: > 0 } && date.Date != DateTime.Today)
                 {
                     DispatcherQueue?.TryEnqueue(async () =>
                     {
@@ -360,11 +363,19 @@ namespace ScreenTimeTracker
 
                 CleanupSystemProcesses();
 
-                UpdateChartViewMode(hourlyRecords ?? records);
+                if (hasPreviousView) UpdateUsageChart(hourlyRecords ?? records);
+                else UpdateChartViewMode(hourlyRecords ?? records);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records: {ex.Message}");
+                if (hasPreviousView)
+                {
+                    RestoreCachedDashboard();
+                    return;
+                }
+                _usageRecords.Clear();
+                if (passive) UpdateUsageChart();
                 DispatcherQueue?.TryEnqueue(async () =>
                 {
                     if (IsCurrentUsageView(revision) && Content != null)
@@ -382,18 +393,25 @@ namespace ScreenTimeTracker
         }
 
         // ---------------- Date range loading logic ----------------
-        private void LoadRecordsForDateRange(DateTime startDate, DateTime endDate)
+        private void LoadRecordsForDateRange(DateTime startDate, DateTime endDate, bool restoring = false)
         {
-            _usageRecords.Clear();
-
             try
             {
                 // Use raw records rather than per-process aggregates so the daily chart gets correct totals
-                var records = BuildRecords(() => _databaseService!.GetRawRecordsForDateRange(startDate, endDate));
+                var records = BuildRecords(() => restoring
+                    ? _databaseService!.GetDashboardRecordsWithLive(startDate, endDate, _trackingService, includeAllStoredRows: true)
+                        ?? throw new InvalidOperationException("History storage is unavailable.")
+                    : _databaseService!.GetRawRecordsForDateRange(startDate, endDate));
 
-                // For list view we want the granular list (allRecords)
+                var visits = records.Select(r => r.CreateSnapshot()).ToList();
+                _usageRecords.Clear();
                 foreach (var rec in records.OrderByDescending(r => r.Duration))
                 {
+                    if (rec.Id == 0 && rec.IsFocused)
+                    {
+                        rec.EndTime = null;
+                        rec.SetFocus(true);
+                    }
                     rec.LoadAppIconIfNeeded();
                     _usageRecords.Add(rec);
                 }
@@ -403,7 +421,7 @@ namespace ScreenTimeTracker
 
                 // Update UI helpers
                 CleanupSystemProcesses();
-                UpdateViewModeAndChartForDateRange(records.Select(r => r.CreateSnapshot()).ToList());
+                UpdateViewModeAndChartForDateRange(visits);
 
                 // Publish aggregated list to ViewModel
                 _viewModel.AggregatedRecords.Clear();
@@ -412,6 +430,13 @@ namespace ScreenTimeTracker
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading records for date range: {ex.Message}");
+                if (restoring && _loadedDashboardVisits != null)
+                {
+                    RestoreCachedDashboard();
+                    return;
+                }
+                _usageRecords.Clear();
+                if (restoring) UpdateUsageChart();
                 ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
             }
         }

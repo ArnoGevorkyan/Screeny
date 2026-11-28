@@ -1,6 +1,7 @@
 using ScreenTimeTracker.Models;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using System.Linq;
 using System;
 using ScreenTimeTracker.Helpers;
@@ -19,6 +20,7 @@ namespace ScreenTimeTracker
         private int _chartRevision;
         private bool _chartRefreshPending;
         private bool _chartRefreshRequested;
+        private volatile bool _dashboardVisible;
         private (DateTime Start, DateTime End, List<AppUsageRecord> Records)? _loadedDashboardVisits;
 
         private int InvalidateUsageView()
@@ -28,6 +30,45 @@ namespace ScreenTimeTracker
         }
 
         private bool IsCurrentUsageView(int revision) => !_disposed && _usageViewRevision == revision;
+
+        private bool IsDashboardVisible => _appWindow.IsVisible && _appWindow.Presenter is not
+            OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+
+        private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
+            => UpdateDashboardVisibility();
+
+        private void UpdateDashboardVisibility()
+        {
+            if (!_startupInitialized || _disposed || _exitCommitted) return;
+            bool visible = IsDashboardVisible;
+            if (_dashboardVisible == visible) return;
+            _dashboardVisible = visible;
+            ++_usageViewRevision;
+            _chartRefreshRequested = false;
+            _isChartDirty = false;
+            if (!visible) return;
+
+            LoadCurrentSelection(restoring: true);
+            SetUsageViewLoading(false);
+        }
+
+        private void RestoreCachedDashboard()
+        {
+            if (_loadedDashboardVisits is { Records.Count: 0 }) UpdateUsageChart();
+            else DoIconRetry();
+        }
+
+        private void LoadCurrentSelection(bool restoring)
+        {
+            if (_viewModel.SelectedEndDate is DateTime end)
+            {
+                if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
+                if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
+                LoadRecordsForDateRange(_viewModel.SelectedDate, end, restoring);
+            }
+            else
+                LoadRecordsForDate(_viewModel.SelectedDate, passive: restoring);
+        }
 
         private void SetUsageViewLoading(bool loading)
         {
@@ -48,6 +89,7 @@ namespace ScreenTimeTracker
                 _chartRevision++;
                 _loadedDashboardVisits = (start, end, visits);
             }
+            if (!IsDashboardVisible) return;
 
             IEnumerable<AppUsageRecord> records = _loadedDashboardVisits is { } loaded && loaded.Start == start && loaded.End == end
                 ? loaded.Records
@@ -138,6 +180,7 @@ namespace ScreenTimeTracker
             // Hide instead of close
             args.Cancel = true;
             sender.Hide();
+            UpdateDashboardVisibility();
         }
 
         private void Window_Closed(object sender, Microsoft.UI.Xaml.WindowEventArgs args)
@@ -431,33 +474,18 @@ namespace ScreenTimeTracker
             try
             {
                 if (_disposed || _usageRecords == null) return;
-                if (_isReloading) return;
-                
                 _tickCount++;
-
-                // Every 1 second: Live UI updates (only when tracking)
-                if (_trackingService != null && _trackingService.IsTracking)
+                if (!_isReloading && IsDashboardVisible)
                 {
-                    DoLiveUpdates();
+                    if (_trackingService.IsTracking) DoLiveUpdates();
+
+                    int chartRefreshInterval = _viewModel.IsDateRangeSelected && _trackingService.IsTracking ? 10 : 5;
+                    if (_tickCount % chartRefreshInterval == 0 && _isChartDirty) DoChartRefresh();
+
+                    if (_tickCount % 30 == 0) DoIconRetry();
                 }
 
-                int chartRefreshInterval = _viewModel.IsDateRangeSelected && _trackingService?.IsTracking == true ? 10 : 5;
-                if (_tickCount % chartRefreshInterval == 0 && _isChartDirty)
-                {
-                    DoChartRefresh();
-                }
-
-                // Every 30 seconds: Retry missing icons
-                if (_tickCount % 30 == 0)
-                {
-                    DoIconRetry();
-                }
-
-                // Every 5 minutes: Auto-save
-                if (_tickCount % 300 == 0)
-                {
-                    DoAutoSave();
-                }
+                if (_tickCount % 300 == 0) DoAutoSave();
             }
             catch (Exception ex)
             {
@@ -477,7 +505,7 @@ namespace ScreenTimeTracker
 
         private void DoChartRefresh()
         {
-            if (_disposed || _isReloading) return;
+            if (_disposed || _isReloading || !_dashboardVisible || !IsDashboardVisible) return;
 
             _isChartDirty = false;
             if (_chartRefreshPending)
@@ -498,18 +526,19 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    if (!IsCurrentUsageView(revision) || _isReloading || _chartRefreshRequested ||
+                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading || _chartRefreshRequested ||
                         _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
                         _viewModel.CurrentChartViewMode != mode)
                         return;
 
                     var visits = _databaseService is { } database
-                        ? await Task.Run(() => mode == ChartViewMode.Hourly
-                            ? database.GetHourlyRecordsWithLive(start, _trackingService)
-                            : database.GetDashboardRecordsWithLive(start, end, _trackingService))
+                        ? await Task.Run(() => !_dashboardVisible || !IsCurrentUsageView(revision) ? null
+                            : mode == ChartViewMode.Hourly
+                                ? database.GetHourlyRecordsWithLive(start, _trackingService)
+                                : database.GetDashboardRecordsWithLive(start, end, _trackingService))
                         : null;
 
-                    if (!IsCurrentUsageView(revision) || _isReloading || _chartRefreshRequested ||
+                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading || _chartRefreshRequested ||
                         _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
                         _viewModel.CurrentChartViewMode != mode)
                         return;
@@ -550,13 +579,13 @@ namespace ScreenTimeTracker
 
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
-            if (_disposed) return;
             var revision = _usageViewRevision;
+            if (_disposed || !_dashboardVisible) return;
             try
             {
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    if (!IsCurrentUsageView(revision) || _isReloading) return;
+                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading) return;
 
                     try
                     {

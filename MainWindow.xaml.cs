@@ -394,8 +394,6 @@ namespace ScreenTimeTracker
                 DateDisplay.Text = "Today";
             }
 
-            LoadRecordsForDate(_viewModel.SelectedDate);
-
             if (UsageListView != null && UsageListView.ItemsSource == null)
             {
                 UsageListView.ItemsSource = _usageRecords;
@@ -411,6 +409,8 @@ namespace ScreenTimeTracker
             _trayIconHelper?.AddIcon(trayTooltip);
 
             SetTrackingRequested(true);
+            _appWindow.Changed += AppWindow_Changed;
+            UpdateDashboardVisibility();
 
             if (App.StartedFromWindowsStartup)
             {
@@ -531,16 +531,8 @@ namespace ScreenTimeTracker
                 _viewModel.CurrentTimePeriod = end.HasValue ? TimePeriod.Weekly : TimePeriod.Daily;
 
                 await Task.Delay(50);
-                if (!IsCurrentUsageView(revision)) return;
-
-                if (end is DateTime endDate)
-                {
-                    if (ViewModeLabel != null) ViewModeLabel.Text = "Daily View";
-                    if (ViewModePanel != null) ViewModePanel.Visibility = Visibility.Collapsed;
-                    LoadRecordsForDateRange(start, endDate);
-                }
-                else
-                    LoadRecordsForDate(start);
+                if (IsCurrentUsageView(revision) && IsDashboardVisible)
+                    LoadCurrentSelection(restoring: false);
             }
             catch (Exception ex)
             {
@@ -567,6 +559,7 @@ namespace ScreenTimeTracker
             _appWindow.Show();
             Activate();
             SetForegroundWindow(_hWnd);
+            UpdateDashboardVisibility();
         }
 
         // Event Handlers for Tray Icon Clicks
@@ -578,20 +571,7 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    if (_appWindow != null)
-                    {
-                        // Show the window
-                        _appWindow.Show();
-                        
-                        // If the window was started hidden, we need to activate it to bring it to the foreground
-                        this.Activate();
-                        
-                        Debug.WriteLine("Window shown and activated from tray icon");
-                    }
-                    else
-                    {
-                        Debug.WriteLine("AppWindow is null, cannot show window from tray");
-                    }
+                    ShowFromRelaunch();
                 }
                 catch (Exception ex)
                 {                    
