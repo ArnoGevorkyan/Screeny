@@ -403,6 +403,9 @@ namespace ScreenTimeTracker
                         ?? throw new InvalidOperationException("History storage is unavailable.")
                     : _databaseService!.GetRawRecordsForDateRange(startDate, endDate));
 
+                // Build the per-process list separately from the dashboard visits.
+                var aggregated = _databaseService?.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false) ?? new List<AppUsageRecord>();
+
                 var visits = records.Select(r => r.CreateSnapshot()).ToList();
                 _usageRecords.Clear();
                 foreach (var rec in records.OrderByDescending(r => r.Duration))
@@ -415,9 +418,6 @@ namespace ScreenTimeTracker
                     rec.LoadAppIconIfNeeded();
                     _usageRecords.Add(rec);
                 }
-
-                // Build the per-process list separately from the dashboard visits.
-                var aggregated = _databaseService?.GetAggregatedRecordsWithLive(startDate, endDate, _trackingService, includeLiveRecords: false) ?? new List<AppUsageRecord>();
 
                 // Update UI helpers
                 CleanupSystemProcesses();
