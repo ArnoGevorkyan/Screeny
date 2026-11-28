@@ -18,6 +18,8 @@ Screeny tracks how much time you spend in the apps you use on Windows 11. Tracki
 - Select the tracking status button to pause or resume tracking.
 - Closing the window leaves Screeny running in the notification area. Right-click the Screeny icon and select **Show** to reopen the window or **Exit** to quit.
 
+In builds from this source, the Screeny icon returns after Windows Explorer restarts. Use **Show** to reopen the same window without relaunching Screeny.
+
 ## Privacy
 
 Screeny stores usage history in a local SQLite database and doesn't upload it.
