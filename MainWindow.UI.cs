@@ -1,6 +1,7 @@
 using ScreenTimeTracker.Models;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Windowing;
 using System.Linq;
 using System;
@@ -46,10 +47,8 @@ namespace ScreenTimeTracker
             ++_usageViewRevision;
             _chartRefreshRequested = false;
             _isChartDirty = false;
-            if (!visible) return;
-
-            LoadCurrentSelection(restoring: true);
-            SetUsageViewLoading(false);
+            if (visible && (_isReloading || CanRefreshHistory))
+                LoadCurrentSelection(restoring: !_isReloading);
         }
 
         private void RestoreCachedDashboard()
@@ -68,13 +67,6 @@ namespace ScreenTimeTracker
             }
             else
                 LoadRecordsForDate(_viewModel.SelectedDate, passive: restoring);
-        }
-
-        private void SetUsageViewLoading(bool loading)
-        {
-            _isReloading = loading;
-            if (LoadingIndicator != null)
-                LoadingIndicator.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // ---------------- Chart update helper ----------------
@@ -141,30 +133,28 @@ namespace ScreenTimeTracker
             UpdateUsageChart(visits);
         }
 
-        private void ShowNoDataDialog(DateTime startDate, DateTime endDate)
-        {
-            if (Content == null) return;
-            var dlg = new ContentDialog
-            {
-                Title = "No Data Available",
-                Content = $"No usage data found for the selected date range ({startDate:MMM d} - {endDate:MMM d}).",
-                CloseButtonText = "OK",
-                XamlRoot = Content.XamlRoot
-            };
-            _ = dlg.ShowAsync();
-        }
+        private enum HistoryState { Loading, Ready, Failed }
 
-        private void ShowErrorDialog(string message)
+        private bool CanRefreshHistory => IsDashboardVisible && !_isReloading && HistoryDashboard.Visibility == Visibility.Visible;
+
+        private Visibility EmptyListVisibility(int count) =>
+            count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        private void ShowHistory(HistoryState state)
         {
-            if (Content == null) return;
-            var dlg = new ContentDialog
+            _isReloading = state == HistoryState.Loading;
+            HistoryDashboard.Visibility = state == HistoryState.Ready ? Visibility.Visible : Visibility.Collapsed;
+            HistoryStatusPanel.Visibility = state == HistoryState.Ready ? Visibility.Collapsed : Visibility.Visible;
+            LoadingIndicator.IsActive = _isReloading;
+            LoadingIndicator.Visibility = _isReloading ? Visibility.Visible : Visibility.Collapsed;
+            HistoryStatus.Text = state switch
             {
-                Title = "Error",
-                Content = message,
-                CloseButtonText = "OK",
-                XamlRoot = Content.XamlRoot
+                HistoryState.Loading => "Loading history…",
+                HistoryState.Failed => "Couldn’t load history. Choose the date again to retry.",
+                _ => string.Empty
             };
-            _ = dlg.ShowAsync();
+            if (state == HistoryState.Failed)
+                FrameworkElementAutomationPeer.CreatePeerForElement(HistoryStatus)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
 
         // ---------------- AppWindow helpers ----------------
@@ -475,7 +465,7 @@ namespace ScreenTimeTracker
             {
                 if (_disposed || _usageRecords == null) return;
                 _tickCount++;
-                if (!_isReloading && IsDashboardVisible)
+                if (CanRefreshHistory)
                 {
                     if (_trackingService.IsTracking) DoLiveUpdates();
 
@@ -505,7 +495,7 @@ namespace ScreenTimeTracker
 
         private void DoChartRefresh()
         {
-            if (_disposed || _isReloading || !_dashboardVisible || !IsDashboardVisible) return;
+            if (_disposed || !_dashboardVisible || !CanRefreshHistory) return;
 
             _isChartDirty = false;
             if (_chartRefreshPending)
@@ -526,7 +516,7 @@ namespace ScreenTimeTracker
             {
                 try
                 {
-                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading || _chartRefreshRequested ||
+                    if (!IsCurrentUsageView(revision) || !CanRefreshHistory || _chartRefreshRequested ||
                         _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
                         _viewModel.CurrentChartViewMode != mode)
                         return;
@@ -538,7 +528,7 @@ namespace ScreenTimeTracker
                                 : database.GetDashboardRecordsWithLive(start, end, _trackingService))
                         : null;
 
-                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading || _chartRefreshRequested ||
+                    if (!IsCurrentUsageView(revision) || !CanRefreshHistory || _chartRefreshRequested ||
                         _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
                         _viewModel.CurrentChartViewMode != mode)
                         return;
@@ -585,7 +575,7 @@ namespace ScreenTimeTracker
             {
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    if (!IsCurrentUsageView(revision) || !IsDashboardVisible || _isReloading) return;
+                    if (!IsCurrentUsageView(revision) || !CanRefreshHistory) return;
 
                     try
                     {

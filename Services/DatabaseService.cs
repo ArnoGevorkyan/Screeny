@@ -567,10 +567,9 @@ namespace ScreenTimeTracker.Services
                                     Debug.WriteLine($"Added new record: {processName}, Duration: {record.Duration.TotalSeconds:F1}s, IsFocused: {record.IsFocused}");
                                 }
                             }
-                            catch (Exception parseEx)
+                            catch (Exception parseEx) when (!requireHistory)
                             {
                                 Debug.WriteLine($"Error parsing record in GetRecordsForDate: {parseEx.Message}");
-                                // Continue to next record
                             }
                         }
                         
@@ -770,7 +769,7 @@ namespace ScreenTimeTracker.Services
         }
 
         public List<AppUsageRecord> GetRawRecordsForDateRange(DateTime startDate, DateTime endDate)
-            => ReadRawRecordsForDateRange(startDate, endDate) ?? new List<AppUsageRecord>();
+            => ReadRawRecordsForDateRange(startDate, endDate) ?? throw new InvalidOperationException("History storage is unavailable.");
 
         private List<AppUsageRecord>? ReadRawRecordsForDateRange(DateTime startDate, DateTime endDate)
         {
@@ -829,7 +828,7 @@ namespace ScreenTimeTracker.Services
                                 catch (Exception ex)
                                 {
                                     System.Diagnostics.Debug.WriteLine($"Error parsing record in GetRawRecordsForDateRange: {ex.Message} on row ID {reader.GetInt32(reader.GetOrdinal("id"))}");
-                                    // Optionally skip this record and continue
+                                    throw;
                                 }
                             }
                         }

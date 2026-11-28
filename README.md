@@ -16,6 +16,7 @@ Screeny tracks how much time you spend in the apps you use on Windows 11. Tracki
 - Open Screeny to start tracking time for the app in focus.
 - In the date picker, choose a day and select **Done**, or select a preset such as **Last 7 days**. The chart groups usage by hour for a single day and by day for a range.
 - Short visits count toward your screen time even when an app is omitted from the daily list.
+- An empty selection stays on the chosen dates. If Screeny can’t read that history, choose the same dates again to retry.
 - Select the tracking status button to pause or resume tracking.
 - Closing the window leaves Screeny running in the notification area. Right-click the Screeny icon and select **Show** to reopen the window or **Exit** to quit.
 
@@ -23,7 +24,7 @@ Screeny tracks how much time you spend in the apps you use on Windows 11. Tracki
 
 Screeny stores usage history in a local SQLite database and doesn't upload it.
 
-To clear that history, open the Screeny window. Right-click the Screeny icon in the notification area, select **Delete all data…**, and confirm. This doesn't turn off tracking.
+To clear that history, right-click the Screeny icon in the notification area and select **Delete all data…**. Screeny opens its window with **Cancel** as the default action. Only **Delete** clears history; your tracking setting stays the same.
 
 Read the [Screeny privacy policy](PRIVACY.md).
 

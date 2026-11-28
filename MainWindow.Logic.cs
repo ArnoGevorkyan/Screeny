@@ -164,9 +164,8 @@ namespace ScreenTimeTracker
                     });
                 }
 
-                if (_isReloading || !IsDashboardVisible) return;
+                if (!CanRefreshHistory) return;
                 CleanupSystemProcesses();
-
                 if (_viewModel.SelectedDate.Date == DateTime.Now.Date && _viewModel.CurrentTimePeriod == TimePeriod.Daily)
                 {
                     ++_usageViewRevision;
@@ -271,7 +270,7 @@ namespace ScreenTimeTracker
 
             if ((_trackingPauseReasons & (TrackingPauseReason.Resetting | TrackingPauseReason.Exiting)) != 0) return;
 
-            if (!_trackingService.IsTracking && IsDashboardVisible) CleanupSystemProcesses();
+            if (!_trackingService.IsTracking && CanRefreshHistory) CleanupSystemProcesses();
             DoChartRefresh();
         }
 
@@ -286,7 +285,6 @@ namespace ScreenTimeTracker
         // ---------------- Data loading logic ----------------
         private void LoadRecordsForDate(DateTime date, bool passive = false)
         {
-            var revision = _usageViewRevision;
             bool hasPreviousView = passive && _loadedDashboardVisits != null;
 
             // Update header text (Today/Yesterday/etc.)
@@ -320,7 +318,7 @@ namespace ScreenTimeTracker
                     case TimePeriod.Daily:
                     default:
                         hourlyRecords = new List<AppUsageRecord>();
-                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords, requireHistory: passive));
+                        records = BuildRecords(() => _databaseService!.GetDetailRecordsWithLive(date, _trackingService, hourlyRecords, requireHistory: true));
                         _viewModel.AggregatedRecords.Clear();
                         foreach (var r in records) _viewModel.AggregatedRecords.Add(r);
                         SummaryTitle.Text      = "Daily Screen Time Summary";
@@ -329,32 +327,6 @@ namespace ScreenTimeTracker
                 }
 
                 _usageRecords.Clear();
-                if (!hasPreviousView && records.Count == 0 && hourlyRecords is not { Count: > 0 } && date.Date != DateTime.Today)
-                {
-                    DispatcherQueue?.TryEnqueue(async () =>
-                    {
-                        if (IsCurrentUsageView(revision) && Content != null)
-                        {
-                            var dlg = new ContentDialog
-                            {
-                                Title = "No Data Available",
-                                Content = $"No usage data found for {DateDisplay?.Text ?? "the selected date"}.",
-                                CloseButtonText = "OK",
-                                XamlRoot = Content.XamlRoot
-                            };
-
-                            // Snap immediately to today *before* showing the dialog so live data is displayed under the correct day even if the user never presses OK.
-                            InvalidateUsageView();
-                            var today = DateTime.Today;
-                            _viewModel.SelectedDate = today;
-                            UpdateDatePickerButtonText();
-                            LoadRecordsForDate(today);
-
-                            await dlg.ShowAsync();
-                        }
-                    });
-                }
-
                 foreach (var rec in records.OrderByDescending(r => r.Duration))
                 {
                     rec.LoadAppIconIfNeeded();
@@ -365,6 +337,7 @@ namespace ScreenTimeTracker
 
                 if (hasPreviousView) UpdateUsageChart(hourlyRecords ?? records);
                 else UpdateChartViewMode(hourlyRecords ?? records);
+                ShowHistory(HistoryState.Ready);
             }
             catch (Exception ex)
             {
@@ -374,21 +347,7 @@ namespace ScreenTimeTracker
                     RestoreCachedDashboard();
                     return;
                 }
-                _usageRecords.Clear();
-                if (passive) UpdateUsageChart();
-                DispatcherQueue?.TryEnqueue(async () =>
-                {
-                    if (IsCurrentUsageView(revision) && Content != null)
-                    {
-                        var dlg = new ContentDialog
-                        {
-                            Title = "Error Loading Data",
-                            Content = $"Failed to load screen time data: {ex.Message}",
-                            CloseButtonText = "OK",
-                            XamlRoot = Content.XamlRoot
-                        }; await dlg.ShowAsync();
-                    }
-                });
+                ShowHistory(HistoryState.Failed);
             }
         }
 
@@ -426,6 +385,7 @@ namespace ScreenTimeTracker
                 // Publish aggregated list to ViewModel
                 _viewModel.AggregatedRecords.Clear();
                 foreach (var rec in aggregated) _viewModel.AggregatedRecords.Add(rec);
+                ShowHistory(HistoryState.Ready);
             }
             catch (Exception ex)
             {
@@ -435,9 +395,7 @@ namespace ScreenTimeTracker
                     RestoreCachedDashboard();
                     return;
                 }
-                _usageRecords.Clear();
-                if (restoring) UpdateUsageChart();
-                ShowErrorDialog($"Failed to load screen time data: {ex.Message}");
+                ShowHistory(HistoryState.Failed);
             }
         }
 
