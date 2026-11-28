@@ -15,10 +15,26 @@ namespace ScreenTimeTracker
     // compilation.
     public sealed partial class MainWindow
     {
+        private volatile int _usageViewRevision;
         private int _chartRevision;
         private bool _chartRefreshPending;
         private bool _chartRefreshRequested;
         private (DateTime Start, DateTime End, List<AppUsageRecord> Records)? _loadedDashboardVisits;
+
+        private int InvalidateUsageView()
+        {
+            _loadedDashboardVisits = null;
+            return ++_usageViewRevision;
+        }
+
+        private bool IsCurrentUsageView(int revision) => !_disposed && _usageViewRevision == revision;
+
+        private void SetUsageViewLoading(bool loading)
+        {
+            _isReloading = loading;
+            if (LoadingIndicator != null)
+                LoadingIndicator.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         // ---------------- Chart update helper ----------------
         private void UpdateUsageChart(List<AppUsageRecord>? visits = null)
@@ -134,82 +150,16 @@ namespace ScreenTimeTracker
         private void UpdateChartViewMode(List<AppUsageRecord>? hourlyRecords = null)
         {
             var today = DateTime.Today;
-            var yesterday = today.AddDays(-1);
+            var date = _viewModel.SelectedDate;
+            _viewModel.CurrentChartViewMode = _viewModel.IsDateRangeSelected
+                ? ChartViewMode.Daily
+                : ChartViewMode.Hourly;
 
-            bool isLast7Days = _viewModel.IsDateRangeSelected && _viewModel.SelectedDate == today.AddDays(-6) && _viewModel.SelectedEndDate == today;
-            bool isCustomRange = _viewModel.IsDateRangeSelected && _viewModel.CurrentTimePeriod == TimePeriod.Custom;
-
-            if ((_viewModel.SelectedDate == today || _viewModel.SelectedDate == yesterday) && !_viewModel.IsDateRangeSelected)
-            {
-                _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Hourly View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else if (isLast7Days)
-            {
-                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Daily View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else if (isCustomRange)
-            {
-                _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ViewModeLabel != null)
-                        ViewModeLabel.Text = "Daily View";
-
-                    if (ViewModePanel != null)
-                        ViewModePanel.Visibility = Visibility.Collapsed;
-                });
-            }
-            else
-            {
-                if (_viewModel.CurrentTimePeriod == TimePeriod.Daily)
-                {
-                    _viewModel.CurrentChartViewMode = ChartViewMode.Hourly;
-
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        if (ViewModeLabel != null)
-                            ViewModeLabel.Text = "Hourly View";
-
-                        if (ViewModePanel != null)
-                            ViewModePanel.Visibility = Visibility.Visible;
-                    });
-                }
-                else
-                {
-                    _viewModel.CurrentChartViewMode = ChartViewMode.Daily;
-
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        if (ViewModeLabel != null)
-                            ViewModeLabel.Text = "Daily View";
-
-                        if (ViewModePanel != null)
-                            ViewModePanel.Visibility = Visibility.Visible;
-                    });
-                }
-            }
-
+            if (ViewModeLabel != null) ViewModeLabel.Text = _viewModel.ChartViewModeLabel;
             if (ViewModePanel != null)
-                ViewModePanel.Visibility = Visibility.Collapsed;
+                ViewModePanel.Visibility = _viewModel.IsDateRangeSelected || date == today || date == today.AddDays(-1)
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
 
             UpdateUsageChart(hourlyRecords);
         }
@@ -369,9 +319,6 @@ namespace ScreenTimeTracker
             }
         }
 
-        private void UpdateSummaryTab() =>
-            UpdateSummaryTab(Array.Empty<AppUsageRecord>(), TimeUtil.FormatTimeSpan(TimeSpan.Zero));
-
         // Helper returns the date-span currently shown in the UI
         private (DateTime Start, DateTime End) GetCurrentViewDateRange()
         {
@@ -484,7 +431,7 @@ namespace ScreenTimeTracker
             try
             {
                 if (_disposed || _usageRecords == null) return;
-                if (_isReloading) return; // avoid live updates during dataset rebuild
+                if (_isReloading) return;
                 
                 _tickCount++;
 
@@ -520,40 +467,18 @@ namespace ScreenTimeTracker
 
         private void DoLiveUpdates()
         {
-            // Guard: only apply live updates if the active view includes today
-            bool viewIncludesToday;
-            if (_viewModel.IsDateRangeSelected)
-            {
-                if (_viewModel.SelectedEndDate == null)
-                {
-                    viewIncludesToday = false;
-                }
-                else
-                {
-                    viewIncludesToday = _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today;
-                }
-            }
-            else
-            {
-                viewIncludesToday = _viewModel.SelectedDate.Date == DateTime.Today;
-            }
+            var (start, end) = GetCurrentViewDateRange();
+            var today = DateTime.Today;
+            if (today < start || today > end) return;
 
-            if (!viewIncludesToday)
-                return; // Ignore live tracking updates for historic views
-
-            // Increment duration only for focused record to minimize UI churn
-            var activeRec = _usageRecords?.FirstOrDefault(r => r.IsFocused);
-            activeRec?.RaiseDurationChanged();
-
-            // Mark chart as dirty every 15 seconds for less frequent but coordinated refreshes
-            if (_tickCount % 15 == 0)
-            {
-                _isChartDirty = true;
-            }
+            _usageRecords.FirstOrDefault(r => r.IsFocused)?.RaiseDurationChanged();
+            if (_tickCount % 15 == 0) _isChartDirty = true;
         }
 
         private void DoChartRefresh()
         {
+            if (_disposed || _isReloading) return;
+
             _isChartDirty = false;
             if (_chartRefreshPending)
             {
@@ -563,25 +488,30 @@ namespace ScreenTimeTracker
 
             _chartRefreshPending = true;
             _chartRefreshRequested = false;
-            var revision = _chartRevision;
+            var revision = _usageViewRevision;
+            var chartRevision = _chartRevision;
+            var (start, end) = GetCurrentViewDateRange();
+            var mode = _viewModel.CurrentChartViewMode;
 
             // Run heavy chart work at idle priority to keep UI responsive
             if (DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, async () =>
             {
                 try
                 {
-                    if (_disposed || _chartRefreshRequested || _chartRevision != revision) return;
+                    if (!IsCurrentUsageView(revision) || _isReloading || _chartRefreshRequested ||
+                        _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
+                        _viewModel.CurrentChartViewMode != mode)
+                        return;
 
-                    var (start, end) = GetCurrentViewDateRange();
-                    var mode = _viewModel.CurrentChartViewMode;
                     var visits = _databaseService is { } database
                         ? await Task.Run(() => mode == ChartViewMode.Hourly
                             ? database.GetHourlyRecordsWithLive(start, _trackingService)
                             : database.GetDashboardRecordsWithLive(start, end, _trackingService))
                         : null;
 
-                    if (_disposed || _isReloading || _chartRefreshRequested || _chartRevision != revision ||
-                        GetCurrentViewDateRange() != (start, end) || _viewModel.CurrentChartViewMode != mode)
+                    if (!IsCurrentUsageView(revision) || _isReloading || _chartRefreshRequested ||
+                        _chartRevision != chartRevision || GetCurrentViewDateRange() != (start, end) ||
+                        _viewModel.CurrentChartViewMode != mode)
                         return;
 
                     if (visits != null) UpdateUsageChart(visits);
@@ -618,22 +548,21 @@ namespace ScreenTimeTracker
             }
         }
 
-        private volatile int _usageGeneration;
-
         private void TrackingService_UsageRecordUpdated(object? sender, AppUsageRecord record)
         {
             if (_disposed) return;
-            var generation = _usageGeneration;
+            var revision = _usageViewRevision;
             try
             {
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    if (_disposed || generation != _usageGeneration) return;
+                    if (!IsCurrentUsageView(revision) || _isReloading) return;
 
                     try
                     {
-                        bool viewIncludesToday = !_viewModel.IsDateRangeSelected ? _viewModel.SelectedDate.Date == DateTime.Today : (_viewModel.SelectedEndDate != null && _viewModel.SelectedDate.Date <= DateTime.Today && _viewModel.SelectedEndDate.Value.Date >= DateTime.Today);
-                        if (!viewIncludesToday) return;
+                        var (start, end) = GetCurrentViewDateRange();
+                        var today = DateTime.Today;
+                        if (today < start || today > end || record.Date.Date < start || record.Date.Date > end) return;
 
                         var currentProcessName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
                         if (record.ProcessName.Equals(currentProcessName, StringComparison.OrdinalIgnoreCase)) return;
@@ -658,7 +587,10 @@ namespace ScreenTimeTracker
         {
             ApplicationProcessingHelper.ProcessApplicationRecord(record);
 
-            var existing = _usageRecords.FirstOrDefault(r => r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase));
+            var existing = _usageRecords.FirstOrDefault(r =>
+                r.ProcessName.Equals(record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+                (!_viewModel.IsDateRangeSelected || r.StartTime == record.StartTime));
+            if (_viewModel.IsDateRangeSelected && existing is { Id: > 0 }) return;
             bool isFocused = record.IsFocused && _trackingService?.IsTracking == true;
             if (isFocused)
             {

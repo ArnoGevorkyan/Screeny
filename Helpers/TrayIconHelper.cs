@@ -61,6 +61,9 @@ namespace ScreenTimeTracker.Helpers
         [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool Shell_NotifyIcon(uint dwMessage, [In] ref NOTIFYICONDATA lpData);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint RegisterWindowMessage(string lpString);
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr LoadIcon(IntPtr hInstance, string lpIconName);
 
@@ -103,7 +106,9 @@ namespace ScreenTimeTracker.Helpers
         private IntPtr _hWnd; // Main window handle
         private IntPtr _hIcon; // Handle for the loaded icon
         private IntPtr _hContextMenu; // Handle for the context menu
+        private readonly uint _taskbarCreatedMessage;
         private bool _isIconAdded = false;
+        private bool _disposed;
         private NOTIFYICONDATA _notifyIconData;
 
         public event EventHandler? ShowClicked;
@@ -117,6 +122,7 @@ namespace ScreenTimeTracker.Helpers
             {
                 throw new ArgumentException("Owner window handle cannot be zero.", nameof(ownerHwnd));
             }
+            _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
             LoadIconFromFile(); // Load the icon during construction
             CreateContextMenu();
         }
@@ -154,6 +160,8 @@ namespace ScreenTimeTracker.Helpers
 
         public void AddIcon(string tip = "Screeny")
         {
+            if (_disposed) return;
+
             if (_hIcon == IntPtr.Zero)
             {
                 Debug.WriteLine("Cannot add tray icon: Icon handle is null.");
@@ -177,10 +185,16 @@ namespace ScreenTimeTracker.Helpers
                 szTip = tip
             };
 
-            if (Shell_NotifyIcon(NIM_ADD, ref _notifyIconData))
+            RegisterIcon();
+        }
+
+        private void RegisterIcon()
+        {
+            if (Shell_NotifyIcon(NIM_ADD, ref _notifyIconData)
+                || Shell_NotifyIcon(NIM_MODIFY, ref _notifyIconData))
             {
                 _isIconAdded = true;
-                 Debug.WriteLine("Tray icon added successfully.");
+                Debug.WriteLine("Tray icon registered successfully.");
             }
             else
             {
@@ -246,6 +260,14 @@ namespace ScreenTimeTracker.Helpers
         // This method needs to be called from the main window's message loop (WndProc)
         public void HandleWindowMessage(uint msg, IntPtr wParam, IntPtr lParam)
         {
+            if (_disposed) return;
+
+            if (_taskbarCreatedMessage != 0 && msg == _taskbarCreatedMessage)
+            {
+                if (_notifyIconData.cbSize != 0) RegisterIcon();
+                return;
+            }
+
             if (msg == WM_TRAYICON_MSG && (uint)lParam == WM_RBUTTONUP)
             {
                 Debug.WriteLine("Tray icon right-clicked.");
@@ -267,8 +289,9 @@ namespace ScreenTimeTracker.Helpers
 
         protected virtual void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !_disposed)
             {
+                _disposed = true;
                 RemoveIcon(); // Remove from tray first
                 if (_hContextMenu != IntPtr.Zero)
                 {
@@ -286,4 +309,4 @@ namespace ScreenTimeTracker.Helpers
             }
         }
     }
-} 
+}

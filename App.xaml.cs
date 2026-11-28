@@ -6,7 +6,6 @@ using System.IO;
 using SQLitePCL;
 using System.Diagnostics;
 using System.Text;
-using System.Reflection;
 using WinRT;
 using Microsoft.UI.Xaml.Media;
 using System.Collections.Generic;
@@ -37,6 +36,8 @@ public partial class App : Application
 
     private const uint MB_ICONERROR = 0x00000010;
     private const uint MB_OK = 0x00000000;
+    private const int MaxLogBytes = 1024 * 1024;
+    private const string LogFileName = "app_log.txt";
 
     private Window? m_window;
     private WindowTrackingService? _trackingService; // Field to hold the service instance
@@ -76,7 +77,7 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                WriteToLog($"SQLite initialization error: {ex.Message}\n{ex.StackTrace}");
+                LogException("SQLite initialization error", ex);
                 // Don't throw - continue without SQLite if needed
             }
 
@@ -92,8 +93,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            WriteToLog($"CRITICAL ERROR during App constructor: {ex.Message}\n{ex.StackTrace}");
-            ShowErrorAndExit("The application failed to initialize properly.", ex);
+            ShowErrorAndExit("App initialization failed", "The application failed to initialize properly.", ex);
         }
     }
 
@@ -118,12 +118,8 @@ public partial class App : Application
         {
             // Check command line arguments
             string[] args = Environment.GetCommandLineArgs();
-            WriteToLog($"Command line arguments count: {args.Length}");
-            
             for (int i = 0; i < args.Length; i++)
             {
-                WriteToLog($"Arg[{i}]: {args[i]}");
-                
                 // Check for startup-related arguments
                 if (args[i].Contains("--startup", StringComparison.OrdinalIgnoreCase) ||
                     args[i].Contains("/startup", StringComparison.OrdinalIgnoreCase) ||
@@ -146,7 +142,7 @@ public partial class App : Application
             TimeSpan systemUptime = TimeSpan.FromMilliseconds(Environment.TickCount);
             if (systemUptime.TotalSeconds < 20)
             {
-                WriteToLog($"System uptime: {systemUptime.TotalSeconds:F0} seconds - likely startup");
+                WriteToLog("Recent system boot - likely startup");
                 return true;
             }
 
@@ -154,7 +150,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            WriteToLog($"Error detecting startup mode: {ex.Message}");
+            LogException("Error detecting startup mode", ex);
             return false;
         }
     }
@@ -188,7 +184,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            WriteToLog($"Error checking first run: {ex.Message}");
+            LogException("Error checking first run", ex);
             return false; // Assume not first run on error to avoid showing window unnecessarily
         }
     }
@@ -211,12 +207,9 @@ public partial class App : Application
             
             // Log runtime information
             WriteToLog($"Running on .NET version: {Environment.Version}");
-            WriteToLog($"OS: {Environment.OSVersion}");
-            WriteToLog($"Machine Name: {Environment.MachineName}");
+            WriteToLog($"OS version: {Environment.OSVersion.Version}");
             WriteToLog($"64-bit OS: {Environment.Is64BitOperatingSystem}");
             WriteToLog($"64-bit Process: {Environment.Is64BitProcess}");
-            WriteToLog($"Current Directory: {Environment.CurrentDirectory}");
-            WriteToLog($"App Directory: {AppContext.BaseDirectory}");
             
             m_window = new MainWindow();
             WriteToLog("MainWindow created successfully");
@@ -266,196 +259,70 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            WriteToLog($"FATAL ERROR: Failed to launch application: {ex.Message}");
-            WriteToLog($"Stack trace: {ex.StackTrace}");
-            
-            // Try to get inner exception details
-            if (ex.InnerException != null)
-            {
-                WriteToLog($"Inner exception: {ex.InnerException.Message}");
-                WriteToLog($"Inner stack trace: {ex.InnerException.StackTrace}");
-            }
-            
-            // Try to get more detailed debugging information
-            try
-            {
-                var exceptionDetails = new StringBuilder();
-                BuildExceptionDetails(ex, exceptionDetails);
-                WriteToLog($"Detailed exception information:\n{exceptionDetails}");
-            }
-            catch (Exception logEx)
-            {
-                WriteToLog($"Failed to log detailed exception: {logEx.Message}");
-            }
-            
-            ShowErrorAndExit("The application failed to start properly.", ex);
+            ShowErrorAndExit("Application launch failed", "The application failed to start properly.", ex);
         }
     }
 
-    private void BuildExceptionDetails(Exception ex, StringBuilder details, int level = 0)
+    private static bool LogException(string eventName, Exception ex)
     {
-        string indent = new string(' ', level * 2);
-        
-        details.AppendLine($"{indent}Exception: {ex.GetType().FullName}");
-        details.AppendLine($"{indent}Message: {ex.Message}");
-        details.AppendLine($"{indent}Source: {ex.Source}");
-        
-        // Get additional properties using reflection
-        try
-        {
-            var props = ex.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            foreach (var prop in props)
-            {
-                if (prop.Name != "InnerException" && prop.Name != "StackTrace" && 
-                    prop.Name != "Message" && prop.Name != "Source")
-                {
-                    try
-                    {
-                        var value = prop.GetValue(ex);
-                        if (value != null)
-                        {
-                            details.AppendLine($"{indent}{prop.Name}: {value}");
-                        }
-                    }
-                    catch { /* Ignore property read errors */ }
-                }
-            }
-        }
-        catch { /* Ignore reflection errors */ }
-        
-        details.AppendLine($"{indent}Stack trace:");
-        details.AppendLine($"{indent}{ex.StackTrace}");
-        
-        if (ex.InnerException != null)
-        {
-            details.AppendLine($"{indent}Inner exception:");
-            BuildExceptionDetails(ex.InnerException, details, level + 1);
-        }
+        string entry = $"{eventName}: {ex.GetType().Name} (0x{ex.HResult:X8})";
+        if (ex.InnerException is Exception cause)
+            entry += $"; caused by {cause.GetType().Name} (0x{cause.HResult:X8})";
+        return WriteToLog(entry);
     }
 
-    private static void ShowErrorAndExit(string message, Exception ex, bool exit = true)
+    private static string LogStatus(bool logged) =>
+        logged ? $"See {LogFileName} in local app data for details." : "No diagnostic entry was saved.";
+
+    private static void ShowErrorAndExit(string eventName, string message, Exception ex)
     {
-        string detailedMessage = $"{message}\n\nError: {ex.Message}\n\nSee Screeny_ErrorLog.txt for details.";
-        WriteToLog($"ShowErrorAndExit: {detailedMessage}"); // Log the error message shown to user
-        LogExceptionToFile(ex); // Ensure the exception is logged
+        bool logged = LogException(eventName, ex);
+        string detailedMessage = $"{message}\n\nError code: 0x{ex.HResult:X8}\n\n{LogStatus(logged)}";
         MessageBox(IntPtr.Zero, detailedMessage, "Critical Application Error", MB_OK | MB_ICONERROR);
-        if (exit)
-        {
-            Environment.Exit(1); // Завершаем приложение
-        }
+        Environment.Exit(1);
     }
 
     private void App_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
-        WriteToLog($"CRITICAL UNHANDLED EXCEPTION: {e.Exception}");
-        // Логируем ошибку перед падением
-        LogExceptionToFile(e.Exception); // Используем отдельный метод для записи в файл
-        e.Handled = true; // Помечаем как обработанное, чтобы приложение НЕ падало сразу (для теста)
-
-        // Показываем сообщение пользователю (можно улучшить диалог)
-        ShowErrorDialog("An critical error occurred. Please check the log file.");
+        bool logged = LogException("Unhandled UI exception", e.Exception);
+        e.Handled = true;
+        MessageBox(IntPtr.Zero, $"A critical error occurred.\n\n{LogStatus(logged)}", "Application Error",
+            MB_OK | MB_ICONERROR);
     }
 
-    // Дополнительный обработчик на случай ошибок в XAML потоках (если понадобится)
-    // private void Current_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
-    // {
-    //    WriteToLog($"CRITICAL XAML UNHANDLED EXCEPTION: {e.Exception}");
-    //    LogExceptionToFile(e.Exception);
-    //    e.Handled = true;
-    //    ShowErrorDialog("An critical UI error occurred. Please check the log file.");
-    // }
-
-    // Метод для записи ошибки в файл
-    private static void LogExceptionToFile(Exception ex)
+    internal static bool WriteToLog(string message)
     {
         try
         {
-            string logPath = System.IO.Path.Combine(
-                System.AppContext.BaseDirectory, // Папка рядом с Screeny.exe
-                "Screeny_ErrorLog.txt");
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrEmpty(localAppData))
+                return false;
 
-            string errorMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ERROR: {ex.GetType().Name}\n" +
-                                  $"Message: {ex.Message}\n" +
-                                  $"Stack Trace:\n{ex.StackTrace}\n\n";
-
-            // Добавляем информацию о внутреннем исключении, если оно есть
-            Exception? currentEx = ex.InnerException;
-            int level = 1;
-            while (currentEx != null)
-            {
-                errorMessage += $"--- Inner Exception (Level {level}) ---\n" +
-                                $"Type: {currentEx.GetType().Name}\n" +
-                                $"Message: {currentEx.Message}\n" +
-                                $"Stack Trace:\n{currentEx.StackTrace}\n\n";
-                currentEx = currentEx.InnerException;
-                level++;
-            }
-
-            System.IO.File.AppendAllText(logPath, errorMessage);
-        }
-        catch (Exception logEx)
-        {
-            // Ошибка при записи лога - выводим в Debug
-            System.Diagnostics.Debug.WriteLine($"Failed to log exception to file: {logEx}");
-            System.Diagnostics.Debug.WriteLine($"Original exception: {ex}");
-            // Попробуем показать сообщение об ошибке хотя бы в MessageBox
-            ShowErrorAndExit("Failed to write error log.", logEx, false);
-        }
-    }
-
-    // Упрощенный метод для показа ошибки пользователю
-    private static void ShowErrorDialog(string message)
-    {
-       MessageBox(IntPtr.Zero, message, "Application Error", MB_OK | MB_ICONERROR);
-    }
-
-    internal static void WriteToLog(string message)
-    {
-        try
-        {
-            // Use System.IO.Path explicitly if needed, but removing Shapes should fix it.
-            string logFolder = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ScreenTimeTracker");
-
-            if (!Directory.Exists(logFolder))
-            {
-                Directory.CreateDirectory(logFolder);
-            }
-
-            string logFile = System.IO.Path.Combine(logFolder, "app_log.txt");
-            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-            string logEntry = $"[{timestamp}] {message}\n";
-
-            // Append to log file
-            File.AppendAllText(logFile, logEntry);
-            
-            // Also write to debug output
+            string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}\n";
             Debug.WriteLine(logEntry);
+            byte[] entry = Encoding.UTF8.GetBytes(logEntry);
+
+            string logFolder = Path.Combine(localAppData, "ScreenTimeTracker");
+            Directory.CreateDirectory(logFolder);
+            using var log = new FileStream(Path.Combine(logFolder, LogFileName), FileMode.Append,
+                FileAccess.Write, FileShare.Read);
+            if (log.Length > MaxLogBytes - entry.Length)
+                return false;
+
+            log.Write(entry);
+            return true;
         }
-        catch (Exception ex)
+        catch
         {
-            // If logging itself fails, we can only write to debug output
-            Debug.WriteLine($"LOGGING ERROR: {ex.Message}");
+            return false;
         }
     }
 
     private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        WriteToLog($"CRITICAL UNOBSERVED TASK EXCEPTION: {e.Exception}");
-        LogExceptionToFile(e.Exception);
-        
+        LogException("Unobserved task exception", e.Exception);
+
         // Mark as observed to prevent app crash
         e.SetObserved();
-        
-        // Log each inner exception
-        if (e.Exception.InnerExceptions != null)
-        {
-            foreach (var innerEx in e.Exception.InnerExceptions)
-            {
-                WriteToLog($"Inner exception: {innerEx.Message}");
-                WriteToLog($"Stack trace: {innerEx.StackTrace}");
-            }
-        }
     }
 }
