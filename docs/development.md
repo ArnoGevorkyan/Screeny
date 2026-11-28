@@ -13,15 +13,19 @@ Use Windows 11 x64 for local development. Screeny is a WinUI 3 desktop app, so a
 
    Pull requests to `master` run this command on a Windows runner. It restores packages and builds the [solution](../ScreenTimeTracker.sln) without generating or signing an MSIX. It doesn't install or launch the app.
 
-## Run the local tests
+## Run the core tests
 
-A clean checkout has no test project. The `ScreenTimeTracker.Tests/` directory is [ignored](../.gitignore) and isn't part of the solution or CI. If your checkout has the local MSTest project, run:
+Run the portable suite from the repository root with the .NET 10 SDK:
 
-```powershell
-dotnet test ScreenTimeTracker.Tests/ScreenTimeTracker.Tests.csproj
+```sh
+dotnet test ScreenTimeTracker.Core.Tests/ScreenTimeTracker.Core.Tests.csproj
 ```
 
-These tests cover helper and model behavior without launching WinUI. They can't verify window bindings, tray interaction, power events, or packaged startup.
+CI runs this command in the same Windows job after the x64 build. The tests compile the tracking and storage sources without WinUI. They check finalized-only writes, duplicate offers after reopening the ledger, date-range totals, and retry order after a single SQLite write lock. Each test uses synthetic records and a temporary database.
+
+The suite does not check Windows foreground hooks, idle or power messages, the UI or tray, packaged startup, or sustained SQLite contention.
+
+If you have the optional local project in the [ignored](../.gitignore) `ScreenTimeTracker.Tests/` directory, also run `dotnet test ScreenTimeTracker.Tests/ScreenTimeTracker.Tests.csproj`. CI does not run it.
 
 ## Check packaged behavior
 

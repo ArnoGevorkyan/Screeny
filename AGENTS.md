@@ -37,7 +37,7 @@ For tracking, persistence, aggregation, migration, or lifecycle changes:
 - Add focused tests first when the code can be tested without launching WinUI.
 - Prefer small pure helpers or domain types when extracting testable behavior from WinUI code.
 - Suggested test names: `MethodName_State_ExpectedBehavior`.
-- At minimum, run the [Windows x64 solution build](docs/development.md#build-on-windows). If the local MSTest project is present, [run it too](docs/development.md#run-the-local-tests).
+- Run the [Windows x64 solution build](docs/development.md#build-on-windows) and the [core tests](docs/development.md#run-the-core-tests). If the optional local test project is present, run it too.
 - Follow the [manual Windows checks](docs/development.md#check-packaged-behavior) for the affected workflows.
 
 Do not broaden the UI or MVVM architecture just to make tests easier. Extract only the smallest stable contract needed for the reliability change.

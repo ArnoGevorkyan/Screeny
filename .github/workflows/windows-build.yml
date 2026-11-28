@@ -29,3 +29,6 @@ jobs:
           dotnet new globaljson --sdk-version $env:DOTNET_SDK_VERSION --roll-forward disable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet build ScreenTimeTracker.sln -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -p:AppxPackageSigningEnabled=false
+
+      - name: Run core tracking and SQLite tests
+        run: dotnet test ScreenTimeTracker.Core.Tests/ScreenTimeTracker.Core.Tests.csproj
