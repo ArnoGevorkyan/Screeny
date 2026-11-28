@@ -1,6 +1,7 @@
 using ScreenTimeTracker.Models;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Windowing;
 using System.Linq;
 using System;
@@ -152,6 +153,8 @@ namespace ScreenTimeTracker
                 HistoryState.Failed => "Couldn’t load history. Choose the date again to retry.",
                 _ => string.Empty
             };
+            if (state == HistoryState.Failed)
+                FrameworkElementAutomationPeer.CreatePeerForElement(HistoryStatus)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
 
         // ---------------- AppWindow helpers ----------------

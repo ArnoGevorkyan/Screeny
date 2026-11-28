@@ -31,6 +31,8 @@ The default signing configuration expects a certificate that isn't in the repo. 
 
 Use a disposable Windows profile for checks that can affect saved history. For the paths your change touches, check normal and Windows startup, tracking across app changes, date ranges, deletion, tray show and exit, and suspend and resume. Check packaged launch separately from the build.
 
+For a selected-history read failure, verify that a UI Automation listener receives `LiveRegionChanged` from `HistoryStatus` with the retry text already set. Reading the text and its polite setting is not an event check. Test Narrator speech separately.
+
 ## Inspect dependencies
 
 Run these commands from the repository root to list direct references, check for updates, or audit direct and transitive dependencies:
