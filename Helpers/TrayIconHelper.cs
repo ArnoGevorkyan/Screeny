@@ -21,11 +21,9 @@ namespace ScreenTimeTracker.Helpers
         private const uint NIF_MESSAGE = 0x00000001;
         private const uint NIF_ICON = 0x00000002;
         private const uint NIF_TIP = 0x00000004;
-        private const uint NIF_INFO = 0x00000010;
 
         // Menu constants
         private const uint MF_STRING = 0x00000000;
-        private const uint MF_POPUP = 0x00000010;
         private const uint MF_SEPARATOR = 0x00000800;
         private const uint TPM_LEFTALIGN = 0x0000;
         private const uint TPM_RETURNCMD = 0x0100;
@@ -63,9 +61,6 @@ namespace ScreenTimeTracker.Helpers
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern uint RegisterWindowMessage(string lpString);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr LoadIcon(IntPtr hInstance, string lpIconName);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);

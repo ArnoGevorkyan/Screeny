@@ -35,21 +35,6 @@ namespace ScreenTimeTracker.Helpers
             return handle != IntPtr.Zero ? handle : GetClassLongPtr(window, -34);
         }
 
-        // For IImageList (UWP/Store icons)
-        [DllImport("Shell32.dll", EntryPoint = "#727")]
-        internal static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
-
-        [Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
-        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        internal interface IImageList
-        {
-            [PreserveSig]
-            int Draw(IntPtr hdc, int i, int x, int y, int style);
-
-            [PreserveSig]
-            int GetIcon(int i, int flag, ref IntPtr picon);
-        }
-
         // For QueryFullProcessImageName
         internal const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
@@ -62,36 +47,5 @@ namespace ScreenTimeTracker.Helpers
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         internal static extern bool QueryFullProcessImageName(IntPtr hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
-
-        // For UWP Package access
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        internal static extern int GetPackageFullNameFromToken(IntPtr token, ref uint packageFullNameLength, StringBuilder packageFullName);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        internal static extern int GetPackagePathByFullName(string packageFullName, ref uint pathLength, StringBuilder path);
-
-        // For process token access (UWP package detection)
-        [DllImport("advapi32.dll", SetLastError = true)]
-        internal static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
-
-        // ---------- Stock icons ----------
-        internal const uint SHGSI_ICON = 0x000000100;
-        internal const uint SHGSI_LARGEICON = 0x000000000; // 'Large icon'
-        internal const uint SHGSI_SMALLICON = 0x000000001; // 'Small icon'
-        internal const uint SIID_APPLICATION = 0x002;
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        internal struct SHSTOCKICONINFO
-        {
-            public uint cbSize;
-            public IntPtr hIcon;
-            public int iSysImageIndex;
-            public int iIcon;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-            public string szPath;
-        }
-
-        [DllImport("Shell32.dll", SetLastError = false)]
-        internal static extern int SHGetStockIconInfo(uint siid, uint uFlags, ref SHSTOCKICONINFO psii);
     }
 } 

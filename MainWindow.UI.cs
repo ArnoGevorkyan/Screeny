@@ -436,20 +436,6 @@ namespace ScreenTimeTracker
             }
         }
 
-        // ---------------- TitleBar & DatePicker button handlers ----------------
-        private void MinimizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MinimizeWindow();
-        private void MaximizeButton_Click(object sender, RoutedEventArgs e) => _windowHelper.MaximizeOrRestoreWindow();
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
-        {
-            _trackingService.StopTracking();
-            _windowHelper.CloseWindow();
-        }
-
-        private void DatePickerButton_Click(object sender, RoutedEventArgs e)
-        {
-            _datePickerPopup?.ShowDatePicker(DatePickerButton, _viewModel.SelectedDate, _viewModel.SelectedEndDate, _viewModel.IsDateRangeSelected);
-        }
-
         // ---------------- UI refresh & tracking events migrated from XAML partial ----------------
         private void SetUpUiElements()
         {
